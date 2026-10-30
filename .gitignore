@@ -1,0 +1,9 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl.bak
+tfplan
+__pycache__/
+.rendered/
+*_override.tf
+.alzlib/

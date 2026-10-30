@@ -1,0 +1,32 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # A pull request opened with GITHUB_TOKEN gets its checks only after someone approves the run, so the
+      # release pull request is opened with a token from the MLZ release GitHub App. Until the App is
+      # configured (variable MLZ_RELEASE_APP_CLIENT_ID, secret MLZ_RELEASE_APP_PRIVATE_KEY), GITHUB_TOKEN is
+      # used and the release pull request's run must be approved by hand.
+      - id: app-token
+        if: vars.MLZ_RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
