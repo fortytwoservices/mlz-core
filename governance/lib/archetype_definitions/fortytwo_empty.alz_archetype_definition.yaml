@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/archetype_definition.json
+# No policies of its own: for the "Unused subscriptions" management group, which only inherits from the root.
+name: fortytwo_empty
+policy_assignments: []
+policy_definitions: []
+policy_set_definitions: []
+role_definitions: []

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/default_policy_values.json",
+  "defaults": [
+    {
+      "default_name": "allowed_locations",
+      "description": "The customer's allowed regions, from customer.yaml (allowed_regions).",
+      "policy_assignments": [
+        {
+          "policy_assignment_name": "Deny-Resource-Locations",
+          "parameter_names": [
+            "listOfAllowedLocations"
+          ]
+        },
+        {
+          "policy_assignment_name": "Deny-RSG-Locations",
+          "parameter_names": [
+            "listOfAllowedLocations"
+          ]
+        }
+      ]
+    }
+  ]
+}
