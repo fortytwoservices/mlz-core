@@ -1,0 +1,19 @@
+# Customer-wide settings for governance: the management group tree and the policies on it.
+# Owned by the customer's platform team. Nothing in this file is a secret.
+# Any setting in mlz-core's governance/defaults.yaml can be overridden here.
+
+name: Demo customer
+root_id: demo                      # prefix of every management group ID: demo, demo-platform, demo-lz-corp, ...
+root_display_name: Demo
+parent_management_group_id: null   # null: directly under the tenant root group
+primary_region: norwayeast
+
+# Examples of overriding Fortytwo's defaults:
+#
+# allowed_regions: [norwayeast, swedencentral]
+#
+# management_groups:
+#   local: true                    # this customer runs workloads on Azure Local clusters
+#
+# tags:
+#   required: [Owner, CostCenter, BusinessUnit]

@@ -1,0 +1,75 @@
+{
+  "name": "Deny-RG-Without-Tag",
+  "type": "Microsoft.Authorization/policyDefinitions",
+  "properties": {
+    "policyType": "Custom",
+    "mode": "All",
+    "displayName": "Require a tag on resource groups, except groups that platforms create themselves",
+    "description": "Denies a resource group without the given tag. Groups whose names match one of the exempt patterns are allowed: Azure services and policy deployments create them without the customer's tags (NetworkWatcherRG, the Service Health alerts group, AKS node groups, ...). Built on the built-in 'Require a tag on resource groups' (96670d01-0a4d-4649-9c89-2d3abc0a5025).",
+    "metadata": {
+      "version": "1.0.0",
+      "category": "Tags",
+      "source": "https://github.com/fortytwoservices/mlz-core",
+      "alzCloudEnvironments": [
+        "AzureCloud"
+      ]
+    },
+    "parameters": {
+      "tagName": {
+        "type": "String",
+        "metadata": {
+          "displayName": "Tag name",
+          "description": "The tag every resource group must have."
+        }
+      },
+      "exemptResourceGroupNames": {
+        "type": "Array",
+        "defaultValue": [],
+        "metadata": {
+          "displayName": "Exempt resource group names",
+          "description": "Name patterns of resource groups that may lack the tag. Each may contain one '*' wildcard."
+        }
+      },
+      "effect": {
+        "type": "String",
+        "defaultValue": "Deny",
+        "allowedValues": [
+          "Audit",
+          "Deny",
+          "Disabled"
+        ],
+        "metadata": {
+          "displayName": "Effect"
+        }
+      }
+    },
+    "policyRule": {
+      "if": {
+        "allOf": [
+          {
+            "field": "type",
+            "equals": "Microsoft.Resources/subscriptions/resourceGroups"
+          },
+          {
+            "field": "[concat('tags[', parameters('tagName'), ']')]",
+            "exists": "false"
+          },
+          {
+            "count": {
+              "value": "[parameters('exemptResourceGroupNames')]",
+              "name": "pattern",
+              "where": {
+                "field": "name",
+                "like": "[current('pattern')]"
+              }
+            },
+            "equals": 0
+          }
+        ]
+      },
+      "then": {
+        "effect": "[parameters('effect')]"
+      }
+    }
+  }
+}

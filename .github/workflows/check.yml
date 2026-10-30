@@ -1,0 +1,63 @@
+name: check
+
+# check and pr-title are the two required checks on main. One workflow, so that a pull request whose run
+# must be approved (a release pull request opened with GITHUB_TOKEN) needs one approval, not two. Editing
+# the title or description reruns both jobs: skipping check on an edit would report it as passed.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      # The title becomes the squash commit, from which release-please computes the version.
+      - name: Conventional Commit title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|test|ci|chore|refactor|perf|build|style|revert)(\([a-z0-9._/-]+\))?!?: [^ ].*$'
+          if [[ ! $TITLE =~ $pattern ]]; then
+            echo "::error::The title becomes the squash commit and sets the version; use Conventional Commits, e.g. 'feat(governance): add zones' or 'fix!: rename output'. Got: $TITLE"
+            exit 1
+          fi
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # No module token yet: governance calls only public modules. When a root calls an internal
+      # az-tf-mlz-* module, mint the reader App's token for those repositories alone (`repositories:`),
+      # not the whole installation, and keep it out of Dependabot's runs, which have no Actions secrets.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - name: Renderer tests
+        run: python3 -m unittest discover -s governance/scripts -v
+
+      - name: Terraform format
+        run: terraform fmt -check -recursive -diff
+
+      - name: Render the starter customer
+        run: python3 governance/scripts/render_library.py --customer starter/mlz-governance/customer.yaml --out "$RUNNER_TEMP/rendered"
+
+      # validate needs no Azure sign-in; the plan in the sandbox is run by hand until mlz-core has a CI identity.
+      - name: Validate governance
+        run: |
+          terraform -chdir=governance/terraform init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=governance/terraform validate

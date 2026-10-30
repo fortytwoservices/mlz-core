@@ -1,0 +1,48 @@
+# Fortytwo's governance defaults. A customer's customer.yaml overrides any top-level key.
+# Decisions behind each value: docs/governance.md.
+
+# Regions resources and resource groups may be created in (Deny-Resource-Locations, Deny-RSG-Locations).
+allowed_regions:
+  - norwayeast
+  - norwaywest
+  - westeurope
+  - northeurope
+  - swedencentral
+
+# Optional management groups from the current ALZ hierarchy.
+management_groups:
+  security: false  # under Platform, for security tooling such as Sentinel
+  local: false     # under Landing Zones, for workloads on Azure Local clusters
+
+tags:
+  # Required on every resource group in the landing zones (deny).
+  required:
+    - Owner
+    - CostCenter
+  # Copied from the resource group to resources that lack them (modify).
+  inherited:
+    - Owner
+    - CostCenter
+    - Environment
+    - Workload
+  # Resource groups that Azure services and policy deployments create themselves, without the
+  # customer's tags: the required tags are not enforced on them. One '*' wildcard per pattern.
+  exempt_resource_groups:
+    - NetworkWatcherRG             # created with the first VNet in a region
+    - rg-serviceHealthAlert        # ALZ Deploy-SvcHealth-BuiltIn, in every subscription
+    - rg-mdfc-export*              # ALZ Deploy-MDFC-Config, Defender for Cloud export
+    - DefaultResourceGroup-*       # Azure Monitor and Log Analytics defaults
+    - AzureBackupRG*               # Azure Backup restore points
+    - MC_*                         # AKS node resource groups
+    - databricks-rg-*              # Azure Databricks managed resource groups
+    - cloud-shell-storage-*        # Azure Cloud Shell
+
+# ALZ assignments Fortytwo leaves out, by archetype.
+policy_assignments_to_remove:
+  platform:
+    - Deploy-GuestAttest
+  connectivity:
+    - Enable-DDoS-VNET
+  landing_zones:
+    - Deploy-GuestAttest
+    - Enable-DDoS-VNET
