@@ -23,7 +23,7 @@ library and a per-customer rendering step.
 | Management group IDs | Kept from the old product: `<root>`, `-platform`, `-management`, `-connectivity`, `-identity`, `-landing-zones`, `-lz-corp`, `-lz-online`, `-sandboxes`, `-decommissioned`, `-unusedsub` |
 | Data platform | Dropped for now: no `-lz-dataplatform` group, no Databricks policies |
 | Allowed regions | norwayeast, norwaywest, westeurope, northeurope, swedencentral, for resources and resource groups in the landing zones |
-| Tags | `Owner` and `CostCenter` required on landing zone resource groups (deny); `Owner`, `CostCenter`, `Environment`, `Workload` inherited from the resource group (modify). No `Location` tag |
+| Tags | `Owner` and `CostCenter` required on landing zone resource groups (deny); `Owner`, `CostCenter`, `Environment`, `Workload` inherited from the resource group (modify). No `Location` tag. The deny uses Fortytwo's `Deny-RG-Without-Tag` (governance/lib), the built-in rule plus `tags.exempt_resource_groups`: groups that Azure services and policy deployments create without the customer's tags (NetworkWatcherRG, the Service Health alerts group, Defender export, AKS node groups, ...) |
 | DDoS | Off: `Enable-DDoS-VNET` removed from connectivity and landing zones |
 | Subnets without an NSG | Denied in landing zones (ALZ default kept) |
 | Guest attestation | Not used: `Deploy-GuestAttest` removed from platform and landing zones |
@@ -37,6 +37,8 @@ and `-unusedsub` is kept. Tag names are limited to 12 characters, because the as
 (`Inherit-Tag-<tag>`) may be at most 24.
 
 ## Tested (30 October 2026)
+
+- Not yet run in Azure: the rule syntax of `Deny-RG-Without-Tag` (a `count` over the exempt patterns), which Azure validates when the definition is created. The plan accepts it.
 
 - `render_library.py`: 9 unit tests (`python3 -m unittest discover -s governance/scripts`).
 - `terraform validate`, and a read-only `terraform plan` in the Fortytwo Labs sandbox under the PoC's

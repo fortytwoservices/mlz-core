@@ -25,6 +25,17 @@ tags:
     - CostCenter
     - Environment
     - Workload
+  # Resource groups that Azure services and policy deployments create themselves, without the
+  # customer's tags: the required tags are not enforced on them. One '*' wildcard per pattern.
+  exempt_resource_groups:
+    - NetworkWatcherRG             # created with the first VNet in a region
+    - rg-serviceHealthAlert        # ALZ Deploy-SvcHealth-BuiltIn, in every subscription
+    - rg-mdfc-export*              # ALZ Deploy-MDFC-Config, Defender for Cloud export
+    - DefaultResourceGroup-*       # Azure Monitor and Log Analytics defaults
+    - AzureBackupRG*               # Azure Backup restore points
+    - MC_*                         # AKS node resource groups
+    - databricks-rg-*              # Azure Databricks managed resource groups
+    - cloud-shell-storage-*        # Azure Cloud Shell
 
 # ALZ assignments Fortytwo leaves out, by archetype.
 policy_assignments_to_remove:

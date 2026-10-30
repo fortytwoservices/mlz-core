@@ -49,12 +49,16 @@ ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,73}[a-z0-9]$")
 TAG = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,11}$")
 REGION = re.compile(r"^[a-z0-9]+$")
 
-REQUIRE_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/96670d01-0a4d-4649-9c89-2d3abc0a5025"
-INHERIT_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/ea3f2387-9b95-492a-a190-fcdc54f7b070"
 PLACEHOLDER_SCOPE = "/providers/Microsoft.Management/managementGroups/placeholder"
+# Fortytwo's definition (governance/lib), deployed at the root: the built-in "Require a tag on
+# resource groups" plus exemptions for groups that platforms create themselves.
+REQUIRE_TAG_DEFINITION = f"{PLACEHOLDER_SCOPE}/providers/Microsoft.Authorization/policyDefinitions/Deny-RG-Without-Tag"
+INHERIT_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/ea3f2387-9b95-492a-a190-fcdc54f7b070"
 
-# Assignments Fortytwo adds to the landing zones management group, besides the tag ones.
+# What Fortytwo adds to ALZ archetypes, besides the tag assignments.
+ROOT_DEFINITIONS = ["Deny-RG-Without-Tag"]
 LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
+OPTIONAL_GROUPS = ("security", "local")
 
 
 class RenderError(Exception):
@@ -128,7 +132,12 @@ def validate(config: dict) -> None:
     problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.match(r)]
     if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
-    mapping(config.get("management_groups"), "management_groups", problems)
+    groups = mapping(config.get("management_groups"), "management_groups", problems)
+    for key, value in groups.items():
+        if key not in OPTIONAL_GROUPS:
+            problems.append(f"management_groups.{key}: unknown; the optional groups are {', '.join(OPTIONAL_GROUPS)}.")
+        elif value is not None and not isinstance(value, bool):
+            problems.append(f"management_groups.{key} must be true or false, without quotes; got {value!r}.")
     tags = mapping(config.get("tags"), "tags", problems)
     for kind in ("required", "inherited"):
         for tag in string_list(tags.get(kind), f"tags.{kind}", problems):
@@ -137,6 +146,12 @@ def validate(config: dict) -> None:
                     f"tags.{kind}: {tag!r} must be 1 to 12 letters and digits, starting with a letter "
                     "(the policy assignment name is limited to 24 characters)."
                 )
+    for pattern in string_list(tags.get("exempt_resource_groups"), "tags.exempt_resource_groups", problems):
+        if not 0 < len(pattern) <= 90 or pattern.count("*") > 1:
+            problems.append(
+                f"tags.exempt_resource_groups: {pattern!r} must be 1 to 90 characters with at most one '*' "
+                "(Azure Policy's like condition)."
+            )
     removals = mapping(config.get("policy_assignments_to_remove"), "policy_assignments_to_remove", problems)
     for archetype, names in removals.items():
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
@@ -197,14 +212,15 @@ def management_groups(config: dict) -> list[dict]:
 
 def tag_assignments(config: dict) -> dict[str, dict]:
     tags = config.get("tags") or {}
+    exempt = list(tags.get("exempt_resource_groups") or [])
     assignments = {}
     for tag in tags.get("required") or []:
         assignments[f"Require-Tag-{tag}"] = assignment(
             f"Require-Tag-{tag}",
             f"Require the {tag} tag on resource groups",
-            f"Resource groups must have the {tag} tag.",
+            f"Resource groups must have the {tag} tag, except groups that platforms create themselves.",
             REQUIRE_TAG_DEFINITION,
-            {"tagName": {"value": tag}},
+            {"tagName": {"value": tag}, "exemptResourceGroupNames": {"value": exempt}},
             f"Resource groups {{enforcementMode}} have the {tag} tag.",
         )
     for tag in tags.get("inherited") or []:
@@ -246,7 +262,7 @@ def assignment(name, display_name, description, definition, parameters, message,
 
 def override_names(config: dict) -> dict[str, str]:
     """Base archetype -> the name of Fortytwo's override of it."""
-    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"landing_zones"}
+    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"root", "landing_zones"}
     return {base: f"fortytwo_{base}" for base in sorted(bases)}
 
 
@@ -260,7 +276,7 @@ def archetype_overrides(config: dict, added_to_landing_zones: list[str]) -> list
                 "base_archetype": base,
                 "policy_assignments_to_add": added_to_landing_zones if base == "landing_zones" else [],
                 "policy_assignments_to_remove": list(removals.get(base) or []),
-                "policy_definitions_to_add": [],
+                "policy_definitions_to_add": ROOT_DEFINITIONS if base == "root" else [],
                 "policy_definitions_to_remove": [],
                 "policy_set_definitions_to_add": [],
                 "policy_set_definitions_to_remove": [],

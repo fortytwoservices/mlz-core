@@ -39,7 +39,7 @@ class RenderTest(unittest.TestCase):
         _, out = self.render(self.BASE)
         groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
         ids = {g["id"]: (g["parent_id"], g["archetypes"]) for g in groups}
-        self.assertEqual(ids["demo"], (None, ["root"]))
+        self.assertEqual(ids["demo"], (None, ["fortytwo_root"]))
         self.assertEqual(ids["demo-platform"], ("demo", ["fortytwo_platform"]))
         self.assertEqual(ids["demo-connectivity"], ("demo-platform", ["fortytwo_connectivity"]))
         self.assertEqual(ids["demo-landing-zones"], ("demo", ["fortytwo_landing_zones"]))
@@ -82,10 +82,35 @@ class RenderTest(unittest.TestCase):
         connectivity = self.read(out, "archetype_overrides/fortytwo_connectivity.alz_archetype_override.json")
         self.assertEqual(connectivity["policy_assignments_to_remove"], ["Enable-DDoS-VNET"])
 
+    def test_the_root_override_brings_the_tag_definition(self):
+        _, out = self.render(self.BASE)
+        root = self.read(out, "archetype_overrides/fortytwo_root.alz_archetype_override.json")
+        self.assertEqual(root["base_archetype"], "root")
+        self.assertEqual(root["policy_definitions_to_add"], ["Deny-RG-Without-Tag"])
+        self.assertEqual(root["policy_assignments_to_remove"], [])
+        self.assertTrue((rl.GOVERNANCE / "lib/policy_definitions/Deny-RG-Without-Tag.alz_policy_definition.json").exists())
+
+    def test_quoted_or_unknown_management_group_flags_are_refused(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + 'management_groups:\n  security: "false"\n  local: "false"\n  secuirty: false\n')
+        message = str(caught.exception)
+        self.assertIn("management_groups.security must be true or false", message)
+        self.assertIn("management_groups.local must be true or false", message)
+        self.assertIn("management_groups.secuirty: unknown", message)
+
+    def test_exempt_patterns_follow_the_like_condition(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "tags:\n  exempt_resource_groups: ['rg-*-temp-*']\n")
+        self.assertIn("at most one '*'", str(caught.exception))
+
     def test_tag_assignments(self):
         _, out = self.render(self.BASE)
         require = self.read(out, "policy_assignments/Require-Tag-Owner.alz_policy_assignment.json")
-        self.assertEqual(require["properties"]["parameters"], {"tagName": {"value": "Owner"}})
+        self.assertEqual(require["properties"]["policyDefinitionId"], rl.REQUIRE_TAG_DEFINITION)
+        parameters = require["properties"]["parameters"]
+        self.assertEqual(parameters["tagName"], {"value": "Owner"})
+        self.assertIn("NetworkWatcherRG", parameters["exemptResourceGroupNames"]["value"])
+        self.assertIn("rg-serviceHealthAlert", parameters["exemptResourceGroupNames"]["value"])
         self.assertNotIn("identity", require)
         inherit = self.read(out, "policy_assignments/Inherit-Tag-Workload.alz_policy_assignment.json")
         self.assertEqual(inherit["identity"], {"type": "SystemAssigned"})
