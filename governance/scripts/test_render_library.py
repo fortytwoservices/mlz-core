@@ -115,6 +115,53 @@ class RenderTest(unittest.TestCase):
         self.assertIn("primary_region 'eastus' is not in allowed_regions", message)
         self.assertIn("'DataClassification' must be 1 to 12", message)
 
+    def test_a_bare_string_where_a_list_belongs_is_refused_not_split(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "allowed_regions: norwayeast\ntags:\n  required: Owner\n")
+        message = str(caught.exception)
+        self.assertIn("allowed_regions must be a list of strings", message)
+        self.assertIn("tags.required must be a list of strings", message)
+        self.assertFalse((self.dir / "out").exists())
+
+    def test_mappings_must_be_mappings(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "tags: [Owner]\nmanagement_groups: yes\npolicy_assignments_to_remove: {platform: Deploy-GuestAttest}\n")
+        message = str(caught.exception)
+        self.assertIn("tags must be a mapping", message)
+        self.assertIn("management_groups must be a mapping", message)
+        self.assertIn("policy_assignments_to_remove.platform must be a list of strings", message)
+
+    def test_null_tag_lists_mean_no_tag_policies(self):
+        _, out = self.render(self.BASE + "tags:\n  required: null\n  inherited: null\n")
+        self.assertFalse((out / "policy_assignments").exists())
+
+    def test_output_holding_the_inputs_is_refused(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            rl.render(self.customer(self.BASE), DEFAULTS, self.dir)
+        self.assertIn("holds source files", str(caught.exception))
+        self.assertTrue((self.dir / "customer.yaml").exists())
+
+    def test_output_inside_the_governance_sources_is_refused(self):
+        for folder in (rl.GOVERNANCE, rl.GOVERNANCE.parent):
+            with self.assertRaises(rl.RenderError):
+                rl.render(self.customer(self.BASE), DEFAULTS, folder)
+        self.assertTrue((rl.GOVERNANCE / "defaults.yaml").exists())
+
+    def test_a_folder_the_script_did_not_create_is_never_deleted(self):
+        out = self.dir / "out"
+        out.mkdir()
+        (out / "keep.txt").write_text("not ours")
+        with self.assertRaises(rl.RenderError) as caught:
+            rl.render(self.customer(self.BASE), DEFAULTS, out)
+        self.assertIn("not created by this script", str(caught.exception))
+        self.assertTrue((out / "keep.txt").exists())
+
+    def test_an_empty_existing_folder_is_used(self):
+        out = self.dir / "out"
+        out.mkdir()
+        rl.render(self.customer(self.BASE), DEFAULTS, out)
+        self.assertTrue((out / rl.MARKER).exists())
+
     def test_missing_required_settings(self):
         with self.assertRaises(rl.RenderError) as caught:
             self.render("name: nothing else\n")

@@ -39,6 +39,8 @@ from pathlib import Path
 
 GOVERNANCE = Path(__file__).resolve().parent.parent
 MERGED_KEY_BY_KEY = ("management_groups", "tags")
+# Written into every output folder, so a later run replaces only a folder this script made.
+MARKER = ".rendered-by-mlz-core"
 
 # Management group IDs are at most 90 characters; the longest suffix is "-decommissioned".
 ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,73}[a-z0-9]$")
@@ -88,32 +90,77 @@ def merge(defaults: dict, customer: dict) -> dict:
     return merged
 
 
+def string_list(value, name: str, problems: list[str]) -> list[str]:
+    """The value as a list of strings; null is an empty list. Anything else is a problem, not a guess:
+    a bare string would otherwise be read character by character."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        problems.append(f"{name} must be a list of strings, written [a, b] or one '- item' per line.")
+        return []
+    return value
+
+
+def mapping(value, name: str, problems: list[str]) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        problems.append(f"{name} must be a mapping.")
+        return {}
+    return value
+
+
 def validate(config: dict) -> None:
     problems = []
     for key in ("root_id", "root_display_name", "primary_region"):
         if not config.get(key):
             problems.append(f"{key} is required.")
-    if config.get("root_id") and not ROOT_ID.match(config["root_id"]):
+        elif not isinstance(config[key], str):
+            problems.append(f"{key} must be a string.")
+    if isinstance(config.get("root_id"), str) and not ROOT_ID.match(config["root_id"]):
         problems.append(
             f"root_id {config['root_id']!r}: 2 to 75 lower-case letters, digits and hyphens, "
             "starting and ending with a letter or digit."
         )
-    regions = config.get("allowed_regions") or []
-    if not regions:
+    regions = string_list(config.get("allowed_regions"), "allowed_regions", problems)
+    if config.get("allowed_regions") in (None, []):
         problems.append("allowed_regions must list at least one region.")
-    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.match(str(r))]
-    if config.get("primary_region") and config["primary_region"] not in regions:
+    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.match(r)]
+    if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
-    tags = config.get("tags") or {}
+    mapping(config.get("management_groups"), "management_groups", problems)
+    tags = mapping(config.get("tags"), "tags", problems)
     for kind in ("required", "inherited"):
-        for tag in tags.get(kind) or []:
-            if not TAG.match(str(tag)):
+        for tag in string_list(tags.get(kind), f"tags.{kind}", problems):
+            if not TAG.match(tag):
                 problems.append(
                     f"tags.{kind}: {tag!r} must be 1 to 12 letters and digits, starting with a letter "
                     "(the policy assignment name is limited to 24 characters)."
                 )
+    removals = mapping(config.get("policy_assignments_to_remove"), "policy_assignments_to_remove", problems)
+    for archetype, names in removals.items():
+        string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
+
+
+def prepare_output(out: Path, inputs: list[Path]) -> None:
+    """Empties the output folder, refusing any folder this script did not create.
+
+    The folder is deleted and recreated, so it must never be one that holds sources: not an input's
+    folder or any folder above one, and not a folder without the marker this script leaves behind."""
+    out = out.resolve()
+    protected = [GOVERNANCE.parent, *(p.resolve().parent for p in inputs)]
+    if any(out == p or out in p.parents for p in protected):
+        raise RenderError(f"--out {out} holds source files (it contains an input or this repository); choose an empty folder.")
+    if out.exists():
+        if not out.is_dir():
+            raise RenderError(f"--out {out} is a file; choose a folder.")
+        if any(out.iterdir()) and not (out / MARKER).exists():
+            raise RenderError(f"--out {out} is not empty and was not created by this script; choose an empty folder.")
+        shutil.rmtree(out)
+    out.mkdir(parents=True)
+    (out / MARKER).write_text("Rendered by mlz-core governance/scripts/render_library.py. The next run replaces this folder.\n")
 
 
 def management_groups(config: dict) -> list[dict]:
@@ -235,8 +282,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
     root = config["root_id"]
 
     tags = tag_assignments(config)
-    if out.exists():
-        shutil.rmtree(out)
+    prepare_output(out, [customer_file, defaults_file])
 
     write_json(out / "config.json", config)
     write_json(
