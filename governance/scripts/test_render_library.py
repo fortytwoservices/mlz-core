@@ -46,18 +46,23 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(ids["demo-lz-corp"], ("demo-landing-zones", ["corp"]))
         self.assertEqual(ids["demo-lz-online"], ("demo-landing-zones", ["online"]))
         self.assertEqual(ids["demo-sandboxes"], ("demo", ["sandbox"]))
-        self.assertEqual(ids["demo-unusedsub"], ("demo", ["fortytwo_empty"]))
-        self.assertIn("demo-security", ids)
-        self.assertNotIn("demo-lz-local", ids)
-        self.assertNotIn("demo-lz-dataplatform", ids)
+        self.assertEqual(ids["demo-decommissioned"], ("demo", ["decommissioned"]))
+        self.assertEqual(len(ids), 10)
+        for absent in ("demo-security", "demo-lz-local", "demo-lz-dataplatform", "demo-unusedsub"):
+            self.assertNotIn(absent, ids)
 
     def test_a_customer_can_turn_on_one_optional_group_alone(self):
         config, out = self.render(self.BASE + "management_groups:\n  local: true\n")
         groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
-        ids = [g["id"] for g in groups]
-        self.assertIn("demo-lz-local", ids)
-        self.assertIn("demo-security", ids)  # still on from the defaults
-        self.assertTrue(ids.index("demo-lz-local") > ids.index("demo-landing-zones"))
+        ids = {g["id"]: g["parent_id"] for g in groups}
+        self.assertEqual(ids["demo-lz-local"], "demo-landing-zones")
+        self.assertNotIn("demo-security", ids)  # still off from the defaults
+
+    def test_the_security_group_sits_under_platform_when_turned_on(self):
+        _, out = self.render(self.BASE + "management_groups:\n  security: true\n")
+        groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
+        ids = {g["id"]: (g["parent_id"], g["archetypes"]) for g in groups}
+        self.assertEqual(ids["demo-security"], ("demo-platform", ["security"]))
 
     def test_overrides_remove_attestation_and_ddos_and_add_regions_and_tags(self):
         _, out = self.render(self.BASE)

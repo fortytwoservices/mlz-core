@@ -20,7 +20,9 @@ library and a per-customer rendering step.
 
 | Topic | Default |
 |---|---|
-| Management group IDs | Kept from the old product: `<root>`, `-platform`, `-management`, `-connectivity`, `-identity`, `-landing-zones`, `-lz-corp`, `-lz-online`, `-sandboxes`, `-decommissioned`, `-unusedsub` |
+| Management group IDs | Kept from the old product: `<root>`, `-platform`, `-management`, `-connectivity`, `-identity`, `-landing-zones`, `-lz-corp`, `-lz-online`, `-sandboxes`, `-decommissioned`. The old `-unusedsub` is dropped: unused subscriptions go to Decommissioned |
+| Optional groups | Off unless `customer.yaml` turns them on: `management_groups.security` (`-security` under Platform, for security tooling such as Sentinel) and `management_groups.local` (`-lz-local` under Landing Zones, for workloads on Azure Local clusters) |
+| Sandboxes | The `-sandboxes` group is always there; sandbox subscriptions come from vending (`archetype: sandbox`) |
 | Data platform | Dropped for now: no `-lz-dataplatform` group, no Databricks policies |
 | Allowed regions | norwayeast, norwaywest, westeurope, northeurope, swedencentral, for resources and resource groups in the landing zones |
 | Tags | `Owner` and `CostCenter` required on landing zone resource groups (deny); `Owner`, `CostCenter`, `Environment`, `Workload` inherited from the resource group (modify). No `Location` tag. The deny uses Fortytwo's `Deny-RG-Without-Tag` (governance/lib), the built-in rule plus `tags.exempt_resource_groups`: groups that Azure services and policy deployments create without the customer's tags (NetworkWatcherRG, the Service Health alerts group, Defender export, AKS node groups, ...) |
@@ -31,20 +33,19 @@ library and a per-customer rendering step.
 | Corp | ALZ default, including public IPs denied on network cards |
 | New ALZ assignments | Service health alerts and security benchmark monitoring kept (both at the root) |
 
-**Proposed, not yet confirmed:** the Security management group is included (ALZ's current hierarchy, for
-security tooling such as Sentinel), Local is left out unless a customer sets `management_groups.local`,
-and `-unusedsub` is kept. Tag names are limited to 12 characters, because the assignment name
-(`Inherit-Tag-<tag>`) may be at most 24.
+Tag names are limited to 12 characters, because the assignment name (`Inherit-Tag-<tag>`) may be at
+most 24.
 
 ## Tested (30 October 2026)
 
-- Not yet run in Azure: the rule syntax of `Deny-RG-Without-Tag` (a `count` over the exempt patterns), which Azure validates when the definition is created. The plan accepts it.
-
-- `render_library.py`: 9 unit tests (`python3 -m unittest discover -s governance/scripts`).
+- `render_library.py`: 22 unit tests (`python3 -m unittest discover -s governance/scripts`).
 - `terraform validate`, and a read-only `terraform plan` in the Fortytwo Labs sandbox under the PoC's
-  `ft42poc` management group, as root `ft42lib`: 530 to add, nothing applied. The plan has 12 management
-  groups and 126 policy assignments; landing zones 59 (53 from ALZ, minus 2, plus 2 region and 6 tag
-  assignments), platform 39, connectivity 0, Corp 5.
+  `ft42poc` management group, as root `ft42lib`: 529 to add, nothing applied. The plan has 10 management
+  groups, Fortytwo's `Deny-RG-Without-Tag` definition at the root, and 126 policy assignments; landing
+  zones 59 (53 from ALZ, minus 2, plus 2 region and 6 tag assignments), platform 39, connectivity 0,
+  Corp 5.
+- `Deny-RG-Without-Tag` (a `count` over the exempt patterns) created as a subscription-scope definition in
+  the sandbox, which is when Azure validates a policy rule, and deleted straight after.
 
 ## Before the first apply
 
@@ -61,15 +62,16 @@ and `-unusedsub` is kept. Tag names are limited to 12 characters, because the as
    parameter). They belong with step 1.
 3. **Private DNS zone defaults** for `Deploy-Private-DNS-Zones` in Corp
    (`private_dns_zone_subscription_id`, `_resource_group_name`, `_region`), from the platform contract.
-4. **Subscription placement** of the platform subscriptions (management, connectivity, identity, security)
-   from `customer.yaml`.
+4. **Subscription placement** of the platform subscriptions (management, connectivity, identity, and
+   security when turned on) from `customer.yaml`.
 
 ## Later
 
-- Default management group for new subscriptions (`-unusedsub`), through the module's
-  `management_group_hierarchy_settings`. Needs tenant-level rights.
+- Default management group for new subscriptions, through the module's
+  `management_group_hierarchy_settings` (ALZ suggests Sandboxes). Needs tenant-level rights.
 - DDoS as an opt-in: a customer drops `Enable-DDoS-VNET` from `policy_assignments_to_remove` and supplies
   `ddos_protection_plan_id`.
 - Migration from the old product: its tag assignment `Enforce-Mandatory-Tags` and policy set
   `Enforce-RSG-Tags` are replaced by the per-tag assignments, so a migrating customer's plan removes the
-  old two.
+  old two. Its `-unusedsub` group is removed too: move any subscriptions in it to `-decommissioned` first,
+  since Azure does not delete a management group that holds subscriptions.

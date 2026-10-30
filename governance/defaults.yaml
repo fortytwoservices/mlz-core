@@ -11,7 +11,7 @@ allowed_regions:
 
 # Optional management groups from the current ALZ hierarchy.
 management_groups:
-  security: true   # under Platform, for security tooling such as Sentinel
+  security: false  # under Platform, for security tooling such as Sentinel
   local: false     # under Landing Zones, for workloads on Azure Local clusters
 
 tags:

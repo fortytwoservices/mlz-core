@@ -190,7 +190,8 @@ def prepare_output(out: Path, inputs: list[Path]) -> None:
 
 
 def management_groups(config: dict) -> list[dict]:
-    """The management group tree: the old Fortytwo IDs, plus the optional ALZ groups."""
+    """The management group tree: the old Fortytwo IDs, plus the optional ALZ groups. The old product's
+    "-unusedsub" group is gone: unused subscriptions go to Decommissioned (user, 30 October 2026)."""
     root = config["root_id"]
     optional = config.get("management_groups") or {}
     overridden = override_names(config)
@@ -209,12 +210,11 @@ def management_groups(config: dict) -> list[dict]:
         (f"{root}-lz-online", "Online", f"{root}-landing-zones", archetype("online")),
         (f"{root}-sandboxes", "Sandboxes", root, archetype("sandbox")),
         (f"{root}-decommissioned", "Decommissioned", root, archetype("decommissioned")),
-        (f"{root}-unusedsub", "Unused subscriptions", root, ["fortytwo_empty"]),
     ]
     if optional.get("security"):
         groups.insert(5, (f"{root}-security", "Security", f"{root}-platform", archetype("security")))
     if optional.get("local"):
-        groups.insert(-3, (f"{root}-lz-local", "Local", f"{root}-landing-zones", archetype("local")))
+        groups.insert(-2, (f"{root}-lz-local", "Local", f"{root}-landing-zones", archetype("local")))
     return [
         {"id": gid, "display_name": name, "parent_id": parent, "exists": False, "archetypes": archetypes}
         for gid, name, parent, archetypes in groups
