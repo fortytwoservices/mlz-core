@@ -98,6 +98,26 @@ class RenderTest(unittest.TestCase):
         self.assertIn("management_groups.local must be true or false", message)
         self.assertIn("management_groups.secuirty: unknown", message)
 
+    def test_archetype_keys_must_be_alz_archetypes(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(
+                self.BASE + "policy_assignments_to_remove:\n"
+                "  '../../../../existing': [Deploy-GuestAttest]\n"
+                "  landing_zone: [Enable-DDoS-VNET]\n"
+            )
+        message = str(caught.exception)
+        self.assertIn("policy_assignments_to_remove.../../../../existing: not an ALZ archetype", message)
+        self.assertIn("policy_assignments_to_remove.landing_zone: not an ALZ archetype", message)
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["customer.yaml"])
+
+    def test_writes_never_leave_the_output_folder(self):
+        out = self.dir / "out"
+        out.mkdir()
+        with self.assertRaises(rl.RenderError) as caught:
+            rl.write_json(out, "../escaped.json", {})
+        self.assertIn("outside --out", str(caught.exception))
+        self.assertFalse((self.dir / "escaped.json").exists())
+
     def test_exempt_patterns_follow_the_like_condition(self):
         with self.assertRaises(rl.RenderError) as caught:
             self.render(self.BASE + "tags:\n  exempt_resource_groups: ['rg-*-temp-*']\n")

@@ -59,6 +59,11 @@ INHERIT_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/e
 ROOT_DEFINITIONS = ["Deny-RG-Without-Tag"]
 LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
 OPTIONAL_GROUPS = ("security", "local")
+# The archetypes in platform/alz; policy_assignments_to_remove may name only these.
+ALZ_ARCHETYPES = (
+    "root", "platform", "management", "connectivity", "identity", "security",
+    "landing_zones", "corp", "online", "local", "sandbox", "decommissioned",
+)
 
 
 class RenderError(Exception):
@@ -154,6 +159,12 @@ def validate(config: dict) -> None:
             )
     removals = mapping(config.get("policy_assignments_to_remove"), "policy_assignments_to_remove", problems)
     for archetype, names in removals.items():
+        # The key becomes part of a file name, so only the known archetype names pass.
+        if archetype not in ALZ_ARCHETYPES:
+            problems.append(
+                f"policy_assignments_to_remove.{archetype!s}: not an ALZ archetype; use one of {', '.join(ALZ_ARCHETYPES)}."
+            )
+            continue
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
@@ -287,7 +298,12 @@ def archetype_overrides(config: dict, added_to_landing_zones: list[str]) -> list
     return overrides
 
 
-def write_json(path: Path, data) -> None:
+def write_json(out: Path, relative: str, data) -> None:
+    """Writes one output file, and refuses any path that would land outside the output folder."""
+    root = out.resolve()
+    path = (root / relative).resolve()
+    if root not in path.parents:
+        raise RenderError(f"refusing to write {path}: it is outside --out {root}.")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
 
@@ -300,9 +316,10 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
     tags = tag_assignments(config)
     prepare_output(out, [customer_file, defaults_file])
 
-    write_json(out / "config.json", config)
+    write_json(out, "config.json", config)
     write_json(
-        out / "alz_library_metadata.json",
+        out,
+        "alz_library_metadata.json",
         {
             "$schema": "https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/library_metadata.json",
             "name": f"{root}-customer",
@@ -312,13 +329,14 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
         },
     )
     write_json(
-        out / "architecture_definitions" / f"{root}.alz_architecture_definition.json",
+        out,
+        f"architecture_definitions/{root}.alz_architecture_definition.json",
         {"name": root, "management_groups": management_groups(config)},
     )
     for override in archetype_overrides(config, LANDING_ZONE_ADDITIONS + list(tags)):
-        write_json(out / "archetype_overrides" / f"{override['name']}.alz_archetype_override.json", override)
+        write_json(out, f"archetype_overrides/{override['name']}.alz_archetype_override.json", override)
     for name, body in tags.items():
-        write_json(out / "policy_assignments" / f"{name}.alz_policy_assignment.json", body)
+        write_json(out, f"policy_assignments/{name}.alz_policy_assignment.json", body)
     return config
 
 
