@@ -31,7 +31,7 @@ locals {
       subscription_id       = id
       management_group_name = "${local.config.root_id}-${role}"
     }
-    if role != "security" || try(local.config.management_groups.security, false)
+    if role != "security" || try(local.config.management_groups.security, false) == true
   }
 }
 

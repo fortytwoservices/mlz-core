@@ -243,6 +243,25 @@ class RenderTest(unittest.TestCase):
         self.assertIn("subscriptions.networking: unknown", message)
         self.assertIn("each platform subscription must be a different one", message)
 
+    def test_config_carries_lower_case_ids_and_plain_flags(self):
+        _, out = self.render(
+            "root_id: demo\nroot_display_name: Demo\nprimary_region: norwayeast\n"
+            "security_contact: platform-team@demo.example\n"
+            "management_groups:\n  security: null\n"
+            "subscriptions:\n"
+            "  management: ABCDEF01-1234-1234-1234-1234567890AB\n"
+            "  connectivity: 00000000-0000-0000-0000-000000000002\n"
+            "  security: 00000000-0000-0000-0000-000000000004\n"
+        )
+        config = self.read(out, "config.json")
+        self.assertEqual(config["subscriptions"]["management"], "abcdef01-1234-1234-1234-1234567890ab")
+        self.assertEqual(config["management_groups"], {"security": False, "local": False})
+
+    def test_long_root_ids_are_refused(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE.replace("root_id: demo", "root_id: a-very-long-root-id"))
+        self.assertIn("2 to 16 lower-case letters", str(caught.exception))
+
     def test_platform_subscriptions_reach_the_config(self):
         config, out = self.render(self.BASE + "  identity: 00000000-0000-0000-0000-000000000003\n")
         self.assertEqual(

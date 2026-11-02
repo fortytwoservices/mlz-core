@@ -42,8 +42,9 @@ MERGED_KEY_BY_KEY = ("management_groups", "tags")
 # Written into every output folder, so a later run replaces only a folder this script made.
 MARKER = ".rendered-by-mlz-core"
 
-# Management group IDs are at most 90 characters; the longest suffix is "-decommissioned".
-ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,73}[a-z0-9]$")
+# The root ID prefixes management group IDs and resource names; 16 characters keep every generated name
+# within its Azure limit (the tightest is the Log Analytics workspace, 63 characters).
+ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,14}[a-z0-9]$")
 GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 # Platform subscriptions: each goes into the management group of the same name.
@@ -145,7 +146,7 @@ def validate(config: dict) -> None:
         problems.append("subscriptions: each platform subscription must be a different one (a subscription sits in one management group).")
     if isinstance(config.get("root_id"), str) and not ROOT_ID.match(config["root_id"]):
         problems.append(
-            f"root_id {config['root_id']!r}: 2 to 75 lower-case letters, digits and hyphens, "
+            f"root_id {config['root_id']!r}: 2 to 16 lower-case letters, digits and hyphens, "
             "starting and ending with a letter or digit."
         )
     regions = string_list(config.get("allowed_regions"), "allowed_regions", problems)
@@ -185,6 +186,17 @@ def validate(config: dict) -> None:
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
+
+
+def normalize(config: dict) -> dict:
+    """The checked settings in the one form Terraform and the ALZ module accept: subscription IDs in lower
+    case, and every optional management group as true or false (null and missing mean false)."""
+    groups = config.get("management_groups") or {}
+    return {
+        **config,
+        "subscriptions": {role: value.lower() for role, value in (config.get("subscriptions") or {}).items()},
+        "management_groups": {name: groups.get(name) is True for name in OPTIONAL_GROUPS},
+    }
 
 
 def prepare_output(out: Path, inputs: list[Path]) -> None:
@@ -330,6 +342,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
     validate(config)
     root = config["root_id"]
 
+    config = normalize(config)
     tags = tag_assignments(config)
     prepare_output(out, [customer_file, defaults_file])
 
