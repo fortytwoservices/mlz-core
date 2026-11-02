@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 
 from . import contract, platform, vending
-from .files import read_yaml
+from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
 
 MARKER = ".written-by-mlz"
@@ -55,7 +55,12 @@ def main() -> int:
         path = getattr(args, name, None) or args.repo / "_generated" / f"{name}.yaml"
         return read_yaml(path)
 
+    # Every file the command reads, parsed in one terraform run before anything is read.
+    inputs = {"platform": ["hubs"], "allocate": ["landing-zones", "_generated"], "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"]}
     try:
+        if args.role != "contract":
+            contracts = [getattr(args, name) for name in ("governance", "platform") if getattr(args, name, None)]
+            preload([p for p in contracts if p.is_file()] + [f for folder in inputs[args.role] for f in yaml_files(args.repo / folder)])
         if args.role == "contract":
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(contract.render(args.kind, json.loads(sys.stdin.read())))

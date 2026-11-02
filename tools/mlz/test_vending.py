@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from pathlib import Path
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, main, own_folder
+from mlz import files
 from mlz.contract import render
 from mlz.vending import IP_PLAN, allocate, build, place, release, render_plan
 
@@ -223,6 +225,15 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(run("--check"), 0)
         self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
         self.assertEqual(run("--check"), 1)
+
+    def test_a_command_starts_terraform_once(self):
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.cli("allocate", "--repo", str(self.repo))
+        files._parsed.clear()
+        with mock.patch("mlz.files.subprocess.run", wraps=subprocess.run) as run:
+            self.assertEqual(self.cli("vending", "--repo", str(self.repo), "--out", str(self.repo / "out")), 0)
+        self.assertEqual(run.call_count, 1)
 
     def cli(self, *argv: str) -> int:
         with mock.patch.object(sys, "argv", ["mlz", *argv]), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
