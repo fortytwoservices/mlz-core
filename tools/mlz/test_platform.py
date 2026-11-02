@@ -10,10 +10,10 @@ from mlz.merge import ConfigError
 from mlz.platform import build
 
 GOVERNANCE = {
-    "root_id": "demo",
+    "root": "demo",
     "primary_region": "norwayeast",
-    "subscriptions": {"management": "m", "connectivity": "c"},
-    "management": {"workspace_resource_id": "/subscriptions/m/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law"},
+    "platform_subscriptions": {"management": "m", "connectivity": "c"},
+    "monitoring": {"workspace": "/subscriptions/m/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law"},
 }
 HUB = "address_space: 10.100.0.0/22\nlanding_zone_ranges: 10.100.0.0/16\n"
 

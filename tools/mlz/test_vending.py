@@ -10,20 +10,20 @@ from mlz.merge import ConfigError
 from mlz.vending import allocate, build
 
 GOVERNANCE = {
-    "root_id": "demo",
+    "root": "demo",
     "allowed_regions": ["norwayeast", "swedencentral"],
-    "subscriptions": {"management": "11111111-1111-1111-1111-111111111111", "connectivity": "22222222-2222-2222-2222-222222222222"},
+    "required_tags": ["Owner", "CostCenter"],
+    "archetypes": {"corp": "demo-lz-corp", "online": "demo-lz-online", "sandbox": "demo-sandboxes"},
+    "platform_subscriptions": {"management": "11111111-1111-1111-1111-111111111111", "connectivity": "22222222-2222-2222-2222-222222222222"},
 }
 PLATFORM = {
-    "hub_address_spaces": {"norwayeast": ["10.100.0.0/22"]},
-    "connectivity": {
-        "regions": {
-            "norwayeast": {
-                "routing_supernet": ["10.100.0.0/16"],
-                "hub_virtual_network_id": "/subscriptions/c/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet-hub",
-                "dns_servers": ["10.100.0.4"],
-                "spoke_default_routes": {"default": {"name": "default", "address_prefix": "0.0.0.0/0"}},
-            }
+    "regions": {
+        "norwayeast": {
+            "hub_network": "/subscriptions/c/resourceGroups/rg/providers/Microsoft.Network/virtualNetworks/vnet-hub",
+            "hub_range": ["10.100.0.0/22"],
+            "landing_zone_ranges": ["10.100.0.0/16"],
+            "dns_servers": ["10.100.0.4"],
+            "spoke_routes": [{"name": "default", "to": "0.0.0.0/0", "via": "10.100.0.4"}],
         }
     },
 }
@@ -69,6 +69,20 @@ class VendingTest(unittest.TestCase):
         })
         self.assertEqual(prod["network"]["subnets"], {"default": "10.100.4.0/26"})
         self.assertEqual(prod["network"]["dns_servers"], ["10.100.0.4"])
+        self.assertEqual(prod["network"]["routes"], {"default": {
+            "name": "default", "address_prefix": "0.0.0.0/0",
+            "next_hop_type": "VirtualAppliance", "next_hop_in_ip_address": "10.100.0.4",
+        }})
+
+    def test_governance_decides_the_archetypes_and_the_required_tags(self):
+        governance = {**GOVERNANCE, "required_tags": ["Owner", "CostCenter", "BusinessUnit"]}
+        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, governance, PLATFORM)
+        self.assertIn("governance requires the BusinessUnit tag", str(caught.exception))
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
+        configs = build(self.repo, governance, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["tags"]["BusinessUnit"], "Finance")
 
     def test_subnets_are_carved_largest_first(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    app: 25\n    data: 26\n    web: 26\n")

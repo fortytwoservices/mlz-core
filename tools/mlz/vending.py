@@ -20,7 +20,8 @@ from pathlib import Path
 from .files import read_setting, setting_names
 from .merge import ConfigError, layer
 
-ARCHETYPES = {"corp": "lz-corp", "online": "lz-online", "sandbox": "sandboxes"}
+# Tags filled from a landing zone's own settings; any other required tag comes from its `tags`.
+TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 KEYS = {"name", "owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -63,17 +64,22 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
     if s.get("owner") and not EMAIL.fullmatch(str(s["owner"])):
         problems.append(f"{where}: owner {s['owner']!r} should be the owning team's email address.")
-    if s.get("archetype") and s["archetype"] not in ARCHETYPES:
-        problems.append(f"{where}: archetype {s['archetype']!r} must be one of {', '.join(ARCHETYPES)}.")
+    archetypes = governance["archetypes"]
+    if s.get("archetype") and s["archetype"] not in archetypes:
+        problems.append(f"{where}: archetype {s['archetype']!r} must be one of {', '.join(archetypes)}.")
     if s.get("subscription") and not GUID.fullmatch(str(s["subscription"]).lower()):
         problems.append(f"{where}: subscription must be a subscription ID.")
-    if s.get("subscription") and str(s["subscription"]).lower() in {v.lower() for v in governance["subscriptions"].values()}:
+    if s.get("subscription") and str(s["subscription"]).lower() in {v.lower() for v in governance["platform_subscriptions"].values()}:
         problems.append(f"{where}: subscription {s['subscription']} is a platform subscription.")
     location = s.get("location")
     if location and location not in governance["allowed_regions"]:
-        problems.append(f"{where}: location {location} is not one of the allowed regions.")
-    if location and location not in platform["connectivity"]["regions"]:
+        problems.append(f"{where}: location {location} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
+    if location and location not in platform["regions"]:
         problems.append(f"{where}: location {location} has no hub to connect to.")
+    extra = s.get("tags") or {}
+    for tag in governance.get("required_tags", []):
+        if tag not in TAG_SETTINGS and tag not in extra:
+            problems.append(f"{where}: governance requires the {tag} tag; set it under tags: here or in a layer above.")
     budget = s.get("budget") or {}
     if not isinstance(budget.get("monthly", 0), int) or budget.get("monthly", 0) < 0:
         problems.append(f"{where}: budget.monthly must be a whole amount, for example 500.")
@@ -114,14 +120,14 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     configs = {}
     for key, lz in zones.items():
         s = lz["settings"]
-        region = platform["connectivity"]["regions"][s["location"]]
+        region = platform["regions"][s["location"]]
         space = ipaddress.ip_network(plan[key])
         configs[key] = {
             "key": key,
-            "root_id": governance["root_id"],
+            "root_id": governance["root"],
             "display_name": f"{s.get('name', lz['workload'])} ({lz['environment']})",
             "subscription_id": str(s["subscription"]).lower(),
-            "management_group_id": f"{governance['root_id']}-{ARCHETYPES[s['archetype']]}",
+            "management_group_id": governance["archetypes"][s["archetype"]],
             "location": s["location"],
             "tags": {
                 **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
@@ -135,13 +141,28 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "network": {
                 "address_space": str(space),
                 "subnets": subnets(space, (s.get("network") or {}).get("subnets") or {"default": 26}),
-                "hub_virtual_network_id": region["hub_virtual_network_id"],
+                "hub_virtual_network_id": region["hub_network"],
                 "dns_servers": region["dns_servers"],
-                "routes": region["spoke_default_routes"],
+                "routes": route_table_routes(region.get("spoke_routes") or []),
             },
             "github": s.get("github"),
         }
     return configs
+
+
+def route_table_routes(routes: list[dict]) -> dict[str, dict]:
+    """The contract's routes ({name, to, via}) in the route table module's shape. `via` is an address
+    (through that appliance, the firewall) or a next hop type such as Internet."""
+    shaped = {}
+    for route in routes:
+        via = str(route["via"])
+        try:
+            ipaddress.ip_address(via)
+            hop, address = "VirtualAppliance", via
+        except ValueError:
+            hop, address = via, None
+        shaped[route["name"]] = {"name": route["name"], "address_prefix": route["to"], "next_hop_type": hop, "next_hop_in_ip_address": address}
+    return shaped
 
 
 def allocate(repo: Path, platform: dict) -> dict[str, str]:
@@ -149,22 +170,22 @@ def allocate(repo: Path, platform: dict) -> dict[str, str]:
     entries. Ranges never move once given; a landing zone that is removed frees its range."""
     zones, plan = landing_zones(repo), ip_plan(repo)
     taken = [ipaddress.ip_network(v) for v in plan.values()]
-    for spaces in platform["hub_address_spaces"].values():
-        taken += [ipaddress.ip_network(r) for r in spaces]
+    for region in platform["regions"].values():
+        taken += [ipaddress.ip_network(r) for r in region["hub_range"]]
     new = {}
     for key in sorted(k for k in zones if k not in plan):
         s = zones[key]["settings"]
-        region = platform["connectivity"]["regions"].get(s.get("location"))
+        region = platform["regions"].get(s.get("location"))
         if region is None:
             raise ConfigError(f"{key}: location {s.get('location')!r} has no hub, so it has no ranges to take from.")
         size = (s.get("network") or {}).get("size", 24)
         block = next(
-            (b for supernet in region["routing_supernet"] for b in ipaddress.ip_network(supernet).subnets(new_prefix=size)
+            (b for supernet in region["landing_zone_ranges"] for b in ipaddress.ip_network(supernet).subnets(new_prefix=size)
              if not any(b.overlaps(t) for t in taken)),
             None,
         )
         if block is None:
-            raise ConfigError(f"{key}: no free /{size} left in {', '.join(region['routing_supernet'])}.")
+            raise ConfigError(f"{key}: no free /{size} left in {', '.join(region['landing_zone_ranges'])}.")
         taken.append(block)
         new[key] = str(block)
     return new

@@ -54,7 +54,7 @@ most 24.
   library's placeholders stay, and the ALZ module grants no rights on zones; the run after the platform
   publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
   that do not exist yet (met in the canary).
-- `contract` output: what platform and vending read, published as `_generated/governance.json`.
+- `contract` output: what platform and vending read, written as `_generated/governance.yaml` in their repos by `python3 -m mlz contract governance`.
 
 ## Tested
 

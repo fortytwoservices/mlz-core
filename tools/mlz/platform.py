@@ -128,9 +128,9 @@ def build(repo: Path, governance: dict) -> dict:
     for region, settings in hubs.items():
         settings["is_primary"] = region == primary
     return {
-        "root_id": governance["root_id"],
+        "root_id": governance["root"],
         "primary_region": primary,
-        "connectivity_subscription_id": governance["subscriptions"]["connectivity"],
-        "workspace_resource_id": governance["management"]["workspace_resource_id"],
+        "connectivity_subscription_id": governance["platform_subscriptions"]["connectivity"],
+        "workspace_resource_id": governance["monitoring"]["workspace"],
         "hubs": hubs,
     }

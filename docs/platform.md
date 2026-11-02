@@ -33,11 +33,12 @@ governance) must have a hub.
 - **Names**, `<type>-<root>-hub-<region code>` (for example `afw-mlz-hub-nwe`), and the Private Link zones'
   group `rg-<root>-dns-<region code>`, the one governance's DNS policy points at.
 
-`python3 -m mlz platform` reads `hubs/` and the governance contract, checks both, and writes the root's
-config; the Terraform root only reads that file.
+`python3 -m mlz platform` reads `hubs/` and `_generated/governance.yaml`, checks both, and writes the
+root's config (JSON, for one run, never committed); the Terraform root only reads that file.
 
 ## Contract
 
-The `contract` output, published as `_generated/platform.json` for governance and vending: the hub's
+The `contract` output, written as `_generated/platform.yaml` in the governance and vending repos by
+`python3 -m mlz contract platform`: the hub's
 connectivity (peering target, firewall address, DNS servers, the spoke routes), the hubs' own ranges
 (which the IP allocator never hands out), and where the Private Link zones are.
