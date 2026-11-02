@@ -33,7 +33,13 @@ class RenderTest(unittest.TestCase):
     def read(self, out: Path, relative: str):
         return json.loads((out / relative).read_text())
 
-    BASE = "root_id: demo\nroot_display_name: Demo\nprimary_region: norwayeast\n"
+    BASE = (
+        "root_id: demo\nroot_display_name: Demo\nprimary_region: norwayeast\n"
+        "security_contact: platform-team@demo.example\n"
+        "subscriptions:\n"
+        "  management: 00000000-0000-0000-0000-000000000001\n"
+        "  connectivity: 00000000-0000-0000-0000-000000000002\n"
+    )
 
     def test_management_groups_keep_the_old_fortytwo_ids(self):
         _, out = self.render(self.BASE)
@@ -215,8 +221,38 @@ class RenderTest(unittest.TestCase):
     def test_missing_required_settings(self):
         with self.assertRaises(rl.RenderError) as caught:
             self.render("name: nothing else\n")
-        for key in ("root_id", "root_display_name", "primary_region"):
+        for key in ("root_id", "root_display_name", "primary_region", "security_contact"):
             self.assertIn(f"{key} is required", str(caught.exception))
+        for role in ("management", "connectivity"):
+            self.assertIn(f"subscriptions.{role} is required", str(caught.exception))
+
+    def test_platform_subscriptions_are_checked(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(
+                "root_id: demo\nroot_display_name: Demo\nprimary_region: norwayeast\n"
+                "security_contact: not-an-address\n"
+                "subscriptions:\n"
+                "  management: 00000000-0000-0000-0000-000000000001\n"
+                "  connectivity: 00000000-0000-0000-0000-000000000001\n"
+                "  identity: sub-3\n"
+                "  networking: 00000000-0000-0000-0000-000000000004\n"
+            )
+        message = str(caught.exception)
+        self.assertIn("security_contact 'not-an-address' is not an email address", message)
+        self.assertIn("subscriptions.identity must be a subscription ID", message)
+        self.assertIn("subscriptions.networking: unknown", message)
+        self.assertIn("each platform subscription must be a different one", message)
+
+    def test_platform_subscriptions_reach_the_config(self):
+        config, out = self.render(self.BASE + "  identity: 00000000-0000-0000-0000-000000000003\n")
+        self.assertEqual(
+            self.read(out, "config.json")["subscriptions"],
+            {
+                "management": "00000000-0000-0000-0000-000000000001",
+                "connectivity": "00000000-0000-0000-0000-000000000002",
+                "identity": "00000000-0000-0000-0000-000000000003",
+            },
+        )
 
     def test_the_starter_customer_renders(self):
         starter = rl.GOVERNANCE.parent / "starter" / "mlz-governance" / "customer.yaml"

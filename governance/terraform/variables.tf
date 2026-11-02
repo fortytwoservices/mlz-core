@@ -4,14 +4,22 @@ variable "rendered_library_path" {
   nullable    = false
 }
 
+variable "platform_contract_file" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The platform's published contract (JSON), once the platform has been applied. Until then the
+    Private Link DNS policy keeps the library's placeholders, so no rights are granted on zones that do
+    not exist yet; the next run after the platform publishes its contract points it at the real zones.
+  EOT
+}
+
 variable "policy_default_values" {
   type        = map(string)
   default     = {}
   description = <<-EOT
-    More ALZ policy default values, merged over the ones this root sets. Same shape as the ALZ module's
-    input: the default name, and a JSON object with one `value` attribute. For example the Log Analytics
-    workspace and the monitoring agent's identity and data collection rules, once management runs in this
-    root.
+    ALZ policy default values that replace the ones this root sets. Same shape as the ALZ module's input:
+    the default name, and a JSON object with one `value` attribute.
   EOT
   nullable    = false
 }

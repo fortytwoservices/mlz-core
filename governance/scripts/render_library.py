@@ -44,6 +44,11 @@ MARKER = ".rendered-by-mlz-core"
 
 # Management group IDs are at most 90 characters; the longest suffix is "-decommissioned".
 ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,73}[a-z0-9]$")
+GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Platform subscriptions: each goes into the management group of the same name.
+PLATFORM_ROLES = ("management", "connectivity", "identity", "security")
+REQUIRED_ROLES = ("management", "connectivity")
 # Policy assignment names at management group scope are at most 24 characters,
 # and "Inherit-Tag-" takes 12 of them.
 TAG = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,11}$")
@@ -121,11 +126,23 @@ def mapping(value, name: str, problems: list[str]) -> dict:
 
 def validate(config: dict) -> None:
     problems = []
-    for key in ("root_id", "root_display_name", "primary_region"):
+    for key in ("root_id", "root_display_name", "primary_region", "security_contact"):
         if not config.get(key):
             problems.append(f"{key} is required.")
         elif not isinstance(config[key], str):
             problems.append(f"{key} must be a string.")
+    if isinstance(config.get("security_contact"), str) and config["security_contact"] and not EMAIL.match(config["security_contact"]):
+        problems.append(f"security_contact {config['security_contact']!r} is not an email address.")
+    subscriptions = mapping(config.get("subscriptions"), "subscriptions", problems)
+    problems += [f"subscriptions.{role} is required." for role in REQUIRED_ROLES if role not in subscriptions]
+    for role, value in subscriptions.items():
+        if role not in PLATFORM_ROLES:
+            problems.append(f"subscriptions.{role}: unknown; the platform subscriptions are {', '.join(PLATFORM_ROLES)}.")
+        elif not isinstance(value, str) or not GUID.match(value.lower()):
+            problems.append(f"subscriptions.{role} must be a subscription ID, for example 00000000-0000-0000-0000-000000000000.")
+    ids = [str(v).lower() for v in subscriptions.values()]
+    if len(ids) != len(set(ids)):
+        problems.append("subscriptions: each platform subscription must be a different one (a subscription sits in one management group).")
     if isinstance(config.get("root_id"), str) and not ROOT_ID.match(config["root_id"]):
         problems.append(
             f"root_id {config['root_id']!r}: 2 to 75 lower-case letters, digits and hyphens, "
