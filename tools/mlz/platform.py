@@ -69,29 +69,31 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     if region not in REGIONS:
         problems.append(f"{where}: {region!r} is not a region mlz-core supports yet ({', '.join(REGIONS)}).")
 
-    if "address_space" not in settings:
-        problems.append(f"{where}: address_space is required, for example 10.100.0.0/22.")
-        return {}
-    space = cidrs(settings["address_space"], f"{where}: address_space", problems)
-    if len(space) > 1:
-        problems.append(f"{where}: address_space is one range, not a list.")
-    if len(space) != 1:
-        return {}
-    space = space[0]
-    if space.prefixlen > 23:
-        problems.append(f"{where}: address_space {space} is too small; a hub needs a /23 or larger, a /22 is usual.")
-        return {}
-
+    # Settings that do not depend on the address space first, so every problem is reported at once.
     ranges = cidrs(settings.get("landing_zone_ranges", []), f"{where}: landing_zone_ranges", problems)
     if not ranges:
         problems.append(f"{where}: landing_zone_ranges is required: where landing zone networks get their ranges.")
-
     tier = settings.get("firewall", "Standard")
     if tier not in FIREWALL_TIERS:
         problems.append(f"{where}: firewall {tier!r} must be one of {', '.join(FIREWALL_TIERS)}.")
     for flag in ("dns_resolver", "bastion"):
         if flag in settings and not isinstance(settings[flag], bool):
             problems.append(f"{where}: {flag} must be true or false, without quotes.")
+
+    value = settings.get("address_space")
+    if value in (None, "", []):
+        problems.append(f"{where}: address_space is required, for example 10.100.0.0/22.")
+        return {}
+    if isinstance(value, list):
+        problems.append(f"{where}: address_space is one range, not a list.")
+        return {}
+    space = cidrs(value, f"{where}: address_space", problems)
+    if not space:
+        return {}
+    space = space[0]
+    if space.prefixlen > 23:
+        problems.append(f"{where}: address_space {space} is too small; a hub needs a /23 or larger, a /22 is usual.")
+        return {}
 
     layout = subnets(space)
     return {
@@ -128,6 +130,12 @@ def build(repo: Path, governance: dict) -> dict:
         for b, net_b in spaces[i + 1:]:
             if net_a.overlaps(net_b):
                 problems.append(f"hubs/{a} and hubs/{b}: address spaces {net_a} and {net_b} overlap.")
+    # Each landing zone range belongs to one region: its firewall routes it, and the allocator fills it.
+    pools = [(r, ipaddress.ip_network(p)) for r, h in hubs.items() if h for p in h["landing_zone_ranges"]]
+    for i, (a, net_a) in enumerate(pools):
+        for b, net_b in pools[i + 1:]:
+            if net_a.overlaps(net_b):
+                problems.append(f"hubs/{a}{'' if a == b else f' and hubs/{b}'}: landing zone ranges {net_a} and {net_b} overlap.")
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
 

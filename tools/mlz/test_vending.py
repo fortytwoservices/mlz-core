@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from ipaddress import IPv4Network
 from pathlib import Path
 
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, own_folder
-from mlz.vending import IP_PLAN, allocate, build, release, render_plan
+from mlz.vending import IP_PLAN, allocate, build, place, release, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -31,7 +32,7 @@ PLATFORM = {
 }
 
 DEFAULTS = "location: norwayeast\nbudget:\n  monthly: 500\n  contacts: [platform@demo.example]\n"
-WORKLOAD = "name: Payments\nowner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
+WORKLOAD = "owner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
 PROD = "subscription: 33333333-3333-3333-3333-333333333333\nbudget:\n  monthly: 2000\n"
 DEV = "subscription: 44444444-4444-4444-4444-444444444444\n"
 
@@ -72,7 +73,6 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         prod = configs["payments-prod"]
         self.assertEqual(sorted(configs), ["payments-dev", "payments-prod"])
-        self.assertEqual(prod["display_name"], "Payments (prod)")
         self.assertEqual(prod["budget"], {"monthly": 2000, "contacts": ["platform@demo.example"]})
         self.assertEqual(configs["payments-dev"]["budget"]["monthly"], 500)
         self.assertEqual(prod["management_group_id"], "demo-lz-corp")
@@ -258,6 +258,30 @@ class VendingTest(unittest.TestCase):
         self.assertIn("network.address_space is written by the IP allocator", message)
         self.assertIn("payments/dev: subscription must be a subscription ID", message)
         self.assertIn("payments/dev: budget.montly is not a setting; use contacts, monthly", message)
+
+    def test_a_problem_names_the_file_that_set_the_value_once(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "network:\n  size: 30\n")
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  Team: [a]\n")
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertEqual(message.count("landing-zones/_defaults/all: network.size is a prefix length"), 1)
+        self.assertIn("landing-zones/payments/_workload: tags.Team is one value", message)
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 31\n")
+        self.assertIn("landing-zones/payments/prod: network.size", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_tags_stay_within_azure_limits(self):
+        many = "".join(f"  T{i}: v\n" for i in range(46))
+        self.write("landing-zones/payments/prod.yaml", PROD + "tags:\n" + many + "  Long: " + "x" * 257 + "\n  'a/b': v\n")
+        self.allocate()
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("48 extra tags; Azure allows 45", message)
+        self.assertIn("tags.Long is longer than Azure's 256 characters", message)
+        self.assertIn("tag name 'a/b' must be at most 512 characters", message)
+
+    def test_placing_among_many_taken_ranges_is_one_pass(self):
+        taken = [IPv4Network((0x0A000000 + i * 256, 24)) for i in range(4000)]
+        self.assertEqual(place([IPv4Network("10.0.0.0/8")], 24, taken), IPv4Network("10.15.160.0/24"))
+        self.assertEqual(place([IPv4Network("10.0.0.0/8")], 22, taken), IPv4Network("10.15.160.0/22"))
+        self.assertIsNone(place([IPv4Network("10.0.0.0/20")], 24, taken))
 
     def test_settings_of_the_wrong_kind_are_reported_not_crashed_on(self):
         self.allocate()

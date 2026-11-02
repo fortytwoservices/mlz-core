@@ -19,7 +19,6 @@ landing-zones/
 
 ```yaml
 # payments/_workload.yaml: the payments workload, all environments
-name: Payments
 owner: payments-team@demo.example     # becomes the Owner tag
 cost_center: "4711"                   # becomes the CostCenter tag
 archetype: corp                       # corp, online or sandbox
@@ -37,11 +36,11 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 
 | Setting | What it is |
 |---|---|
-| `name`, `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
+| `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
 | `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
 | `github` | `organization` and `repo`: the landing zone's repo, whose `main` branch signs in as its deploy identity. Set the organization once in `_defaults/all.yaml`. |
-| `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. Azure ignores case in tag names, so the checks do too. |
+| `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. Azure ignores case in tag names, so the checks do too. At most 45, within Azure's limits on names and values. |
 
 Any layer can be a folder of chunks.
 
@@ -72,7 +71,8 @@ Any layer can be a folder of chunks.
   `ManagedBy`.
 - **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.
 
-`python3 -m mlz vending` checks every landing zone (every problem at once, with the file it came from)
+`python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
+the value (a mistake in `_defaults/all.yaml` is reported once, against that file, not once per landing zone),
 and writes `<key>.json` per landing zone; the Terraform root reads one of them. The output folder is
 its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
 folder holding anything else is refused.

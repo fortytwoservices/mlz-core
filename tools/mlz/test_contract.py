@@ -63,6 +63,17 @@ class YamlTest(unittest.TestCase):
         data = {"2026-11-02": {"range": "10.100.4.0/24"}, "root": "2026-1-2", "when": "2026-11-02T10:00:00Z"}
         self.assertEqual(self.round_trip(dump(data)), data)
 
+    def test_binary_looking_text_reads_back_as_text_unquoted(self):
+        data = {"0b10": "0b10", "subnet": "0B11"}  # yamldecode has no binary integers
+        self.assertEqual(self.round_trip(dump(data)), data)
+        self.assertEqual(scalar("0b10"), "0b10")
+
+    def test_a_path_with_quotes_and_template_marks_is_read(self):
+        folder = self.dir / 'a "quoted" ${x} %{y}'
+        folder.mkdir()
+        (folder / "file.yaml").write_text("a: 1\n")
+        self.assertEqual(read_yaml(folder / "file.yaml"), {"a": 1})
+
     def test_the_governance_contract_reads_like_the_approved_shape(self):
         text = render("governance", GOVERNANCE)
         self.assertTrue(text.startswith("# What governance decided"))

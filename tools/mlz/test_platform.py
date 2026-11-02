@@ -95,6 +95,22 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("firewall 'Gold' must be one of Standard, Premium, Basic", message)
         self.assertIn("bastion must be true or false", message)
 
+    def test_landing_zone_ranges_belong_to_one_region(self):
+        self.hub("norwayeast", HUB)
+        self.hub("swedencentral", "address_space: 10.200.0.0/22\nlanding_zone_ranges: [10.100.0.0/24, 10.200.0.0/16]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        self.assertIn("hubs/norwayeast and hubs/swedencentral: landing zone ranges 10.100.0.0/16 and 10.100.0.0/24 overlap", str(caught.exception))
+
+    def test_every_hub_problem_is_reported_even_without_an_address_space(self):
+        self.hub("norwayeast", "address_space: []\nfirewall: Gold\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertIn("address_space is required", message)
+        self.assertIn("firewall 'Gold' must be one of", message)
+        self.assertIn("landing_zone_ranges is required", message)
+
     def test_ranges_azure_reserves_are_refused(self):
         for text, expected in (
             ("address_space: 127.0.0.0/22\nlanding_zone_ranges: 10.100.0.0/16\n", "127.0.0.0/22 overlaps 127.0.0.0/8, which Azure does not allow"),

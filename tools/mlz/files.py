@@ -20,9 +20,13 @@ def read_yaml(path: Path) -> dict:
         return {}
     if shutil.which("terraform") is None:
         raise ConfigError("terraform is not on the PATH. mlz-core reads YAML with it.")
-    expression = f'jsonencode(yamldecode(file("{path.resolve().as_posix()}")))'
-    with tempfile.TemporaryDirectory() as empty:
-        run = subprocess.run(["terraform", f"-chdir={empty}", "console"], input=expression, capture_output=True, text=True)
+    # A copy under a fixed name, so no path (quotes, ${...}) ever goes into the expression.
+    with tempfile.TemporaryDirectory() as folder:
+        shutil.copyfile(path, Path(folder) / "input.yaml")
+        run = subprocess.run(
+            ["terraform", f"-chdir={folder}", "console"],
+            input='jsonencode(yamldecode(file("input.yaml")))', capture_output=True, text=True,
+        )
     if run.returncode != 0:
         raise ConfigError(f"{path}: not valid YAML:\n{run.stderr or run.stdout}")
     # console prints the JSON as an HCL string literal, whose escapes are JSON's.

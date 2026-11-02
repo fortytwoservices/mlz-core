@@ -25,7 +25,7 @@ from .yamlout import dump
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"name", "owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 # 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
@@ -35,6 +35,9 @@ EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GITHUB_ORGANIZATION = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 GITHUB_REPO = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 DEFAULT_SIZE = 24
+# Azure: 50 tags on a resource, of which mlz-core sets five; names up to 512, values up to 256.
+EXTRA_TAGS, TAG_NAME_LENGTH, TAG_VALUE_LENGTH = 45, 512, 256
+TAG_NAME_REFUSED = set('<>%&\\?/')
 IP_PLAN = "_generated/ip-plan.yaml"
 IP_PLAN_HEADER = (
     "Every landing zone's network: its address range and subnets.\n"
@@ -45,38 +48,65 @@ IP_PLAN_HEADER = (
 
 
 def landing_zones(repo: Path) -> dict[str, dict]:
-    """Every landing zone's merged settings, by key, with where it came from."""
+    """Every landing zone's merged settings, by key, with the file each setting came from."""
     root = repo / "landing-zones"
     if not root.is_dir():
         raise ConfigError(f"{root}: no landing-zones folder.")
-    defaults = read_setting(root / "_defaults" / "all") or {}
+    read = {}  # each file is read once, however many landing zones share it
+
+    def setting(*parts: str) -> tuple[str, dict]:
+        name = "landing-zones/" + "/".join(parts)
+        if name not in read:
+            read[name] = read_setting(root.joinpath(*parts)) or {}
+        return name, read[name]
+
     found = {}
     for workload in setting_names(root):
         folder = root / workload
         if not folder.is_dir():
             raise ConfigError(f"{folder}.yaml: a landing zone lives in a folder, landing-zones/<workload>/<env>.yaml.")
-        workload_settings = read_setting(folder / "_workload") or {}
         for env in setting_names(folder):
             key, where = f"{workload}-{env}", f"landing-zones/{workload}/{env}"
             if key in found:
                 raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
-            merged = layer(defaults, read_setting(root / "_defaults" / env) or {})
-            merged = layer(merged, workload_settings)
-            merged = layer(merged, read_setting(folder / env) or {})
-            found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged}
+            merged, origins = {}, {}
+            for name, data in (setting("_defaults", "all"), setting("_defaults", env), setting(workload, "_workload"), setting(workload, env)):
+                merged = layer(merged, data)
+                record(origins, data, name)
+            found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins}
     return found
 
 
-def section(s: dict, name: str, where: str, problems: list[str], also: set[str] = frozenset()) -> dict:
+def record(origins: dict, data: dict, name: str, path: tuple = ()) -> None:
+    """Notes `name` as the file that set each value in `data`, as a later layer overrides an earlier one."""
+    for key, value in data.items():
+        here = (*path, key)
+        if isinstance(value, dict) and value:
+            origins.pop(here, None)
+            record(origins, value, name, here)
+        else:
+            origins[here] = name
+
+
+def origin(lz: dict, *path: str) -> str:
+    """The file that set this setting, for a problem to point at; the landing zone's own when none did."""
+    while path:
+        if path in lz["origins"]:
+            return lz["origins"][path]
+        path = path[:-1]
+    return lz["where"]
+
+
+def section(lz: dict, name: str, problems: list[str], also: set[str] = frozenset()) -> dict:
     """A group of settings (budget, network, github), or {} when it is not set or not valid."""
-    value = s.get(name)
+    value = lz["settings"].get(name)
     if value is None:
         return {}
     known = SECTIONS[name]
     if not isinstance(value, dict):
-        problems.append(f"{where}: {name} is a group of settings ({', '.join(sorted(known))}), not {value!r}.")
+        problems.append(f"{origin(lz, name)}: {name} is a group of settings ({', '.join(sorted(known))}), not {value!r}.")
         return {}
-    problems += [f"{where}: {name}.{k} is not a setting; use {', '.join(sorted(known))}." for k in sorted(set(value) - known - also, key=str)]
+    problems += [f"{origin(lz, name, k)}: {name}.{k} is not a setting; use {', '.join(sorted(known))}." for k in sorted(set(value) - known - also, key=str)]
     return value
 
 
@@ -87,37 +117,45 @@ def name_problems(key: str, lz: dict) -> list[str]:
 
 
 def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[str]) -> None:
-    """Everything but the network, which wanted_network checks."""
+    """Everything but the network, which wanted_network checks. Each problem names the file to fix."""
     s, where = lz["settings"], lz["where"]
+
+    def at(*path: str) -> str:
+        return origin(lz, *path)
+
     problems += name_problems(key, lz)
-    problems += [f"{where}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
+    problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
-    for single in ("name", "owner", "archetype", "location", "subscription"):
+    for single in ("owner", "archetype", "location", "subscription"):
         if s.get(single) is not None and not isinstance(s[single], str):
-            problems.append(f"{where}: {single} is one value, not {s[single]!r}.")
+            problems.append(f"{at(single)}: {single} is one value, not {s[single]!r}.")
     if s.get("cost_center") is not None and (isinstance(s["cost_center"], bool) or not isinstance(s["cost_center"], (str, int))):
-        problems.append(f"{where}: cost_center is one value, not {s['cost_center']!r}.")
+        problems.append(f"{at('cost_center')}: cost_center is one value, not {s['cost_center']!r}.")
+    elif len(str(s.get("cost_center", ""))) > TAG_VALUE_LENGTH:
+        problems.append(f"{at('cost_center')}: cost_center becomes a tag, so it is at most {TAG_VALUE_LENGTH} characters.")
     owner, archetype, subscription, location = (s.get(k) if isinstance(s.get(k), str) else None for k in ("owner", "archetype", "subscription", "location"))
-    if owner and not EMAIL.fullmatch(owner):
-        problems.append(f"{where}: owner {owner!r} should be the owning team's email address.")
+    if owner and (not EMAIL.fullmatch(owner) or len(owner) > TAG_VALUE_LENGTH):
+        problems.append(f"{at('owner')}: owner {owner!r} should be the owning team's email address.")
     archetypes = governance["archetypes"]
     if archetype and archetype not in archetypes:
-        problems.append(f"{where}: archetype {archetype!r} must be one of {', '.join(archetypes)}.")
+        problems.append(f"{at('archetype')}: archetype {archetype!r} must be one of {', '.join(archetypes)}.")
     if subscription and not GUID.fullmatch(subscription.lower()):
-        problems.append(f"{where}: subscription must be a subscription ID.")
+        problems.append(f"{at('subscription')}: subscription must be a subscription ID.")
     if subscription and subscription.lower() in {v.lower() for v in governance["platform_subscriptions"].values()}:
-        problems.append(f"{where}: subscription {subscription} is a platform subscription.")
+        problems.append(f"{at('subscription')}: subscription {subscription} is a platform subscription.")
     if location and location not in governance["allowed_regions"]:
-        problems.append(f"{where}: location {location} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
+        problems.append(f"{at('location')}: location {location} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
     if location and location not in platform["regions"]:
-        problems.append(f"{where}: location {location} has no hub to connect to.")
+        problems.append(f"{at('location')}: location {location} has no hub to connect to.")
 
     tags = s.get("tags") or {}
     if not isinstance(tags, dict):
-        problems.append(f"{where}: tags maps each extra tag to its value, for example BusinessUnit: Finance.")
+        problems.append(f"{at('tags')}: tags maps each extra tag to its value, for example BusinessUnit: Finance.")
         tags = {}
+    if len(tags) > EXTRA_TAGS:
+        problems.append(f"{where}: {len(tags)} extra tags; Azure allows {EXTRA_TAGS} beside the five mlz-core sets.")
     # Azure tag names ignore case: Owner and owner are one tag.
     from_settings = {t.lower(): setting for t, setting in TAG_SETTINGS.items()}
     automatic = {t.lower(): source for t, source in AUTOMATIC_TAGS.items()}
@@ -125,64 +163,69 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     for tag, value in tags.items():
         name = tag.lower()
         if name in seen:
-            problems.append(f"{where}: tags {seen[name]} and {tag} are one tag to Azure, which ignores case; keep one.")
+            problems.append(f"{at('tags', tag)}: tags {seen[name]} and {tag} are one tag to Azure, which ignores case; keep one.")
         seen[name] = tag
         if name in from_settings:
-            problems.append(f"{where}: tags.{tag} comes from {from_settings[name]}; set that instead.")
+            problems.append(f"{at('tags', tag)}: tags.{tag} comes from {from_settings[name]}; set that instead.")
         elif name in automatic:
-            problems.append(f"{where}: tags.{tag} is set from {automatic[name]}; remove it here.")
+            problems.append(f"{at('tags', tag)}: tags.{tag} is set from {automatic[name]}; remove it here.")
         elif isinstance(value, (dict, list)) or value is None:
-            problems.append(f"{where}: tags.{tag} is one value, not {value!r}.")
+            problems.append(f"{at('tags', tag)}: tags.{tag} is one value, not {value!r}.")
+        elif len(str(value)) > TAG_VALUE_LENGTH:
+            problems.append(f"{at('tags', tag)}: tags.{tag} is longer than Azure's {TAG_VALUE_LENGTH} characters.")
+        if len(tag) > TAG_NAME_LENGTH or TAG_NAME_REFUSED & set(tag):
+            problems.append(f"{at('tags', tag)}: tag name {tag[:40]!r} must be at most {TAG_NAME_LENGTH} characters, without any of < > % & \\ ? /.")
     for tag in governance.get("required_tags") or []:
         if tag.lower() not in from_settings | automatic | seen:
             problems.append(f"{where}: governance requires the {tag} tag; set it under tags: here or in a layer above.")
 
-    budget = section(s, "budget", where, problems)
+    budget = section(lz, "budget", problems)
     monthly = budget.get("monthly")
     if monthly is not None and (type(monthly) is not int or monthly <= 0):
-        problems.append(f"{where}: budget.monthly is a whole amount, for example 500.")
+        problems.append(f"{at('budget', 'monthly')}: budget.monthly is a whole amount, for example 500.")
     contacts = budget.get("contacts")
     if contacts is not None and (not isinstance(contacts, list) or not all(isinstance(c, str) and EMAIL.fullmatch(c) for c in contacts)):
-        problems.append(f"{where}: budget.contacts is a list of email addresses, for example [team@example.com].")
+        problems.append(f"{at('budget', 'contacts')}: budget.contacts is a list of email addresses, for example [team@example.com].")
 
-    github = section(s, "github", where, problems)
+    github = section(lz, "github", problems)
     organization, repo = github.get("organization"), github.get("repo")
     if organization is not None and not (isinstance(organization, str) and GITHUB_ORGANIZATION.fullmatch(organization)):
-        problems.append(f"{where}: github.organization {organization!r} is not a GitHub organization name.")
+        problems.append(f"{at('github', 'organization')}: github.organization {organization!r} is not a GitHub organization name.")
     if repo is not None and not (isinstance(repo, str) and GITHUB_REPO.fullmatch(repo)):
-        problems.append(f"{where}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
+        problems.append(f"{at('github', 'repo')}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
     if repo is not None and organization is None:
-        problems.append(f"{where}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
+        problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
 
 
-def wanted_network(where: str, s: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
+def wanted_network(lz: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
     """The network the landing zone asks for: its prefix length and {subnet: prefix length}.
     None when it is not valid; the problems say why."""
     before = len(problems)
-    network = section(s, "network", where, problems, also={"address_space"})
+    network = section(lz, "network", problems, also={"address_space"})
     if "address_space" in network:
-        problems.append(f"{where}: network.address_space is written by the IP allocator to {IP_PLAN}; remove it here.")
+        problems.append(f"{origin(lz, 'network', 'address_space')}: network.address_space is written by the IP allocator to {IP_PLAN}; remove it here.")
     size = network.get("size", DEFAULT_SIZE)
     if type(size) is not int or not 16 <= size <= 28:
-        problems.append(f"{where}: network.size is a prefix length from 16 to 28, for example 24.")
+        problems.append(f"{origin(lz, 'network', 'size')}: network.size is a prefix length from 16 to 28, for example 24.")
         size = None
     subnets = network.get("subnets")
     if subnets is None:
         subnets = {"default": max(26, size or DEFAULT_SIZE)}  # a quarter of a /24, or all of a smaller range
     elif not isinstance(subnets, dict) or not subnets:
-        problems.append(f"{where}: network.subnets maps each subnet's name to its prefix length, for example app: 26.")
+        problems.append(f"{origin(lz, 'network', 'subnets')}: network.subnets maps each subnet's name to its prefix length, for example app: 26.")
         subnets = {}
     for name, length in subnets.items():
+        at = origin(lz, "network", "subnets", name)
         if not SUBNET_NAME.fullmatch(str(name)):
-            problems.append(f"{where}: subnet name {name!r} is up to 20 lower-case letters, digits and hyphens.")
+            problems.append(f"{at}: subnet name {name!r} is up to 20 lower-case letters, digits and hyphens.")
         if type(length) is not int or not 8 <= length <= 29:
-            problems.append(f"{where}: network.subnets.{name} is a prefix length up to 29 (Azure's smallest subnet), for example 26.")
+            problems.append(f"{at}: network.subnets.{name} is a prefix length up to 29 (Azure's smallest subnet), for example 26.")
         elif size and length < size:
-            problems.append(f"{where}: network.subnets.{name} is a /{length}, larger than the landing zone's /{size}.")
+            problems.append(f"{at}: network.subnets.{name} is a /{length}, larger than the landing zone's /{size}.")
     if len(problems) > before:
         return None
     if sum(2 ** (32 - length) for length in subnets.values()) > 2 ** (32 - size):
-        problems.append(f"{where}: the subnets need more addresses than a /{size} has.")
+        problems.append(f"{lz['where']}: the subnets need more addresses than a /{size} has.")
         return None
     return size, subnets
 
@@ -237,13 +280,22 @@ def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list
 
 
 def place(pools: list[IPv4Network], size: int, taken: list[IPv4Network]) -> IPv4Network | None:
-    """The first block of this size in the pools that overlaps nothing taken."""
+    """The first block of this size in the pools that overlaps nothing taken. Walks the taken ranges in
+    address order, jumping past each one, so its cost grows with what is taken, not with the pool."""
+    step = 2 ** (32 - size)
+    spans = sorted((int(t.network_address), int(t.broadcast_address)) for t in taken)
     for pool in pools:
         if pool.prefixlen > size:
             continue  # too small for one block
-        for block in pool.subnets(new_prefix=size):
-            if not any(block.overlaps(t) for t in taken):
-                return block
+        cursor, last = int(pool.network_address), int(pool.broadcast_address)
+        for low, high in spans:
+            if high < cursor:
+                continue
+            if cursor + step - 1 < low or cursor > last:
+                break  # the block at the cursor ends before this taken range begins
+            cursor = (high // step + 1) * step  # the first aligned block after it
+        if cursor + step - 1 <= last:
+            return IPv4Network((cursor, size))
     return None
 
 
@@ -254,7 +306,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
     removed but still holding a range). Writes nothing; fails with every problem when any landing zone's
     network is not valid."""
     zones, plan, problems = landing_zones(repo), ip_plan(repo), []
-    wanted = {key: wanted_network(lz["where"], lz["settings"], problems) for key, lz in zones.items()}
+    wanted = {key: wanted_network(lz, problems) for key, lz in zones.items()}
     for key, lz in zones.items():
         problems += name_problems(key, lz)
         location = lz["settings"].get("location")
@@ -266,7 +318,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
                 problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (python3 -m mlz release).")
     problems += plan_problems(plan, zones, wanted, platform)
     if problems:
-        raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
+        raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))
 
     taken = [entry["range"] for entry in plan.values()]
     taken += [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
@@ -306,7 +358,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         by_address = lambda blocks: dict(sorted(blocks.items(), key=lambda item: item[1]))
         result[key] = {"range": entry["range"], "subnets": by_address(kept), "removed_subnets": by_address(removed)}
     if problems:
-        raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
+        raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))
     retired = sorted(set(plan) - set(zones))
     result.update({key: plan[key] for key in retired})
     return dict(sorted(result.items())), changes, retired
@@ -348,7 +400,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     wanted = {}
     for key, lz in zones.items():
         check(key, lz, governance, platform, problems)
-        wanted[key] = wanted_network(lz["where"], lz["settings"], problems)
+        wanted[key] = wanted_network(lz, problems)
         if key not in plan:
             problems.append(f"{key}: no address range yet; run the IP allocator (python3 -m mlz allocate).")
         elif wanted[key] and set(plan[key]["subnets"]) != set(wanted[key][1]):
@@ -357,7 +409,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
-        raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(problems))
+        raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
 
     configs = {}
     for key, lz in zones.items():
@@ -367,7 +419,6 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         configs[key] = {
             "key": key,
             "root_id": governance["root"],
-            "display_name": f"{s.get('name', lz['workload'])} ({lz['environment']})",
             "subscription_id": s["subscription"].lower(),
             "management_group_id": governance["archetypes"][s["archetype"]],
             "location": s["location"],
