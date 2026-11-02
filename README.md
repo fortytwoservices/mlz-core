@@ -13,6 +13,8 @@ governance/
   lib/                 Fortytwo's additions to the Azure Landing Zones library
   scripts/             render_library.py (customer.yaml -> the customer's library) and its tests
   terraform/           the governance root
+modules/
+  naming/              the names of everything mlz-core creates, shared by every root
 starter/
   mlz-governance/      the demo customer.yaml for the template repo
 docs/                  one page per role

@@ -1,6 +1,6 @@
 # Governance
 
-The `mlz-governance` role: management groups, Azure Policy and (next) central management. It is built
+The `mlz-governance` role: management groups, Azure Policy and central management. It is built
 on Microsoft's `Azure/avm-ptn-alz/azurerm` module and the Azure Landing Zones library, plus Fortytwo's
 library and a per-customer rendering step.
 
@@ -36,34 +36,42 @@ library and a per-customer rendering step.
 Tag names are limited to 12 characters, because the assignment name (`Inherit-Tag-<tag>`) may be at
 most 24.
 
-## Tested (30 October 2026)
+## Central management and the platform subscriptions
 
-- `render_library.py`: 22 unit tests (`python3 -m unittest discover -s governance/scripts`).
-- `terraform validate`, and a read-only `terraform plan` in the Fortytwo Labs sandbox under the PoC's
-  `ft42poc` management group, as root `ft42lib`: 529 to add, nothing applied. The plan has 10 management
-  groups, Fortytwo's `Deny-RG-Without-Tag` definition at the root, and 126 policy assignments; landing
-  zones 59 (53 from ALZ, minus 2, plus 2 region and 6 tag assignments), platform 39, connectivity 0,
-  Corp 5.
-- `Deny-RG-Without-Tag` (a `count` over the exempt patterns) created as a subscription-scope definition in
-  the sandbox, which is when Azure validates a policy rule, and deleted straight after.
+- `az-tf-mlz-management` runs in this root: the Log Analytics workspace, the Azure Monitor Agent's
+  identity and the three data collection rules, in `rg-<root>-management-<region>` in the management
+  subscription. Names come from `modules/naming`, shared by every root.
+- The ALZ policies get their IDs as defaults (`log_analytics_workspace_id`, the `ama_*` values,
+  `resource_group_location`, `email_security_contact`). The IDs are built from the names, so they are known
+  at plan time, and `policy_assignments_dependencies` assigns the policies after the resources exist.
+- `security_contact` is Defender for Cloud's security contact (ALZ's `email_security_contact`). Service
+  health alerts are separate: ALZ's `Deploy-SvcHealth-BuiltIn` sends them to each subscription's Owners
+  (its default `actionGroupRoleIds`); a dedicated recipient is a later choice.
+- `customer.yaml` names the platform subscriptions (`subscriptions.management`, `.connectivity`, and
+  optionally `.identity` and `.security`); each one is placed in its management group.
+- **Private Link DNS:** the policy's defaults come from the platform's published contract
+  (`platform_contract_file`), not from `customer.yaml`. Until the platform has created the zones, the
+  library's placeholders stay, and the ALZ module grants no rights on zones; the run after the platform
+  publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
+  that do not exist yet (met in the canary).
+- `contract` output: what platform and vending read, published as `_generated/governance.json`.
 
-## Before the first apply
+## Tested
 
-1. **Management in this root.** `az-tf-mlz-management` creates the Log Analytics workspace, the monitoring
-   agent's identity and the data collection rules. Their IDs must feed the ALZ policy defaults
-   (`log_analytics_workspace_id`, `ama_user_assigned_managed_identity_id`,
-   `ama_user_assigned_managed_identity_name`, `ama_vm_insights_data_collection_rule_id`,
-   `ama_change_tracking_data_collection_rule_id`, `ama_mdfc_sql_data_collection_rule_id`), with
-   `resource_group_location`, `resource_group_name_service_health_alerts`, `resource_group_name_mdfc` and
-   `email_security_contact`. Until then those assignments point at the library's placeholders, so the
-   root must not be applied.
-2. **Role assignments for the security benchmark monitoring.** The plan warns that
-   `Deploy-MCSB2-Monitoring` needs role assignments the module cannot generate (its user-assigned identity
-   parameter). They belong with step 1.
-3. **Private DNS zone defaults** for `Deploy-Private-DNS-Zones` in Corp
-   (`private_dns_zone_subscription_id`, `_resource_group_name`, `_region`), from the platform contract.
-4. **Subscription placement** of the platform subscriptions (management, connectivity, identity, and
-   security when turned on) from `customer.yaml`.
+- 30 October 2026: 22 renderer unit tests; a read-only plan in the Fortytwo Labs sandbox under `ft42poc`;
+  `Deny-RG-Without-Tag` created and deleted in the sandbox subscription, which is when Azure validates a
+  policy rule.
+- 2 November 2026, the canary (TCAF tenant, root `mlz`): applied end to end, with management, the
+  platform subscriptions placed, and Private Link DNS left for the platform contract. A fresh plan then
+  shows no changes. 24 renderer unit tests.
+
+## Known gap
+
+- **Security benchmark remediation.** The ALZ library cannot read one parameter inside
+  `Deploy-MCSB2-Monitoring` (a user-assigned identity given as an ARM function), so the ALZ module cannot
+  create the role assignments its deploy-if-not-exists parts need (alzlib warning, "External role
+  assignment creation required"). Its audits work; its remediation of the Defender for SQL agent identity
+  waits for those role assignments, to be added with the Defender plans.
 
 ## Later
 
@@ -75,3 +83,13 @@ most 24.
   `Enforce-RSG-Tags` are replaced by the per-tag assignments, so a migrating customer's plan removes the
   old two. Its `-unusedsub` group is removed too: move any subscriptions in it to `-decommissioned` first,
   since Azure does not delete a management group that holds subscriptions.
+
+## Operating notes
+
+- **Renaming the monitoring agent's identity is blocked by design.** ALZ's `DenyAction-DeleteUAMIAMA`
+  (on the Platform group) refuses deleting the identity it protects, and it is only pointed at the new
+  name after the new identity exists, which Terraform creates after deleting the old one. To get past
+  it, exempt the old identity alone from that assignment for a few hours, then apply again:
+  `az policy exemption create --name tmp-rename-ama-identity --scope <old identity ID>
+  --policy-assignment <the assignment's ID> --exemption-category Waiver --expires-on <in 3 hours>`.
+  Met in the canary on 2 November 2026, when the region codes in names changed to Microsoft's.

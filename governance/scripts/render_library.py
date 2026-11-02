@@ -42,8 +42,14 @@ MERGED_KEY_BY_KEY = ("management_groups", "tags")
 # Written into every output folder, so a later run replaces only a folder this script made.
 MARKER = ".rendered-by-mlz-core"
 
-# Management group IDs are at most 90 characters; the longest suffix is "-decommissioned".
-ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,73}[a-z0-9]$")
+# The root ID prefixes management group IDs and resource names; 16 characters keep every generated name
+# within its Azure limit (the tightest is the Log Analytics workspace, 63 characters).
+ROOT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,14}[a-z0-9]$")
+GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Platform subscriptions: each goes into the management group of the same name.
+PLATFORM_ROLES = ("management", "connectivity", "identity", "security")
+REQUIRED_ROLES = ("management", "connectivity")
 # Policy assignment names at management group scope are at most 24 characters,
 # and "Inherit-Tag-" takes 12 of them.
 TAG = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,11}$")
@@ -121,20 +127,32 @@ def mapping(value, name: str, problems: list[str]) -> dict:
 
 def validate(config: dict) -> None:
     problems = []
-    for key in ("root_id", "root_display_name", "primary_region"):
+    for key in ("root_id", "root_display_name", "primary_region", "security_contact"):
         if not config.get(key):
             problems.append(f"{key} is required.")
         elif not isinstance(config[key], str):
             problems.append(f"{key} must be a string.")
-    if isinstance(config.get("root_id"), str) and not ROOT_ID.match(config["root_id"]):
+    if isinstance(config.get("security_contact"), str) and config["security_contact"] and not EMAIL.fullmatch(config["security_contact"]):
+        problems.append(f"security_contact {config['security_contact']!r} is not an email address.")
+    subscriptions = mapping(config.get("subscriptions"), "subscriptions", problems)
+    problems += [f"subscriptions.{role} is required." for role in REQUIRED_ROLES if role not in subscriptions]
+    for role, value in subscriptions.items():
+        if role not in PLATFORM_ROLES:
+            problems.append(f"subscriptions.{role}: unknown; the platform subscriptions are {', '.join(PLATFORM_ROLES)}.")
+        elif not isinstance(value, str) or not GUID.fullmatch(value.lower()):
+            problems.append(f"subscriptions.{role} must be a subscription ID, for example 00000000-0000-0000-0000-000000000000.")
+    ids = [str(v).lower() for v in subscriptions.values()]
+    if len(ids) != len(set(ids)):
+        problems.append("subscriptions: each platform subscription must be a different one (a subscription sits in one management group).")
+    if isinstance(config.get("root_id"), str) and not ROOT_ID.fullmatch(config["root_id"]):
         problems.append(
-            f"root_id {config['root_id']!r}: 2 to 75 lower-case letters, digits and hyphens, "
+            f"root_id {config['root_id']!r}: 2 to 16 lower-case letters, digits and hyphens, "
             "starting and ending with a letter or digit."
         )
     regions = string_list(config.get("allowed_regions"), "allowed_regions", problems)
     if config.get("allowed_regions") in (None, []):
         problems.append("allowed_regions must list at least one region.")
-    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.match(r)]
+    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.fullmatch(r)]
     if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
     groups = mapping(config.get("management_groups"), "management_groups", problems)
@@ -146,7 +164,7 @@ def validate(config: dict) -> None:
     tags = mapping(config.get("tags"), "tags", problems)
     for kind in ("required", "inherited"):
         for tag in string_list(tags.get(kind), f"tags.{kind}", problems):
-            if not TAG.match(tag):
+            if not TAG.fullmatch(tag):
                 problems.append(
                     f"tags.{kind}: {tag!r} must be 1 to 12 letters and digits, starting with a letter "
                     "(the policy assignment name is limited to 24 characters)."
@@ -168,6 +186,17 @@ def validate(config: dict) -> None:
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
+
+
+def normalize(config: dict) -> dict:
+    """The checked settings in the one form Terraform and the ALZ module accept: subscription IDs in lower
+    case, and every optional management group as true or false (null and missing mean false)."""
+    groups = config.get("management_groups") or {}
+    return {
+        **config,
+        "subscriptions": {role: value.lower() for role, value in (config.get("subscriptions") or {}).items()},
+        "management_groups": {name: groups.get(name) is True for name in OPTIONAL_GROUPS},
+    }
 
 
 def prepare_output(out: Path, inputs: list[Path]) -> None:
@@ -313,6 +342,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
     validate(config)
     root = config["root_id"]
 
+    config = normalize(config)
     tags = tag_assignments(config)
     prepare_output(out, [customer_file, defaults_file])
 

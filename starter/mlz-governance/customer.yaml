@@ -1,14 +1,22 @@
-# Customer-wide settings for governance: the management group tree and the policies on it.
-# Owned by the customer's platform team. Nothing in this file is a secret.
+# Customer-wide settings for governance: the management group tree, the policies on it, and central
+# management. Owned by the customer's platform team. Nothing in this file is a secret.
 # Any setting in mlz-core's governance/defaults.yaml can be overridden here.
 
 name: Demo customer
 root_id: demo                      # prefix of every management group ID: demo, demo-platform, demo-lz-corp, ...
 root_display_name: Demo
-parent_management_group_id: null   # null: directly under the tenant root group
 primary_region: norwayeast
+security_contact: security-team@demo.example   # Defender for Cloud's security alerts
+
+# The platform subscriptions. Each one is moved into the management group of the same name.
+subscriptions:
+  management: 00000000-0000-0000-0000-000000000001
+  connectivity: 00000000-0000-0000-0000-000000000002
+  identity: 00000000-0000-0000-0000-000000000003
 
 # Examples of overriding Fortytwo's defaults:
+#
+# parent_management_group_id: contoso-root   # below an existing group instead of the tenant root
 #
 # allowed_regions: [norwayeast, swedencentral]
 #
