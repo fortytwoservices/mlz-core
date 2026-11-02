@@ -132,19 +132,19 @@ def validate(config: dict) -> None:
             problems.append(f"{key} is required.")
         elif not isinstance(config[key], str):
             problems.append(f"{key} must be a string.")
-    if isinstance(config.get("security_contact"), str) and config["security_contact"] and not EMAIL.match(config["security_contact"]):
+    if isinstance(config.get("security_contact"), str) and config["security_contact"] and not EMAIL.fullmatch(config["security_contact"]):
         problems.append(f"security_contact {config['security_contact']!r} is not an email address.")
     subscriptions = mapping(config.get("subscriptions"), "subscriptions", problems)
     problems += [f"subscriptions.{role} is required." for role in REQUIRED_ROLES if role not in subscriptions]
     for role, value in subscriptions.items():
         if role not in PLATFORM_ROLES:
             problems.append(f"subscriptions.{role}: unknown; the platform subscriptions are {', '.join(PLATFORM_ROLES)}.")
-        elif not isinstance(value, str) or not GUID.match(value.lower()):
+        elif not isinstance(value, str) or not GUID.fullmatch(value.lower()):
             problems.append(f"subscriptions.{role} must be a subscription ID, for example 00000000-0000-0000-0000-000000000000.")
     ids = [str(v).lower() for v in subscriptions.values()]
     if len(ids) != len(set(ids)):
         problems.append("subscriptions: each platform subscription must be a different one (a subscription sits in one management group).")
-    if isinstance(config.get("root_id"), str) and not ROOT_ID.match(config["root_id"]):
+    if isinstance(config.get("root_id"), str) and not ROOT_ID.fullmatch(config["root_id"]):
         problems.append(
             f"root_id {config['root_id']!r}: 2 to 16 lower-case letters, digits and hyphens, "
             "starting and ending with a letter or digit."
@@ -152,7 +152,7 @@ def validate(config: dict) -> None:
     regions = string_list(config.get("allowed_regions"), "allowed_regions", problems)
     if config.get("allowed_regions") in (None, []):
         problems.append("allowed_regions must list at least one region.")
-    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.match(r)]
+    problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.fullmatch(r)]
     if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
     groups = mapping(config.get("management_groups"), "management_groups", problems)
@@ -164,7 +164,7 @@ def validate(config: dict) -> None:
     tags = mapping(config.get("tags"), "tags", problems)
     for kind in ("required", "inherited"):
         for tag in string_list(tags.get(kind), f"tags.{kind}", problems):
-            if not TAG.match(tag):
+            if not TAG.fullmatch(tag):
                 problems.append(
                     f"tags.{kind}: {tag!r} must be 1 to 12 letters and digits, starting with a letter "
                     "(the policy assignment name is limited to 24 characters)."

@@ -257,6 +257,19 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(config["subscriptions"]["management"], "abcdef01-1234-1234-1234-1234567890ab")
         self.assertEqual(config["management_groups"], {"security": False, "local": False})
 
+    def test_a_trailing_newline_is_not_part_of_a_valid_value(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(
+                "root_id: demo\nroot_display_name: Demo\nprimary_region: norwayeast\n"
+                "security_contact: |\n  platform-team@demo.example\n"
+                "subscriptions:\n"
+                "  management: |\n    00000000-0000-0000-0000-000000000001\n"
+                "  connectivity: 00000000-0000-0000-0000-000000000002\n"
+            )
+        message = str(caught.exception)
+        self.assertIn("subscriptions.management must be a subscription ID", message)
+        self.assertIn("is not an email address", message)
+
     def test_long_root_ids_are_refused(self):
         with self.assertRaises(rl.RenderError) as caught:
             self.render(self.BASE.replace("root_id: demo", "root_id: a-very-long-root-id"))
