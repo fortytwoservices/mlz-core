@@ -8,6 +8,7 @@ from pathlib import Path
 
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
+from mlz.__main__ import MARKER, own_folder
 from mlz.vending import IP_PLAN, allocate, build, release, render_plan
 
 GOVERNANCE = {
@@ -110,12 +111,19 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, governance, PLATFORM)
         self.assertEqual(configs["payments-prod"]["tags"]["BusinessUnit"], "Finance")
 
-    def test_tags_mlz_core_sets_cannot_be_overridden(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  Owner: someone@demo.example\n  Environment: production\n")
+    def test_tags_mlz_core_sets_cannot_be_overridden_in_any_case(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  owner: someone@demo.example\n  Environment: production\n  Team: a\n  team: b\n")
         self.allocate()
         message = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("tags.Owner comes from owner", message)
+        self.assertIn("tags.owner comes from owner", message)
         self.assertIn("tags.Environment is set from the file name", message)
+        self.assertIn("tags Team and team are one tag to Azure", message)
+
+    def test_required_tags_match_in_any_case_and_none_means_none(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  businessunit: Finance\n")
+        self.allocate()
+        build(self.repo, {**GOVERNANCE, "required_tags": ["owner", "BusinessUnit"]}, PLATFORM)
+        build(self.repo, {**GOVERNANCE, "required_tags": None}, PLATFORM)
 
     def test_subnets_are_carved_largest_first(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    app: 25\n    data: 26\n    web: 26\n")
@@ -131,13 +139,30 @@ class VendingTest(unittest.TestCase):
         subnets = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["network"]["subnets"]
         self.assertEqual(subnets, {"web": "10.100.5.0/26", "app": "10.100.5.128/25"})
 
-    def test_a_removed_subnet_is_freed_but_not_given_out_in_the_same_run(self):
+    def test_a_removed_subnet_is_held_until_released(self):
+        prod = PROD + "network:\n  subnets:\n"
+        self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    app: 26\n")
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n")
+        self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.5.0/26 removed, held until released", "payments-prod: subnet data 10.100.5.128/26"])
+        self.assertIn("  removed_subnets:\n    app: 10.100.5.0/26\n", (self.repo / IP_PLAN).read_text())
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["network"]["subnets"], {"web": "10.100.5.64/26", "data": "10.100.5.128/26"})
+        self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n")
+        self.assertEqual(self.allocate(), ["payments-prod: subnet cache 10.100.5.192/26"])  # not app's block
+        self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 27\n")
+        self.assertIn("subnet app was removed and still holds 10.100.5.0/26; ask for a /26", self.problems(allocate, PLATFORM))
+        self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 26\n")
+        self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.5.0/26 given back"])
+
+    def test_releasing_a_current_landing_zone_frees_only_its_removed_subnets(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
         self.allocate()
-        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    data: 26\n")
-        self.assertEqual(self.allocate(), ["payments-prod: freed subnet app 10.100.5.0/26", "payments-prod: subnet data 10.100.5.128/26"])
-        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    data: 26\n    cache: 26\n")
-        self.assertEqual(self.allocate(), ["payments-prod: subnet cache 10.100.5.0/26"])
+        self.assertIn("holds no removed subnets", self.problems(release, "payments-prod"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n")
+        self.allocate()
+        plan, retired, freed = release(self.repo, "payments-prod")
+        self.assertEqual((freed, plan["payments-prod"]["removed_subnets"], retired), ("payments-prod's removed subnets app 10.100.5.0/26", {}, []))
+        self.assertEqual(str(plan["payments-prod"]["range"]), "10.100.5.0/24")
 
     def test_a_subnet_or_range_never_changes_size(self):
         self.allocate()
@@ -154,14 +179,20 @@ class VendingTest(unittest.TestCase):
         self.assertIn("network.subnets.a is a prefix length up to 29", message)
         self.assertIn("network.subnets.b is a prefix length up to 29", message)
         self.assertIn("network.subnets.c is a /25, larger than the landing zone's /26", message)
-        self.assertIn("subnet name 'D' is lower-case", message)
+        self.assertIn("subnet name 'D' is up to 20 lower-case", message)
         self.assertIn("landing-zones/payments/dev: the subnets need more addresses than a /27 has", message)
         self.assertFalse((self.repo / IP_PLAN).exists())  # nothing is written when anything is wrong
 
     def test_the_default_subnet_fits_a_small_range(self):
         self.write("landing-zones/payments/dev.yaml", DEV + "network:\n  size: 28\n")
         self.allocate()
-        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["network"]["subnets"], {"default": "10.100.4.0/28"})
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["network"]["subnets"], {"default": "10.100.5.0/28"})  # after the larger /24
+
+    def test_larger_new_ranges_are_placed_first(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 23\n")
+        platform = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "landing_zone_ranges": ["10.1.0.0/23", "10.1.2.0/24"]}}}
+        self.allocate(platform)
+        self.assertEqual((self.plan()["payments-prod"]["range"], self.plan()["payments-dev"]["range"]), ("10.1.0.0/23", "10.1.2.0/24"))
 
     def test_the_allocator_skips_the_hub_and_pools_too_small(self):
         platform = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "landing_zone_ranges": ["10.100.0.0/25", "10.100.0.0/16"]}}}
@@ -169,6 +200,14 @@ class VendingTest(unittest.TestCase):
             "payments-dev: range 10.100.4.0/24", "payments-dev: subnet default 10.100.4.0/26",
             "payments-prod: range 10.100.5.0/24", "payments-prod: subnet default 10.100.5.0/26",
         ])
+
+    def test_names_are_checked_before_anything_is_allocated(self):
+        self.write("landing-zones/pay_ments/prod.yaml", PROD.replace("33", "66"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    a-subnet-name-too-long: 26\n")
+        message = self.problems(allocate, PLATFORM)
+        self.assertIn("landing-zones/pay_ments/prod: folder and file names are up to 24 lower-case", message)
+        self.assertIn("subnet name 'a-subnet-name-too-long' is up to 20", message)
+        self.assertFalse((self.repo / IP_PLAN).exists())
 
     def test_kept_ranges_are_checked_against_the_platform_as_it_is_now(self):
         self.allocate()
@@ -189,8 +228,8 @@ class VendingTest(unittest.TestCase):
         self.assertIn("# Removed from landing-zones/", (self.repo / IP_PLAN).read_text())
         self.assertEqual(sorted(build(self.repo, GOVERNANCE, PLATFORM)), ["payments-prod", "website-prod"])
         self.assertIn("payments-prod is still in landing-zones/payments/prod", self.problems(release, "payments-prod"))
-        plan, retired = release(self.repo, "payments-dev")
-        self.assertEqual((sorted(plan), retired), (["payments-prod", "website-prod"], []))
+        plan, retired, freed = release(self.repo, "payments-dev")
+        self.assertEqual((sorted(plan), retired, freed), (["payments-prod", "website-prod"], [], "payments-dev's range 10.100.4.0/24"))
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()
@@ -257,6 +296,16 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod/subscription.yaml", "subscription: 33333333-3333-3333-3333-333333333333\n")
         self.write("landing-zones/payments/prod/budget.yaml", "budget:\n  monthly: 2000\n")
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM), whole)
+
+    def test_the_output_folder_is_emptied_of_old_configs_and_never_a_stranger_s(self):
+        out = self.repo / "out"
+        own_folder(out)
+        (out / "website-prod.json").write_text("{}")
+        own_folder(out)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), [MARKER])
+        (self.repo / "landing-zones" / "notes.txt").write_text("")
+        with self.assertRaises(ConfigError):
+            own_folder(self.repo / "landing-zones")
 
     def test_an_ip_plan_not_written_by_the_allocator_is_refused(self):
         self.write(IP_PLAN, "payments-prod: 10.100.4.0/24\n")

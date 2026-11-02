@@ -39,9 +39,9 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 |---|---|
 | `name`, `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
-| `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
+| `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
 | `github` | `organization` and `repo`: the landing zone's repo, whose `main` branch signs in as its deploy identity. Set the organization once in `_defaults/all.yaml`. |
-| `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. |
+| `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. Azure ignores case in tag names, so the checks do too. |
 
 Any layer can be a folder of chunks.
 
@@ -60,19 +60,22 @@ Any layer can be a folder of chunks.
       default: 10.100.4.0/26
   ```
 
-  **Nothing in it ever moves.** Adding a subnet leaves the others where they are; a range or subnet never
-  changes size (give a bigger subnet a new name, then remove the old one). A removed subnet is freed, but
-  not given out again in the same run. A removed landing zone keeps its range, marked in the file, until it
-  is destroyed and someone runs `python3 -m mlz release --repo . <key>`. Every run checks what was given
-  against the platform as it is now (inside the region's ranges, clear of every hub and every other
-  landing zone) and reports a conflict rather than moving anything. It writes nothing when anything is
-  wrong.
+  **Nothing in it ever moves.** New ranges and subnets are placed largest first; adding a subnet leaves
+  the others where they are; a range or subnet never changes size (give a bigger subnet a new name, then
+  remove the old one). **Nothing removed is given out again until it is released**: a removed subnet
+  moves to `removed_subnets` and a removed landing zone keeps its range, marked in the file, until it is
+  destroyed and someone runs `python3 -m mlz release --repo . <key>`. A removed subnet asked for again at
+  the same size gets its block back. Every run checks what was given against the platform as it is now
+  (inside the region's ranges, clear of every hub and every other landing zone) and reports a conflict
+  rather than moving anything. It writes nothing when anything is wrong.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
 - **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.
 
 `python3 -m mlz vending` checks every landing zone (every problem at once, with the file it came from)
-and writes `<key>.json` per landing zone; the Terraform root reads one of them.
+and writes `<key>.json` per landing zone; the Terraform root reads one of them. The output folder is
+its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
+folder holding anything else is refused.
 
 ## Operating notes
 

@@ -22,6 +22,8 @@ from .merge import ConfigError
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
 HUB_KEYS = {"address_space", "landing_zone_ranges", "firewall", "dns_resolver", "bastion"}
 REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
+# Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
+AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
 
 
 def subnets(space: ipaddress.IPv4Network) -> dict[str, str]:
@@ -51,6 +53,10 @@ def cidrs(value, name: str, problems: list[str]) -> list[ipaddress.IPv4Network]:
             continue
         if network.version != 4:
             problems.append(f"{name}: {item} is not IPv4.")
+            continue
+        reserved = next((r for r in AZURE_RESERVED if network.overlaps(r)), None)
+        if reserved:
+            problems.append(f"{name}: {network} overlaps {reserved}, which Azure does not allow in a virtual network.")
             continue
         networks.append(network)
     return networks

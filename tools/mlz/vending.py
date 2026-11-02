@@ -8,8 +8,8 @@ Each landing zone is four layers, each saying only what differs from the one abo
   landing-zones/<workload>/<env>.yaml       one landing zone: one subscription, one network, one state
 
 Any of them can be a folder of chunks instead of one file. The landing zone's key is <workload>-<env>.
-Address ranges and subnets are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml,
-and nothing it has given ever moves.
+Address ranges and subnets are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml.
+Nothing it has given ever moves, and nothing removed is given out again until it is released.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name",
 KEYS = {"name", "owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
+# 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
+SUBNET_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$")
 GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GITHUB_ORGANIZATION = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
@@ -37,8 +39,8 @@ IP_PLAN = "_generated/ip-plan.yaml"
 IP_PLAN_HEADER = (
     "Every landing zone's network: its address range and subnets.\n"
     "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
-    "Nothing here ever moves. A removed subnet is freed; a removed landing zone keeps its range until it\n"
-    "is destroyed and released (python3 -m mlz release)."
+    "Nothing here ever moves. A removed landing zone or subnet keeps its block until it is destroyed and\n"
+    "released (python3 -m mlz release)."
 )
 
 
@@ -78,11 +80,16 @@ def section(s: dict, name: str, where: str, problems: list[str], also: set[str] 
     return value
 
 
+def name_problems(key: str, lz: dict) -> list[str]:
+    if NAME.fullmatch(lz["workload"]) and NAME.fullmatch(lz["environment"]):
+        return []
+    return [f"{lz['where']}: folder and file names are up to 24 lower-case letters, digits and hyphens (the key {key!r} is used in names)."]
+
+
 def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[str]) -> None:
     """Everything but the network, which wanted_network checks."""
     s, where = lz["settings"], lz["where"]
-    if not NAME.fullmatch(lz["workload"]) or not NAME.fullmatch(lz["environment"]):
-        problems.append(f"{where}: folder and file names are lower-case letters, digits and hyphens (the key {key!r} is used in names).")
+    problems += name_problems(key, lz)
     problems += [f"{where}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
@@ -111,15 +118,23 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if not isinstance(tags, dict):
         problems.append(f"{where}: tags maps each extra tag to its value, for example BusinessUnit: Finance.")
         tags = {}
+    # Azure tag names ignore case: Owner and owner are one tag.
+    from_settings = {t.lower(): setting for t, setting in TAG_SETTINGS.items()}
+    automatic = {t.lower(): source for t, source in AUTOMATIC_TAGS.items()}
+    seen = {}
     for tag, value in tags.items():
-        if tag in TAG_SETTINGS:
-            problems.append(f"{where}: tags.{tag} comes from {TAG_SETTINGS[tag]}; set that instead.")
-        elif tag in AUTOMATIC_TAGS:
-            problems.append(f"{where}: tags.{tag} is set from {AUTOMATIC_TAGS[tag]}; remove it here.")
+        name = tag.lower()
+        if name in seen:
+            problems.append(f"{where}: tags {seen[name]} and {tag} are one tag to Azure, which ignores case; keep one.")
+        seen[name] = tag
+        if name in from_settings:
+            problems.append(f"{where}: tags.{tag} comes from {from_settings[name]}; set that instead.")
+        elif name in automatic:
+            problems.append(f"{where}: tags.{tag} is set from {automatic[name]}; remove it here.")
         elif isinstance(value, (dict, list)) or value is None:
             problems.append(f"{where}: tags.{tag} is one value, not {value!r}.")
-    for tag in governance.get("required_tags", []):
-        if tag not in TAG_SETTINGS and tag not in AUTOMATIC_TAGS and tag not in tags:
+    for tag in governance.get("required_tags") or []:
+        if tag.lower() not in from_settings | automatic | seen:
             problems.append(f"{where}: governance requires the {tag} tag; set it under tags: here or in a layer above.")
 
     budget = section(s, "budget", where, problems)
@@ -158,8 +173,8 @@ def wanted_network(where: str, s: dict, problems: list[str]) -> tuple[int, dict[
         problems.append(f"{where}: network.subnets maps each subnet's name to its prefix length, for example app: 26.")
         subnets = {}
     for name, length in subnets.items():
-        if not NAME.fullmatch(str(name)):
-            problems.append(f"{where}: subnet name {name!r} is lower-case letters, digits and hyphens.")
+        if not SUBNET_NAME.fullmatch(str(name)):
+            problems.append(f"{where}: subnet name {name!r} is up to 20 lower-case letters, digits and hyphens.")
         if type(length) is not int or not 8 <= length <= 29:
             problems.append(f"{where}: network.subnets.{name} is a prefix length up to 29 (Azure's smallest subnet), for example 26.")
         elif size and length < size:
@@ -173,18 +188,19 @@ def wanted_network(where: str, s: dict, problems: list[str]) -> tuple[int, dict[
 
 
 def ip_plan(repo: Path) -> dict[str, dict]:
-    """The IP plan: {key: {range, subnets: {name: block}}}, as networks."""
+    """The IP plan: {key: {range, subnets: {name: block}, removed_subnets: {name: block}}}, as networks.
+    removed_subnets are blocks still held after their subnet left the YAML, until released."""
     plan = read_setting(repo / IP_PLAN.removesuffix(".yaml")) or {}
     parsed = {}
     for key, entry in plan.items():
         try:
-            if not isinstance(entry, dict) or set(entry) != {"range", "subnets"} or not isinstance(entry["subnets"], dict):
+            if not isinstance(entry, dict) or not {"range", "subnets"} <= set(entry) <= {"range", "subnets", "removed_subnets"}:
                 raise ValueError
             parsed[str(key)] = {
                 "range": IPv4Network(entry["range"]),
-                "subnets": {str(name): IPv4Network(block) for name, block in entry["subnets"].items()},
+                **{part: {str(name): IPv4Network(block) for name, block in entry.get(part, {}).items()} for part in ("subnets", "removed_subnets")},
             }
-        except (TypeError, ValueError):
+        except (AttributeError, TypeError, ValueError):
             raise ConfigError(f"{IP_PLAN}: {key} is not as the IP allocator writes it; restore the file from git.") from None
     return parsed
 
@@ -199,7 +215,7 @@ def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list
         given = plan[key]["range"]
         problems += [f"{IP_PLAN}: {key}'s range {given} overlaps the hub range {h}." for h in hubs if given.overlaps(h)]
         problems += [f"{IP_PLAN}: {key}'s range {given} overlaps {other}'s {plan[other]['range']}." for other in keys[index + 1:] if given.overlaps(plan[other]["range"])]
-        blocks = sorted(plan[key]["subnets"].items(), key=lambda item: item[1])
+        blocks = sorted([*plan[key]["subnets"].items(), *plan[key]["removed_subnets"].items()], key=lambda item: item[1])
         problems += [f"{IP_PLAN}: {key}'s subnet {name} {block} is outside its range {given}." for name, block in blocks if not block.subnet_of(given)]
         problems += [f"{IP_PLAN}: {key}'s subnets {a} and {b} overlap." for (a, x), (b, y) in zip(blocks, blocks[1:]) if x.overlaps(y)]
         if key not in zones:
@@ -233,14 +249,21 @@ def place(pools: list[IPv4Network], size: int, taken: list[IPv4Network]) -> IPv4
 
 def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], list[str]]:
     """The IP plan with a range for every new landing zone and a block for every new subnet: the first
-    free one, largest first. Returns (plan, what changed, landing zones removed but still holding a range).
-    Writes nothing; fails with every problem when any landing zone's network is not valid."""
+    free one, largest first. A subnet removed from the YAML keeps its block, under removed_subnets, until
+    it is released; asked for again, it gets that block back. Returns (plan, what changed, landing zones
+    removed but still holding a range). Writes nothing; fails with every problem when any landing zone's
+    network is not valid."""
     zones, plan, problems = landing_zones(repo), ip_plan(repo), []
     wanted = {key: wanted_network(lz["where"], lz["settings"], problems) for key, lz in zones.items()}
     for key, lz in zones.items():
+        problems += name_problems(key, lz)
         location = lz["settings"].get("location")
         if not isinstance(location, str) or location not in platform["regions"]:
             problems.append(f"{lz['where']}: location {location!r} has no hub, so it has no ranges to take from.")
+        for name, block in plan.get(key, {}).get("removed_subnets", {}).items():
+            length = (wanted[key] or (0, {}))[1].get(name)
+            if length is not None and length != block.prefixlen:
+                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (python3 -m mlz release).")
     problems += plan_problems(plan, zones, wanted, platform)
     if problems:
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
@@ -248,7 +271,8 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
     taken = [entry["range"] for entry in plan.values()]
     taken += [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
     result, changes = {}, []
-    for key in sorted(zones):
+    # Largest first, so a small range never takes the only room a larger one had.
+    for key in sorted(zones, key=lambda k: (wanted[k][0], k)):
         size, subnets = wanted[key]
         entry = plan.get(key)
         if entry is None:
@@ -258,12 +282,20 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
                 problems.append(f"{key}: no free /{size} left in {', '.join(map(str, pools))}.")
                 continue
             taken.append(block)
-            entry = {"range": block, "subnets": {}}
+            entry = {"range": block, "subnets": {}, "removed_subnets": {}}
             changes.append(f"{key}: range {block}")
+        used = [*entry["subnets"].values(), *entry["removed_subnets"].values()]
         kept = {name: block for name, block in entry["subnets"].items() if name in subnets}
-        changes += [f"{key}: freed subnet {name} {block}" for name, block in entry["subnets"].items() if name not in subnets]
-        used = list(entry["subnets"].values())  # a freed block is not given out again in the same run
+        removed = dict(entry["removed_subnets"])
+        for name, block in entry["subnets"].items():
+            if name not in subnets:
+                removed[name] = block
+                changes.append(f"{key}: subnet {name} {block} removed, held until released")
         for name, length in sorted(((n, l) for n, l in subnets.items() if n not in kept), key=lambda item: (item[1], item[0])):
+            if name in removed:
+                kept[name] = removed.pop(name)
+                changes.append(f"{key}: subnet {name} {kept[name]} given back")
+                continue
             block = place([entry["range"]], length, used)
             if block is None:
                 problems.append(f"{key}: no free /{length} left in {entry['range']} for subnet {name}.")
@@ -271,7 +303,8 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
             used.append(block)
             kept[name] = block
             changes.append(f"{key}: subnet {name} {block}")
-        result[key] = {"range": entry["range"], "subnets": dict(sorted(kept.items(), key=lambda item: item[1]))}
+        by_address = lambda blocks: dict(sorted(blocks.items(), key=lambda item: item[1]))
+        result[key] = {"range": entry["range"], "subnets": by_address(kept), "removed_subnets": by_address(removed)}
     if problems:
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
     retired = sorted(set(plan) - set(zones))
@@ -279,22 +312,34 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
     return dict(sorted(result.items())), changes, retired
 
 
-def release(repo: Path, key: str) -> tuple[dict[str, dict], list[str]]:
-    """The IP plan without a removed landing zone's range, and the removed ones still in it. Run once
-    the landing zone is destroyed."""
+def release(repo: Path, key: str) -> tuple[dict[str, dict], list[str], str]:
+    """Frees what a landing zone holds but no longer uses, once that is destroyed: a removed landing
+    zone's whole range, or a current one's removed subnets. Returns the plan, the removed landing zones
+    still in it, and what was freed."""
     zones, plan = landing_zones(repo), ip_plan(repo)
-    if key in zones:
-        raise ConfigError(f"{key} is still in {zones[key]['where']}; remove it and destroy it before releasing its range.")
     if key not in plan:
-        raise ConfigError(f"{key} has no range in {IP_PLAN}.")
-    del plan[key]
-    return plan, sorted(set(plan) - set(zones))
+        raise ConfigError(f"{key} has nothing in {IP_PLAN}.")
+    if key in zones:
+        removed = plan[key]["removed_subnets"]
+        if not removed:
+            raise ConfigError(f"{key} is still in {zones[key]['where']} and holds no removed subnets; to release its range, remove it and destroy it first.")
+        freed = f"{key}'s removed subnets " + ", ".join(f"{name} {block}" for name, block in removed.items())
+        plan[key] = {**plan[key], "removed_subnets": {}}
+    else:
+        freed = f"{key}'s range {plan[key]['range']}"
+        del plan[key]
+    return plan, sorted(set(plan) - set(zones)), freed
 
 
 def render_plan(plan: dict[str, dict], retired: list[str]) -> str:
-    data = {key: {"range": str(e["range"]), "subnets": {n: str(b) for n, b in e["subnets"].items()}} for key, e in plan.items()}
-    note = "Removed from landing-zones/: its range is kept until it is destroyed and released."
-    return dump(data, IP_PLAN_HEADER, {key: note for key in retired}, spaced=True)
+    def entry(e: dict) -> dict:
+        shown = {"range": str(e["range"]), "subnets": {n: str(b) for n, b in e["subnets"].items()}}
+        if e.get("removed_subnets"):
+            shown["removed_subnets"] = {n: str(b) for n, b in e["removed_subnets"].items()}
+        return shown
+
+    note = "Removed from landing-zones/: its range is held until it is destroyed and released."
+    return dump({key: entry(e) for key, e in plan.items()}, IP_PLAN_HEADER, {key: note for key in retired}, spaced=True)
 
 
 def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:

@@ -59,6 +59,10 @@ class YamlTest(unittest.TestCase):
         self.assertEqual(scalar("4711"), '"4711"')
         self.assertEqual(scalar("10.100.0.0/22"), "10.100.0.0/22")
 
+    def test_dates_stay_text_as_keys_and_values(self):
+        data = {"2026-11-02": {"range": "10.100.4.0/24"}, "root": "2026-1-2", "when": "2026-11-02T10:00:00Z"}
+        self.assertEqual(self.round_trip(dump(data)), data)
+
     def test_the_governance_contract_reads_like_the_approved_shape(self):
         text = render("governance", GOVERNANCE)
         self.assertTrue(text.startswith("# What governance decided"))

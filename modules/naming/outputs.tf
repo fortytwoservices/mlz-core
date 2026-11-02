@@ -29,6 +29,8 @@ output "landing_zone" {
     peering_to_hub          = "peer-${var.landing_zone}-to-hub"
     peering_from_hub        = "peer-hub-to-${var.landing_zone}"
     # Per subnet: format(subnet, "<subnet name>"), format(network_security_group, "<subnet name>").
+    # The loader keeps these within Azure's limits: a key of up to 49 characters and a subnet name of up
+    # to 20 make an NSG name of at most 80 with a four-letter region code.
     subnet                 = "snet-%s"
     network_security_group = "nsg-${var.landing_zone}-%s-${local.region}"
   }

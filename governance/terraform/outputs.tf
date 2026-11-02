@@ -7,7 +7,7 @@ output "contract" {
     root            = local.config.root_id
     primary_region  = local.region
     allowed_regions = local.config.allowed_regions
-    required_tags   = try(local.config.tags.required, [])
+    required_tags   = coalesce(try(local.config.tags.required, null), []) # null in the YAML means none
     archetypes = merge(
       {
         corp    = "${local.config.root_id}-lz-corp"

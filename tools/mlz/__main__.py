@@ -25,6 +25,7 @@ from . import contract, platform, vending
 from .files import read_yaml
 from .merge import ConfigError
 
+MARKER = ".written-by-mlz"
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="mlz", description="Customer YAML in, one checked JSON file per role out.")
@@ -36,14 +37,14 @@ def main() -> int:
     a = roles.add_parser("allocate", help="give new landing zones and subnets their blocks in _generated/ip-plan.yaml")
     a.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     a.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
-    r = roles.add_parser("release", help="free a removed landing zone's range, once it is destroyed")
+    r = roles.add_parser("release", help="free what a landing zone no longer uses, once it is destroyed")
     r.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     r.add_argument("key", help="the landing zone's key, <workload>-<env>")
     v = roles.add_parser("vending", help="landing-zones/ into one config per landing zone")
     v.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     v.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     v.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
-    v.add_argument("--out", type=Path, required=True, help="the folder for <key>.json, one per landing zone")
+    v.add_argument("--out", type=Path, required=True, help="the folder for <key>.json, one per landing zone; mlz owns it")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
     c.add_argument("kind", choices=sorted(contract.CONTRACTS))
     c.add_argument("--out", type=Path, required=True, help="the YAML file to write, in a repo's _generated/")
@@ -68,14 +69,14 @@ def main() -> int:
             write_plan(args.repo, vending.render_plan(plan, retired))
             print("mlz allocate: " + (f"{len(changes)} change(s)" if changes else "nothing new") + "".join(f"\n  {c}" for c in changes))
             for key in retired:
-                print(f"mlz allocate: {key} was removed but keeps its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")
+                print(f"mlz allocate: {key} was removed but holds its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")
         elif args.role == "release":
-            plan, retired = vending.release(args.repo, args.key)
+            plan, retired, freed = vending.release(args.repo, args.key)
             write_plan(args.repo, vending.render_plan(plan, retired))
-            print(f"mlz release: freed {args.key}'s range")
+            print(f"mlz release: freed {freed}")
         else:
             configs = vending.build(args.repo, published("governance"), published("platform"))
-            args.out.mkdir(parents=True, exist_ok=True)
+            own_folder(args.out)
             for key, config in configs.items():
                 (args.out / f"{key}.json").write_text(json.dumps(config, indent=2) + "\n")
             print(f"mlz vending: wrote {len(configs)} landing zone(s) to {args.out}")
@@ -83,6 +84,17 @@ def main() -> int:
         print(f"mlz {args.role}: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def own_folder(folder: Path) -> None:
+    """An empty folder, or one mlz wrote before, emptied of its old configs: a landing zone removed
+    since the last run must not leave a config behind for anything to apply."""
+    if folder.is_dir() and any(folder.iterdir()) and not (folder / MARKER).is_file():
+        raise ConfigError(f"{folder} holds files mlz did not write; use an empty folder.")
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.glob("*.json"):
+        old.unlink()
+    (folder / MARKER).write_text("Written by python3 -m mlz vending, which empties this folder on every run.\n")
 
 
 def write_plan(repo: Path, text: str) -> None:

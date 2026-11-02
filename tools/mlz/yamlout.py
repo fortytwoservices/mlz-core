@@ -11,7 +11,8 @@ import re
 
 PLAIN = re.compile(r"^[A-Za-z0-9_./@][A-Za-z0-9_./@:+*()-]*$")
 LOOKS_LIKE_OTHER_TYPE = re.compile(
-    r"^(true|false|yes|no|on|off|null|~|[-+]?(\d[\d_]*)?\.?\d+([eE][-+]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+|\.inf|\.nan)$",
+    r"^(true|false|yes|no|on|off|null|~|[-+]?(\d[\d_]*)?\.?\d+([eE][-+]?\d+)?|0x[0-9a-fA-F]+|0o[0-7]+|\.inf|\.nan"
+    r"|\d{4}-\d\d?-\d\d?([Tt].*)?)$",  # a date: yamldecode would read it as a timestamp, 2026-1-2T00:00:00Z
     re.IGNORECASE,
 )
 FLOW_WIDTH = 100
