@@ -64,6 +64,10 @@ INHERIT_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/e
 # What Fortytwo adds to ALZ archetypes, besides the tag assignments.
 ROOT_DEFINITIONS = ["Deny-RG-Without-Tag"]
 LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
+# Where workload subscriptions go: landing zones, and sandboxes beside them. Both get the region
+# assignments; sandboxes get the tag assignments only when the customer sets tags.in_sandboxes.
+WORKLOAD_ARCHETYPES = ("landing_zones", "sandbox")
+TAG_KEYS = ("required", "inherited", "exempt_resource_groups", "in_sandboxes")
 OPTIONAL_GROUPS = ("security", "local")
 # The archetypes in platform/alz; policy_assignments_to_remove may name only these.
 ALZ_ARCHETYPES = (
@@ -162,6 +166,9 @@ def validate(config: dict) -> None:
         elif value is not None and not isinstance(value, bool):
             problems.append(f"management_groups.{key} must be true or false, without quotes; got {value!r}.")
     tags = mapping(config.get("tags"), "tags", problems)
+    problems += [f"tags.{key}: unknown; use {', '.join(TAG_KEYS)}." for key in tags if key not in TAG_KEYS]
+    if tags.get("in_sandboxes") is not None and not isinstance(tags["in_sandboxes"], bool):
+        problems.append(f"tags.in_sandboxes must be true or false, without quotes; got {tags['in_sandboxes']!r}.")
     for kind in ("required", "inherited"):
         for tag in string_list(tags.get(kind), f"tags.{kind}", problems):
             if not TAG.fullmatch(tag):
@@ -302,19 +309,24 @@ def assignment(name, display_name, description, definition, parameters, message,
 
 def override_names(config: dict) -> dict[str, str]:
     """Base archetype -> the name of Fortytwo's override of it."""
-    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"root", "landing_zones"}
+    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"root", *WORKLOAD_ARCHETYPES}
     return {base: f"fortytwo_{base}" for base in sorted(bases)}
 
 
-def archetype_overrides(config: dict, added_to_landing_zones: list[str]) -> list[dict]:
+def archetype_overrides(config: dict, tag_assignments: list[str]) -> list[dict]:
     removals = config.get("policy_assignments_to_remove") or {}
+    added = {
+        "landing_zones": LANDING_ZONE_ADDITIONS + tag_assignments,
+        # Whether sandbox users must tag what they create is the customer's cost-allocation choice.
+        "sandbox": LANDING_ZONE_ADDITIONS + (tag_assignments if (config.get("tags") or {}).get("in_sandboxes") is True else []),
+    }
     overrides = []
     for base, name in override_names(config).items():
         overrides.append(
             {
                 "name": name,
                 "base_archetype": base,
-                "policy_assignments_to_add": added_to_landing_zones if base == "landing_zones" else [],
+                "policy_assignments_to_add": added.get(base, []),
                 "policy_assignments_to_remove": list(removals.get(base) or []),
                 "policy_definitions_to_add": ROOT_DEFINITIONS if base == "root" else [],
                 "policy_definitions_to_remove": [],
@@ -363,7 +375,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
         f"architecture_definitions/{root}.alz_architecture_definition.json",
         {"name": root, "management_groups": management_groups(config)},
     )
-    for override in archetype_overrides(config, LANDING_ZONE_ADDITIONS + list(tags)):
+    for override in archetype_overrides(config, list(tags)):
         write_json(out, f"archetype_overrides/{override['name']}.alz_archetype_override.json", override)
     for name, body in tags.items():
         write_json(out, f"policy_assignments/{name}.alz_policy_assignment.json", body)

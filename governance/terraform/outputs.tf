@@ -1,18 +1,24 @@
 output "contract" {
   description = <<-EOT
-    What platform and vending need from governance, published as JSON (`_generated/governance.json` in
-    their repos). No secrets.
+    What platform and vending need from governance. `python3 -m mlz contract governance` writes it to
+    `_generated/governance.yaml` in their repos. No secrets.
   EOT
   value = {
-    root_id           = local.config.root_id
-    primary_region    = local.region
-    allowed_regions   = local.config.allowed_regions
-    subscriptions     = local.subscriptions
-    management_groups = module.alz.management_group_resource_ids
-    management = {
-      workspace_resource_id = module.management.resource_id
-      workspace_id          = module.management.workspace_id
-      ama_identity          = module.management.user_assigned_identity
+    root            = local.config.root_id
+    primary_region  = local.region
+    allowed_regions = local.config.allowed_regions
+    required_tags   = coalesce(try(local.config.tags.required, null), []) # null in the YAML means none
+    archetypes = merge(
+      {
+        corp    = "${local.config.root_id}-lz-corp"
+        online  = "${local.config.root_id}-lz-online"
+        sandbox = "${local.config.root_id}-sandboxes"
+      },
+      try(local.config.management_groups.local, false) == true ? { local = "${local.config.root_id}-lz-local" } : {},
+    )
+    platform_subscriptions = local.subscriptions
+    monitoring = {
+      workspace = module.management.resource_id
     }
   }
 }

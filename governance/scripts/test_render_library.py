@@ -51,7 +51,7 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(ids["demo-landing-zones"], ("demo", ["fortytwo_landing_zones"]))
         self.assertEqual(ids["demo-lz-corp"], ("demo-landing-zones", ["corp"]))
         self.assertEqual(ids["demo-lz-online"], ("demo-landing-zones", ["online"]))
-        self.assertEqual(ids["demo-sandboxes"], ("demo", ["sandbox"]))
+        self.assertEqual(ids["demo-sandboxes"], ("demo", ["fortytwo_sandbox"]))
         self.assertEqual(ids["demo-decommissioned"], ("demo", ["decommissioned"]))
         self.assertEqual(len(ids), 10)
         for absent in ("demo-security", "demo-lz-local", "demo-lz-dataplatform", "demo-unusedsub"):
@@ -69,6 +69,23 @@ class RenderTest(unittest.TestCase):
         groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
         ids = {g["id"]: (g["parent_id"], g["archetypes"]) for g in groups}
         self.assertEqual(ids["demo-security"], ("demo-platform", ["security"]))
+
+    def test_sandboxes_get_the_region_restriction_and_tags_only_when_the_customer_asks(self):
+        _, out = self.render(self.BASE)
+        sandbox = self.read(out, "archetype_overrides/fortytwo_sandbox.alz_archetype_override.json")
+        self.assertEqual(sandbox["base_archetype"], "sandbox")
+        self.assertEqual(sandbox["policy_assignments_to_add"], ["Deny-Resource-Locations", "Deny-RSG-Locations"])
+        self.assertEqual(sandbox["policy_assignments_to_remove"], [])
+        _, out = self.render(self.BASE + "tags:\n  in_sandboxes: true\n")
+        lz = self.read(out, "archetype_overrides/fortytwo_landing_zones.alz_archetype_override.json")
+        sandbox = self.read(out, "archetype_overrides/fortytwo_sandbox.alz_archetype_override.json")
+        self.assertEqual(sandbox["policy_assignments_to_add"], lz["policy_assignments_to_add"])
+
+    def test_tag_settings_are_checked(self):
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "tags:\n  in_sandboxes: 'yes'\n  in_sandbox: true\n")
+        self.assertIn("tags.in_sandboxes must be true or false", str(caught.exception))
+        self.assertIn("tags.in_sandbox: unknown", str(caught.exception))
 
     def test_overrides_remove_attestation_and_ddos_and_add_regions_and_tags(self):
         _, out = self.render(self.BASE)

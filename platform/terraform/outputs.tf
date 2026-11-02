@@ -1,0 +1,42 @@
+locals {
+  connectivity = module.connectivity.connectivity
+
+  # A route as people read it: where to, and through what (an address, or Internet).
+  spoke_routes = {
+    for region, details in local.connectivity.regions : region => [
+      for name, route in coalesce(details.spoke_default_routes, {}) : {
+        name = name
+        to   = route.address_prefix
+        via  = route.next_hop_type == "VirtualAppliance" ? route.next_hop_in_ip_address : route.next_hop_type
+      }
+    ]
+  }
+}
+
+output "contract" {
+  description = <<-EOT
+    What governance and vending need from the platform. `python3 -m mlz contract platform` writes it to
+    `_generated/platform.yaml` in their repos. No secrets.
+  EOT
+  value = {
+    topology                  = local.connectivity.topology
+    connectivity_subscription = local.config.connectivity_subscription_id
+    regions = {
+      for region, details in local.connectivity.regions : region => {
+        primary             = details.is_primary
+        hub_network         = details.hub_virtual_network_id
+        hub_range           = local.config.hubs[region].address_space
+        landing_zone_ranges = details.routing_supernet
+        firewall            = details.firewall_private_ip
+        dns_servers         = details.dns_servers
+        spoke_routes        = local.spoke_routes[region]
+      }
+    }
+    # For governance's Private Link DNS policy.
+    private_dns = {
+      subscription   = local.config.connectivity_subscription_id
+      resource_group = module.naming.connectivity.dns_resource_group
+      region         = local.config.primary_region
+    }
+  }
+}

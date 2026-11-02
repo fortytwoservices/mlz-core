@@ -18,10 +18,10 @@ locals {
   }
 
   # The Private Link DNS zones, from the platform's contract once they exist.
-  platform = var.platform_contract_file == null ? null : jsondecode(file(var.platform_contract_file))
+  platform = var.platform_contract_file == null ? null : yamldecode(file(var.platform_contract_file))
   private_dns_defaults = local.platform == null ? {} : {
-    private_dns_zone_subscription_id     = jsonencode({ value = local.platform.private_dns.subscription_id })
-    private_dns_zone_resource_group_name = jsonencode({ value = local.platform.private_dns.resource_group_name })
+    private_dns_zone_subscription_id     = jsonencode({ value = local.platform.private_dns.subscription })
+    private_dns_zone_resource_group_name = jsonencode({ value = local.platform.private_dns.resource_group })
     private_dns_zone_region              = jsonencode({ value = local.platform.private_dns.region })
   }
 

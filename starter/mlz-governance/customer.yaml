@@ -25,3 +25,4 @@ subscriptions:
 #
 # tags:
 #   required: [Owner, CostCenter, BusinessUnit]
+#   in_sandboxes: true             # sandbox users must tag what they create, for cost allocation
