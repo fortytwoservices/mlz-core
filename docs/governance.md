@@ -44,6 +44,9 @@ most 24.
 - The ALZ policies get their IDs as defaults (`log_analytics_workspace_id`, the `ama_*` values,
   `resource_group_location`, `email_security_contact`). The IDs are built from the names, so they are known
   at plan time, and `policy_assignments_dependencies` assigns the policies after the resources exist.
+- `security_contact` is Defender for Cloud's security contact (ALZ's `email_security_contact`). Service
+  health alerts are separate: ALZ's `Deploy-SvcHealth-BuiltIn` sends them to each subscription's Owners
+  (its default `actionGroupRoleIds`); a dedicated recipient is a later choice.
 - `customer.yaml` names the platform subscriptions (`subscriptions.management`, `.connectivity`, and
   optionally `.identity` and `.security`); each one is placed in its management group.
 - **Private Link DNS:** the policy's defaults come from the platform's published contract

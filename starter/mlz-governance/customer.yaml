@@ -6,7 +6,7 @@ name: Demo customer
 root_id: demo                      # prefix of every management group ID: demo, demo-platform, demo-lz-corp, ...
 root_display_name: Demo
 primary_region: norwayeast
-security_contact: platform-team@demo.example   # Defender for Cloud and service health alerts
+security_contact: security-team@demo.example   # Defender for Cloud's security alerts
 
 # The platform subscriptions. Each one is moved into the management group of the same name.
 subscriptions:
