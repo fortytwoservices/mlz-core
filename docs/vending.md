@@ -50,3 +50,13 @@ The landing zone's key is its folder and file name, `payments-prod`. Settings: `
 
 `python3 -m mlz vending` checks every landing zone (every problem at once, with the file it came from)
 and writes `<key>.json` per landing zone; the Terraform root reads one of them.
+
+## Operating notes
+
+- **A new landing zone settles on its second run.** Sub-vending records whether the subscription is already
+  in its management group as part of the plan. On the first apply it is not (placing it is that apply's
+  job), so the next plan re-places it in the same group once, and from then on plans show no changes.
+  Harmless; met in the canary on 2 November 2026.
+- **Subscriptions must be writable.** A subscription that is disabled or read-only (for CSP, the "Warned"
+  state) fails at its first resource group with `ReadOnlyDisabledSubscription`, after it has already been
+  placed in its management group. Check the subscription's state before vending it.
