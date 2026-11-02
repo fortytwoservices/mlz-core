@@ -55,17 +55,17 @@ def ip_plan(repo: Path) -> dict[str, str]:
 
 def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[str]) -> None:
     s, where = lz["settings"], f"landing-zones/{lz['workload']}/{lz['environment']}"
-    if not NAME.match(lz["workload"]) or not NAME.match(lz["environment"]):
+    if not NAME.fullmatch(lz["workload"]) or not NAME.fullmatch(lz["environment"]):
         problems.append(f"{where}: folder and file names are lower-case letters, digits and hyphens (the key {key!r} is used in names).")
     problems += [f"{where}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS)]
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
-    if s.get("owner") and not EMAIL.match(str(s["owner"])):
+    if s.get("owner") and not EMAIL.fullmatch(str(s["owner"])):
         problems.append(f"{where}: owner {s['owner']!r} should be the owning team's email address.")
     if s.get("archetype") and s["archetype"] not in ARCHETYPES:
         problems.append(f"{where}: archetype {s['archetype']!r} must be one of {', '.join(ARCHETYPES)}.")
-    if s.get("subscription") and not GUID.match(str(s["subscription"]).lower()):
+    if s.get("subscription") and not GUID.fullmatch(str(s["subscription"]).lower()):
         problems.append(f"{where}: subscription must be a subscription ID.")
     if s.get("subscription") and str(s["subscription"]).lower() in {v.lower() for v in governance["subscriptions"].values()}:
         problems.append(f"{where}: subscription {s['subscription']} is a platform subscription.")
@@ -78,7 +78,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if not isinstance(budget.get("monthly", 0), int) or budget.get("monthly", 0) < 0:
         problems.append(f"{where}: budget.monthly must be a whole amount, for example 500.")
     for contact in budget.get("contacts") or []:
-        if not EMAIL.match(str(contact)):
+        if not EMAIL.fullmatch(str(contact)):
             problems.append(f"{where}: budget contact {contact!r} is not an email address.")
     network = s.get("network") or {}
     if not isinstance(network.get("size", 24), int) or not 16 <= network.get("size", 24) <= 28:
