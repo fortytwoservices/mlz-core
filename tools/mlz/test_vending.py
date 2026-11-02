@@ -152,6 +152,7 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 27\n")
         self.assertIn("subnet app was removed and still holds 10.100.5.0/26; ask for a /26", self.problems(allocate, PLATFORM))
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 26\n")
+        self.assertIn("payments-prod asks for app again; run the IP allocator", self.problems(release, "payments-prod"))
         self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.5.0/26 given back"])
 
     def test_releasing_a_current_landing_zone_frees_only_its_removed_subnets(self):
@@ -275,7 +276,12 @@ class VendingTest(unittest.TestCase):
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("48 extra tags; Azure allows 45", message)
         self.assertIn("tags.Long is longer than Azure's 256 characters", message)
-        self.assertIn("tag name 'a/b' must be at most 512 characters", message)
+        self.assertIn("tag name 'a/b' must be 1 to 512 characters", message)
+        self.write("landing-zones/payments/prod.yaml", PROD + "tags:\n  '': Finance\n")
+        self.assertIn("tag name '' must be 1 to 512 characters", self.problems(build, GOVERNANCE, PLATFORM))
+        for empty in ("false", "0", "[]"):
+            self.write("landing-zones/payments/prod.yaml", PROD + f"tags: {empty}\n")
+            self.assertIn("tags maps each extra tag to its value", self.problems(build, GOVERNANCE, PLATFORM), empty)
 
     def test_placing_among_many_taken_ranges_is_one_pass(self):
         taken = [IPv4Network((0x0A000000 + i * 256, 24)) for i in range(4000)]

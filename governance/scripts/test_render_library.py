@@ -51,7 +51,7 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(ids["demo-landing-zones"], ("demo", ["fortytwo_landing_zones"]))
         self.assertEqual(ids["demo-lz-corp"], ("demo-landing-zones", ["corp"]))
         self.assertEqual(ids["demo-lz-online"], ("demo-landing-zones", ["online"]))
-        self.assertEqual(ids["demo-sandboxes"], ("demo", ["sandbox"]))
+        self.assertEqual(ids["demo-sandboxes"], ("demo", ["fortytwo_sandbox"]))
         self.assertEqual(ids["demo-decommissioned"], ("demo", ["decommissioned"]))
         self.assertEqual(len(ids), 10)
         for absent in ("demo-security", "demo-lz-local", "demo-lz-dataplatform", "demo-unusedsub"):
@@ -69,6 +69,14 @@ class RenderTest(unittest.TestCase):
         groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
         ids = {g["id"]: (g["parent_id"], g["archetypes"]) for g in groups}
         self.assertEqual(ids["demo-security"], ("demo-platform", ["security"]))
+
+    def test_sandboxes_get_the_same_region_and_tag_assignments_as_landing_zones(self):
+        _, out = self.render(self.BASE)
+        lz = self.read(out, "archetype_overrides/fortytwo_landing_zones.alz_archetype_override.json")
+        sandbox = self.read(out, "archetype_overrides/fortytwo_sandbox.alz_archetype_override.json")
+        self.assertEqual(sandbox["base_archetype"], "sandbox")
+        self.assertEqual(sandbox["policy_assignments_to_add"], lz["policy_assignments_to_add"])
+        self.assertEqual(sandbox["policy_assignments_to_remove"], [])
 
     def test_overrides_remove_attestation_and_ddos_and_add_regions_and_tags(self):
         _, out = self.render(self.BASE)

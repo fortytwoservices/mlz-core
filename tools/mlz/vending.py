@@ -150,7 +150,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if location and location not in platform["regions"]:
         problems.append(f"{at('location')}: location {location} has no hub to connect to.")
 
-    tags = s.get("tags") or {}
+    tags = {} if s.get("tags") is None else s["tags"]
     if not isinstance(tags, dict):
         problems.append(f"{at('tags')}: tags maps each extra tag to its value, for example BusinessUnit: Finance.")
         tags = {}
@@ -173,8 +173,8 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
             problems.append(f"{at('tags', tag)}: tags.{tag} is one value, not {value!r}.")
         elif len(str(value)) > TAG_VALUE_LENGTH:
             problems.append(f"{at('tags', tag)}: tags.{tag} is longer than Azure's {TAG_VALUE_LENGTH} characters.")
-        if len(tag) > TAG_NAME_LENGTH or TAG_NAME_REFUSED & set(tag):
-            problems.append(f"{at('tags', tag)}: tag name {tag[:40]!r} must be at most {TAG_NAME_LENGTH} characters, without any of < > % & \\ ? /.")
+        if not tag.strip() or len(tag) > TAG_NAME_LENGTH or TAG_NAME_REFUSED & set(tag):
+            problems.append(f"{at('tags', tag)}: tag name {tag[:40]!r} must be 1 to {TAG_NAME_LENGTH} characters, without any of < > % & \\ ? /.")
     for tag in governance.get("required_tags") or []:
         if tag.lower() not in from_settings | automatic | seen:
             problems.append(f"{where}: governance requires the {tag} tag; set it under tags: here or in a layer above.")
@@ -375,6 +375,13 @@ def release(repo: Path, key: str) -> tuple[dict[str, dict], list[str], str]:
         removed = plan[key]["removed_subnets"]
         if not removed:
             raise ConfigError(f"{key} is still in {zones[key]['where']} and holds no removed subnets; to release its range, remove it and destroy it first.")
+        problems = []
+        wanted = wanted_network(zones[key], problems)
+        if wanted is None:
+            raise ConfigError(f"fix {key}'s network before releasing anything:\n  " + "\n  ".join(problems))
+        back = sorted(set(removed) & set(wanted[1]))
+        if back:
+            raise ConfigError(f"{key} asks for {', '.join(back)} again; run the IP allocator to give the block back instead of releasing it.")
         freed = f"{key}'s removed subnets " + ", ".join(f"{name} {block}" for name, block in removed.items())
         plan[key] = {**plan[key], "removed_subnets": {}}
     else:

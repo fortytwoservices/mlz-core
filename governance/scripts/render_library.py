@@ -64,6 +64,9 @@ INHERIT_TAG_DEFINITION = "/providers/Microsoft.Authorization/policyDefinitions/e
 # What Fortytwo adds to ALZ archetypes, besides the tag assignments.
 ROOT_DEFINITIONS = ["Deny-RG-Without-Tag"]
 LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
+# Where workload subscriptions go: landing zones, and sandboxes beside them. Both get the region and tag
+# assignments, because vending places both and the governance contract promises them for both.
+WORKLOAD_ARCHETYPES = ("landing_zones", "sandbox")
 OPTIONAL_GROUPS = ("security", "local")
 # The archetypes in platform/alz; policy_assignments_to_remove may name only these.
 ALZ_ARCHETYPES = (
@@ -302,11 +305,11 @@ def assignment(name, display_name, description, definition, parameters, message,
 
 def override_names(config: dict) -> dict[str, str]:
     """Base archetype -> the name of Fortytwo's override of it."""
-    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"root", "landing_zones"}
+    bases = set((config.get("policy_assignments_to_remove") or {}).keys()) | {"root", *WORKLOAD_ARCHETYPES}
     return {base: f"fortytwo_{base}" for base in sorted(bases)}
 
 
-def archetype_overrides(config: dict, added_to_landing_zones: list[str]) -> list[dict]:
+def archetype_overrides(config: dict, added_to_workloads: list[str]) -> list[dict]:
     removals = config.get("policy_assignments_to_remove") or {}
     overrides = []
     for base, name in override_names(config).items():
@@ -314,7 +317,7 @@ def archetype_overrides(config: dict, added_to_landing_zones: list[str]) -> list
             {
                 "name": name,
                 "base_archetype": base,
-                "policy_assignments_to_add": added_to_landing_zones if base == "landing_zones" else [],
+                "policy_assignments_to_add": added_to_workloads if base in WORKLOAD_ARCHETYPES else [],
                 "policy_assignments_to_remove": list(removals.get(base) or []),
                 "policy_definitions_to_add": ROOT_DEFINITIONS if base == "root" else [],
                 "policy_definitions_to_remove": [],
