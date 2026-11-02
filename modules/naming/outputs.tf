@@ -26,6 +26,8 @@ output "landing_zone" {
     route_table             = "rt-${var.landing_zone}-${local.region}"
     deploy_identity         = "id-${var.landing_zone}-deploy-${local.region}"
     budget                  = "budget-${var.landing_zone}"
+    peering_to_hub          = "peer-${var.landing_zone}-to-hub"
+    peering_from_hub        = "peer-hub-to-${var.landing_zone}"
     # Per subnet: format(subnet, "<subnet name>"), format(network_security_group, "<subnet name>").
     subnet                 = "snet-%s"
     network_security_group = "nsg-${var.landing_zone}-%s-${local.region}"

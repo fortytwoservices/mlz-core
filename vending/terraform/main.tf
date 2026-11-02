@@ -90,8 +90,10 @@ module "vending" {
         }
       }
 
-      hub_network_resource_id = local.lz.network.hub_virtual_network_id
-      hub_peering_enabled     = true
+      hub_network_resource_id  = local.lz.network.hub_virtual_network_id
+      hub_peering_enabled      = true
+      hub_peering_name_tohub   = local.names.peering_to_hub
+      hub_peering_name_fromhub = local.names.peering_from_hub
       # The hubs have no VPN or ExpressRoute gateway yet, so neither side uses one.
       hub_peering_options_tohub   = { use_remote_gateways = false }
       hub_peering_options_fromhub = { allow_gateway_transit = false }
