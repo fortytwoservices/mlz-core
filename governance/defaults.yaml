@@ -25,6 +25,10 @@ tags:
     - CostCenter
     - Environment
     - Workload
+  # Sandboxes too? On, whoever creates a resource group in a sandbox must tag it, so its costs can be
+  # allocated beyond the subscription. Off, sandboxes keep only the region restriction; vending still
+  # tags the sandbox subscription and everything it creates there.
+  in_sandboxes: false
   # Resource groups that Azure services and policy deployments create themselves, without the
   # customer's tags: the required tags are not enforced on them. One '*' wildcard per pattern.
   exempt_resource_groups:
