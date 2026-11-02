@@ -18,7 +18,7 @@ import re
 from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
-from .files import read_setting, setting_names
+from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
 
@@ -52,6 +52,7 @@ def landing_zones(repo: Path) -> dict[str, dict]:
     root = repo / "landing-zones"
     if not root.is_dir():
         raise ConfigError(f"{root}: no landing-zones folder.")
+    preload(yaml_files(root) + yaml_files(repo / "_generated"))
     read = {}  # each file is read once, however many landing zones share it
 
     def setting(*parts: str) -> tuple[str, dict]:
@@ -253,10 +254,12 @@ def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list
     conflict is reported for a person to resolve."""
     problems = []
     hubs = [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
+    reserved = [IPv4Network(r) for region in platform["regions"].values() for r in region.get("reserved") or []]
     keys = sorted(plan)
     for index, key in enumerate(keys):
         given = plan[key]["range"]
         problems += [f"{IP_PLAN}: {key}'s range {given} overlaps the hub range {h}." for h in hubs if given.overlaps(h)]
+        problems += [f"{IP_PLAN}: {key}'s range {given} overlaps {r}, which the platform reserves." for r in reserved if given.overlaps(r)]
         problems += [f"{IP_PLAN}: {key}'s range {given} overlaps {other}'s {plan[other]['range']}." for other in keys[index + 1:] if given.overlaps(plan[other]["range"])]
         blocks = sorted([*plan[key]["subnets"].items(), *plan[key]["removed_subnets"].items()], key=lambda item: item[1])
         problems += [f"{IP_PLAN}: {key}'s subnet {name} {block} is outside its range {given}." for name, block in blocks if not block.subnet_of(given)]
@@ -321,7 +324,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))
 
     taken = [entry["range"] for entry in plan.values()]
-    taken += [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
+    taken += [IPv4Network(r) for region in platform["regions"].values() for r in [*region["hub_range"], *(region.get("reserved") or [])]]
     result, changes = {}, []
     # Largest first, so a small range never takes the only room a larger one had.
     for key in sorted(zones, key=lambda k: (wanted[k][0], k)):

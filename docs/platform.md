@@ -13,6 +13,7 @@ One file per region, `hubs/<region>.yaml`, saying what the hub should have:
 
 address_space: 10.100.0.0/22          # the hub itself; its subnets are carved from this automatically
 landing_zone_ranges: 10.100.0.0/16    # where landing zone networks get their address ranges
+reserved: [10.100.200.0/22]           # networks mlz-core does not manage: never given to a landing zone
 
 firewall: Standard                    # Standard, Premium or Basic
 dns_resolver: true                    # resolves Private Link names for landing zones and on-premises
@@ -22,8 +23,13 @@ bastion: false                        # Bastion for VMs in any landing zone
 A hub can also be a folder of chunks, `hubs/<region>/*.yaml`, read as one file; a value set in two
 chunks is an error that names both files.
 
-Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`. The primary region (from
-governance) must have a hub.
+Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, no `reserved` ranges. The primary
+region (from governance) must have a hub.
+
+`reserved` lists ranges the IP allocator must never hand out: existing virtual networks, on-premises
+sites, partner links, anything inside `landing_zone_ranges` that mlz-core does not manage. A hub's own
+address space may not overlap any hub's reserved ranges. Reserving a range a landing zone already holds
+is reported as a conflict on the next run, never solved by moving the landing zone.
 
 ## What is worked out
 
@@ -41,4 +47,4 @@ root's config (JSON, for one run, never committed); the Terraform root only read
 The `contract` output, written as `_generated/platform.yaml` in the governance and vending repos by
 `python3 -m mlz contract platform`: the hub's
 connectivity (peering target, firewall address, DNS servers, the spoke routes), the hubs' own ranges
-(which the IP allocator never hands out), and where the Private Link zones are.
+and the reserved ones (which the IP allocator never hands out), and where the Private Link zones are.

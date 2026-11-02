@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import io
+import subprocess
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 from ipaddress import IPv4Network
 from pathlib import Path
 
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
-from mlz.__main__ import MARKER, own_folder
+from mlz.__main__ import MARKER, main, own_folder
+from mlz import files
+from mlz.contract import render
 from mlz.vending import IP_PLAN, allocate, build, place, release, render_plan
 
 GOVERNANCE = {
@@ -201,6 +208,36 @@ class VendingTest(unittest.TestCase):
             "payments-dev: range 10.100.4.0/24", "payments-dev: subnet default 10.100.4.0/26",
             "payments-prod: range 10.100.5.0/24", "payments-prod: subnet default 10.100.5.0/26",
         ])
+
+    def test_reserved_ranges_are_never_given_and_conflicts_are_reported(self):
+        reserving = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "reserved": ["10.100.4.0/23"]}}}
+        self.allocate(reserving)
+        self.assertEqual((self.plan()["payments-dev"]["range"], self.plan()["payments-prod"]["range"]), ("10.100.6.0/24", "10.100.7.0/24"))
+        later = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "reserved": ["10.100.6.0/24"]}}}
+        self.assertIn("payments-dev's range 10.100.6.0/24 overlaps 10.100.6.0/24, which the platform reserves", self.problems(allocate, later))
+
+    def test_check_mode_fails_when_the_plan_is_stale_and_writes_nothing(self):
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        run = lambda *extra: self.cli("allocate", "--repo", str(self.repo), *extra)
+        self.assertEqual(run("--check"), 1)
+        self.assertFalse((self.repo / IP_PLAN).exists())
+        self.assertEqual(run(), 0)
+        self.assertEqual(run("--check"), 0)
+        self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.assertEqual(run("--check"), 1)
+
+    def test_a_command_starts_terraform_once(self):
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.cli("allocate", "--repo", str(self.repo))
+        files._parsed.clear()
+        with mock.patch("mlz.files.subprocess.run", wraps=subprocess.run) as run:
+            self.assertEqual(self.cli("vending", "--repo", str(self.repo), "--out", str(self.repo / "out")), 0)
+        self.assertEqual(run.call_count, 1)
+
+    def cli(self, *argv: str) -> int:
+        with mock.patch.object(sys, "argv", ["mlz", *argv]), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            return main()
 
     def test_names_are_checked_before_anything_is_allocated(self):
         self.write("landing-zones/pay_ments/prod.yaml", PROD.replace("33", "66"))

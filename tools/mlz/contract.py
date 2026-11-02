@@ -28,7 +28,10 @@ CONTRACTS = {
             "Written by CI from mlz-platform after every apply: do not edit here."
         ),
         "comments": {
-            "regions": "Per region: the hub landing zones peer with, its ranges, and how their traffic leaves.",
+            "regions": (
+                "Per region: the hub landing zones peer with, its ranges, the ranges reserved for networks\n"
+                "mlz-core does not manage (never given to a landing zone), and how their traffic leaves."
+            ),
             "private_dns": "Where the Private Link DNS zones are, for governance's DNS policy.",
         },
     },

@@ -7,7 +7,8 @@ import unittest
 from pathlib import Path
 
 from mlz.contract import render
-from mlz.files import read_yaml
+from mlz.files import preload, read_yaml
+from mlz.merge import ConfigError
 from mlz.yamlout import dump, scalar
 
 GOVERNANCE = {
@@ -67,6 +68,17 @@ class YamlTest(unittest.TestCase):
         data = {"0b10": "0b10", "subnet": "0B11"}  # yamldecode has no binary integers
         self.assertEqual(self.round_trip(dump(data)), data)
         self.assertEqual(scalar("0b10"), "0b10")
+
+    def test_a_broken_file_among_many_is_named_with_terraform_s_reason(self):
+        good, bad = self.dir / "good.yaml", self.dir / "bad.yaml"
+        good.write_text("a: 1\n")
+        bad.write_text("a: [1\n")
+        preload([good, bad])
+        self.assertEqual(read_yaml(good), {"a": 1})
+        with self.assertRaises(ConfigError) as caught:
+            read_yaml(bad)
+        self.assertIn("bad.yaml: not valid YAML", str(caught.exception))
+        self.assertIn("yamldecode", str(caught.exception))
 
     def test_a_path_with_quotes_and_template_marks_is_read(self):
         folder = self.dir / 'a "quoted" ${x} %{y}'
