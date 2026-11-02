@@ -15,6 +15,8 @@ library and a per-customer rendering step.
 3. `governance/terraform` loads three libraries in order: Microsoft's (`platform/alz` 2026.10.0, a
    dependency of `governance/lib`), Fortytwo's (`governance/lib`), and the rendered one. It calls the ALZ
    module with telemetry off.
+4. The top group, `<root>`, comes from the bootstrap (`docs/bootstrap.md`); governance marks it as
+   existing and builds everything below it, so its pipeline never needs rights at the tenant root.
 
 ## What the defaults give (decided by the user, 30 October 2026)
 
@@ -54,6 +56,9 @@ most 24.
   library's placeholders stay, and the ALZ module grants no rights on zones; the run after the platform
   publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
   that do not exist yet (met in the canary).
+- **Vending's rights:** with the bootstrap's contract (`bootstrap_contract_file`, `_generated/bootstrap.yaml`),
+  governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones and
+  Sandboxes, the groups it creates. Without the contract, no such rights are granted.
 - `contract` output: what platform and vending read, written as `_generated/governance.yaml` in their repos by `python3 -m mlz contract governance`.
 
 ## Tested

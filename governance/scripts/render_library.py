@@ -252,7 +252,8 @@ def management_groups(config: dict) -> list[dict]:
     if optional.get("local"):
         groups.insert(-2, (f"{root}-lz-local", "Local", f"{root}-landing-zones", archetype("local")))
     return [
-        {"id": gid, "display_name": name, "parent_id": parent, "exists": False, "archetypes": archetypes}
+        # The bootstrap creates the top group, so governance never needs rights at the tenant root.
+        {"id": gid, "display_name": name, "parent_id": parent, "exists": gid == root, "archetypes": archetypes}
         for gid, name, parent, archetypes in groups
     ]
 

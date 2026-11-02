@@ -25,6 +25,24 @@ locals {
     private_dns_zone_region              = jsonencode({ value = local.platform.private_dns.region })
   }
 
+  # Vending's rights on the groups landing zone subscriptions go into, for its pipeline identities from
+  # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them.
+  bootstrap = var.bootstrap_contract_file == null ? null : yamldecode(file(var.bootstrap_contract_file))
+  vending_rights = local.bootstrap == null ? {} : merge([
+    for group in ["landing-zones", "sandboxes"] : {
+      "vending-apply/${group}" = {
+        scope     = "/providers/Microsoft.Management/managementGroups/${local.config.root_id}-${group}"
+        role      = "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635" # Owner
+        principal = local.bootstrap.identities.vending.apply.principal_id
+      }
+      "vending-plan/${group}" = {
+        scope     = "/providers/Microsoft.Management/managementGroups/${local.config.root_id}-${group}"
+        role      = "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7" # Reader
+        principal = local.bootstrap.identities.vending.plan.principal_id
+      }
+    }
+  ]...)
+
   # Platform subscriptions into their management groups. Security only when its group exists.
   placement = {
     for role, id in local.subscriptions : role => {
@@ -105,4 +123,22 @@ module "alz" {
   ]
 
   subscription_placement = local.placement
+}
+
+resource "azapi_resource" "vending_rights" {
+  for_each = local.vending_rights
+
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/governance/${each.key}")
+  parent_id = each.value.scope
+  body = {
+    properties = {
+      roleDefinitionId = each.value.role
+      principalId      = each.value.principal
+      principalType    = "ServicePrincipal"
+      description      = "mlz-core governance: ${each.key}"
+    }
+  }
+  # The groups come from the ALZ module.
+  depends_on = [module.alz]
 }
