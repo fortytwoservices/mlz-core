@@ -129,7 +129,7 @@ resource "azapi_resource" "vending_rights" {
   for_each = local.vending_rights
 
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "mlz-core/${local.config.root_id}/governance/${each.key}")
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/governance/${each.key}/${each.value.principal}")
   parent_id = each.value.scope
   body = {
     properties = {

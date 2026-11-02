@@ -56,8 +56,12 @@ Contributor on its subscription, for its workload repo.
 The repository variables are IDs and names, never secrets: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
 (management), `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT` and `TFSTATE_CONTAINER`. `AZURE_CLIENT_ID` is
 the plan identity for the repo and the apply identity inside its environment, so a workflow always signs
-in as the identity its job is trusted for. Plans run with `-lock=false`, because the plan identities can
-only read the state.
+in as the identity its job is trusted for.
+
+The plan identities can only read the state, and Terraform's Azure backend writes an empty state the first
+time it meets a new key (a new landing zone, a role's first run), even with `-lock=false`. So a plan job
+downloads a copy of its state, when there is one, and plans against that copy with a local backend; only
+the apply job, in its environment, uses the backend itself.
 
 ## Handing a new subscription to vending
 
@@ -101,6 +105,16 @@ terraform init -migrate-state -backend-config=backend.hcl
 terraform output oidc_subjects
 gh api repos/<organization>/<repository>/actions/oidc/customization/sub   # sub_claim_prefix, per repo
 terraform output -json contract | PYTHONPATH=../../tools python3 -m mlz contract bootstrap --out $GOV/_generated/bootstrap.yaml
+```
+
+A governance deployment applied before the bootstrap existed created the top group itself. Hand the
+group over before its next run, or governance plans to delete it (and Azure refuses, since it holds the
+rest of the tree):
+
+```sh
+terraform -chdir=governance/terraform state rm 'module.alz.azapi_resource.management_groups_level_0["<root>"]'
+terraform -chdir=bootstrap/terraform import -var customer_file=$GOV/customer.yaml -var bootstrap_file=$GOV/bootstrap.yaml \
+  azapi_resource.top_group /providers/Microsoft.Management/managementGroups/<root>
 ```
 
 The subjects use GitHub's immutable form, `repo:<organization>@<id>/<repository>@<id>`, which keeps a

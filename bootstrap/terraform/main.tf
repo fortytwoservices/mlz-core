@@ -227,8 +227,9 @@ resource "azapi_resource" "hub_peering" {
 resource "azapi_resource" "role_assignment" {
   for_each = local.role_assignments
 
-  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "mlz-core/${local.root}/bootstrap/${each.key}")
+  type = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  # Azure cannot change an assignment's principal, so a new principal makes a new assignment.
+  name      = uuidv5("url", "mlz-core/${local.root}/bootstrap/${each.key}/${azapi_resource.identity[each.value.identity].output.properties.principalId}")
   parent_id = each.value.scope
   body = {
     properties = {
@@ -249,7 +250,7 @@ resource "azapi_resource" "state_operator" {
   for_each = coalesce(try(local.settings.state_operators, null), {})
 
   type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "mlz-core/${local.root}/state-operator/${each.key}")
+  name      = uuidv5("url", "mlz-core/${local.root}/state-operator/${each.key}/${each.value}")
   parent_id = azapi_resource.state.id
   body = {
     properties = {
@@ -264,7 +265,8 @@ resource "azapi_resource" "state_operator" {
 # GitHub: the repos, the people who approve applies, and the settings the workflows read.
 
 data "github_organization" "customer" {
-  name = local.github.organization
+  name         = local.github.organization
+  summary_only = true # only its ID; a token with admin rights on the three repos is enough
 }
 
 data "github_repository" "role" {
@@ -291,6 +293,13 @@ resource "github_repository_environment" "apply" {
   deployment_branch_policy {
     protected_branches     = false
     custom_branch_policies = true
+  }
+
+  lifecycle {
+    precondition {
+      condition     = length(local.github.reviewers) > 0
+      error_message = "github.reviewers in bootstrap.yaml is empty: every apply needs someone to approve it."
+    }
   }
 }
 
