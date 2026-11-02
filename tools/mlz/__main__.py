@@ -2,6 +2,7 @@
 
     python3 -m mlz platform --repo <mlz-platform> --out <config.json>
     python3 -m mlz allocate --repo <mlz-vending>
+    python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
 
@@ -24,8 +25,6 @@ from . import contract, platform, vending
 from .files import read_yaml
 from .merge import ConfigError
 
-IP_PLAN_HEADER = "# Every landing zone's address range. Written by the IP allocator: do not edit.\n# A range never moves once given; removing a landing zone frees it.\n\n"
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(prog="mlz", description="Customer YAML in, one checked JSON file per role out.")
@@ -34,9 +33,12 @@ def main() -> int:
     p.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     p.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     p.add_argument("--out", type=Path, required=True, help="where to write the root's config (JSON)")
-    a = roles.add_parser("allocate", help="give new landing zones an address range in _generated/ip-plan.yaml")
+    a = roles.add_parser("allocate", help="give new landing zones and subnets their blocks in _generated/ip-plan.yaml")
     a.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     a.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
+    r = roles.add_parser("release", help="free a removed landing zone's range, once it is destroyed")
+    r.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
+    r.add_argument("key", help="the landing zone's key, <workload>-<env>")
     v = roles.add_parser("vending", help="landing-zones/ into one config per landing zone")
     v.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     v.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
@@ -62,13 +64,15 @@ def main() -> int:
             args.out.write_text(json.dumps(config, indent=2) + "\n")
             print(f"mlz platform: wrote {args.out}")
         elif args.role == "allocate":
-            new = vending.allocate(args.repo, published("platform"))
-            plan_file = args.repo / vending.IP_PLAN
-            if new:
-                plan_file.parent.mkdir(parents=True, exist_ok=True)
-                existing = plan_file.read_text() if plan_file.exists() else IP_PLAN_HEADER
-                plan_file.write_text(existing + "".join(f"{key}: {space}\n" for key, space in new.items()))
-            print(f"mlz allocate: {len(new)} new range(s)" + "".join(f"\n  {k}: {v}" for k, v in new.items()))
+            plan, changes, retired = vending.allocate(args.repo, published("platform"))
+            write_plan(args.repo, vending.render_plan(plan, retired))
+            print("mlz allocate: " + (f"{len(changes)} change(s)" if changes else "nothing new") + "".join(f"\n  {c}" for c in changes))
+            for key in retired:
+                print(f"mlz allocate: {key} was removed but keeps its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")
+        elif args.role == "release":
+            plan, retired = vending.release(args.repo, args.key)
+            write_plan(args.repo, vending.render_plan(plan, retired))
+            print(f"mlz release: freed {args.key}'s range")
         else:
             configs = vending.build(args.repo, published("governance"), published("platform"))
             args.out.mkdir(parents=True, exist_ok=True)
@@ -79,6 +83,13 @@ def main() -> int:
         print(f"mlz {args.role}: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def write_plan(repo: Path, text: str) -> None:
+    path = repo / vending.IP_PLAN
+    if not path.exists() or path.read_text() != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
 
 
 if __name__ == "__main__":

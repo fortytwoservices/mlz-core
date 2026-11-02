@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from mlz.files import read_yaml
 from mlz.merge import ConfigError
-from mlz.vending import allocate, build
+from mlz.vending import IP_PLAN, allocate, build, release, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -51,11 +52,22 @@ class VendingTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def plan(self, entries: dict) -> None:
-        self.write("_generated/ip-plan.yaml", "".join(f"{k}: {v}\n" for k, v in entries.items()))
+    def allocate(self, platform: dict = PLATFORM) -> list[str]:
+        """Runs the allocator and writes its plan, as `python3 -m mlz allocate` does."""
+        plan, changes, retired = allocate(self.repo, platform)
+        self.write(IP_PLAN, render_plan(plan, retired))
+        return changes
+
+    def plan(self) -> dict:
+        return read_yaml(self.repo / IP_PLAN)
+
+    def problems(self, function, *args) -> str:
+        with self.assertRaises(ConfigError) as caught:
+            function(self.repo, *args)
+        return str(caught.exception)
 
     def test_the_four_layers_merge_and_the_key_names_the_landing_zone(self):
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
+        self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         prod = configs["payments-prod"]
         self.assertEqual(sorted(configs), ["payments-dev", "payments-prod"])
@@ -67,68 +79,188 @@ class VendingTest(unittest.TestCase):
             "Owner": "payments@demo.example", "CostCenter": "4711", "Environment": "prod",
             "Workload": "payments", "ManagedBy": "mlz-core",
         })
-        self.assertEqual(prod["network"]["subnets"], {"default": "10.100.4.0/26"})
+        self.assertEqual(prod["network"]["address_space"], "10.100.5.0/24")
+        self.assertEqual(prod["network"]["subnets"], {"default": "10.100.5.0/26"})
         self.assertEqual(prod["network"]["dns_servers"], ["10.100.0.4"])
         self.assertEqual(prod["network"]["routes"], {"default": {
             "name": "default", "address_prefix": "0.0.0.0/0",
             "next_hop_type": "VirtualAppliance", "next_hop_in_ip_address": "10.100.0.4",
         }})
+        self.assertIsNone(prod["github"])
+
+    def test_the_ip_plan_reads_as_the_network_plan(self):
+        self.allocate()
+        text = (self.repo / IP_PLAN).read_text()
+        self.assertTrue(text.startswith("# Every landing zone's network"))
+        self.assertIn(
+            "payments-dev:\n  range: 10.100.4.0/24\n  subnets:\n    default: 10.100.4.0/26\n\n"
+            "payments-prod:\n  range: 10.100.5.0/24\n",
+            text,
+        )
+        self.assertEqual(self.allocate(), [])  # a second run changes nothing
+        self.assertEqual((self.repo / IP_PLAN).read_text(), text)
 
     def test_governance_decides_the_archetypes_and_the_required_tags(self):
-        governance = {**GOVERNANCE, "required_tags": ["Owner", "CostCenter", "BusinessUnit"]}
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, governance, PLATFORM)
-        self.assertIn("governance requires the BusinessUnit tag", str(caught.exception))
+        governance = {**GOVERNANCE, "required_tags": ["Owner", "CostCenter", "Environment", "BusinessUnit"]}
+        self.allocate()
+        message = self.problems(build, governance, PLATFORM)
+        self.assertIn("governance requires the BusinessUnit tag", message)
+        self.assertNotIn("Environment tag", message)  # mlz-core sets it
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
         configs = build(self.repo, governance, PLATFORM)
         self.assertEqual(configs["payments-prod"]["tags"]["BusinessUnit"], "Finance")
 
+    def test_tags_mlz_core_sets_cannot_be_overridden(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  Owner: someone@demo.example\n  Environment: production\n")
+        self.allocate()
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("tags.Owner comes from owner", message)
+        self.assertIn("tags.Environment is set from the file name", message)
+
     def test_subnets_are_carved_largest_first(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    app: 25\n    data: 26\n    web: 26\n")
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
+        self.allocate()
         subnets = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["network"]["subnets"]
-        self.assertEqual(subnets, {"app": "10.100.4.0/25", "data": "10.100.4.128/26", "web": "10.100.4.192/26"})
+        self.assertEqual(subnets, {"app": "10.100.5.0/25", "data": "10.100.5.128/26", "web": "10.100.5.192/26"})
 
-    def test_the_allocator_skips_the_hub_and_never_moves_a_given_range(self):
-        self.plan({"payments-prod": "10.100.4.0/24"})
-        self.assertEqual(allocate(self.repo, PLATFORM), {"payments-dev": "10.100.5.0/24"})
-        self.plan({})
-        self.assertEqual(allocate(self.repo, PLATFORM), {"payments-dev": "10.100.4.0/24", "payments-prod": "10.100.5.0/24"})
+    def test_a_new_subnet_never_moves_the_ones_already_given(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n")
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 25\n")
+        self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.5.128/25"])
+        subnets = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["network"]["subnets"]
+        self.assertEqual(subnets, {"web": "10.100.5.0/26", "app": "10.100.5.128/25"})
+
+    def test_a_removed_subnet_is_freed_but_not_given_out_in_the_same_run(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    data: 26\n")
+        self.assertEqual(self.allocate(), ["payments-prod: freed subnet app 10.100.5.0/26", "payments-prod: subnet data 10.100.5.128/26"])
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    data: 26\n    cache: 26\n")
+        self.assertEqual(self.allocate(), ["payments-prod: subnet cache 10.100.5.0/26"])
+
+    def test_a_subnet_or_range_never_changes_size(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 23\n  subnets:\n    default: 27\n")
+        message = self.problems(allocate, PLATFORM)
+        self.assertIn("payments-prod: network.size is 23, but its range 10.100.5.0/24 was given as a /24", message)
+        self.assertIn("subnet default is a /27 here but was given as 10.100.5.0/26", message)
+        self.assertIn("a range never changes size", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_subnets_must_be_valid_and_fit(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 26\n  subnets:\n    a: 30\n    b: '26'\n    c: 25\n    D: 27\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "network:\n  size: 27\n  subnets:\n    a: 28\n    b: 28\n    c: 28\n")
+        message = self.problems(allocate, PLATFORM)
+        self.assertIn("network.subnets.a is a prefix length up to 29", message)
+        self.assertIn("network.subnets.b is a prefix length up to 29", message)
+        self.assertIn("network.subnets.c is a /25, larger than the landing zone's /26", message)
+        self.assertIn("subnet name 'D' is lower-case", message)
+        self.assertIn("landing-zones/payments/dev: the subnets need more addresses than a /27 has", message)
+        self.assertFalse((self.repo / IP_PLAN).exists())  # nothing is written when anything is wrong
+
+    def test_the_default_subnet_fits_a_small_range(self):
+        self.write("landing-zones/payments/dev.yaml", DEV + "network:\n  size: 28\n")
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["network"]["subnets"], {"default": "10.100.4.0/28"})
+
+    def test_the_allocator_skips_the_hub_and_pools_too_small(self):
+        platform = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "landing_zone_ranges": ["10.100.0.0/25", "10.100.0.0/16"]}}}
+        self.assertEqual(self.allocate(platform), [
+            "payments-dev: range 10.100.4.0/24", "payments-dev: subnet default 10.100.4.0/26",
+            "payments-prod: range 10.100.5.0/24", "payments-prod: subnet default 10.100.5.0/26",
+        ])
+
+    def test_kept_ranges_are_checked_against_the_platform_as_it_is_now(self):
+        self.allocate()
+        moved = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "hub_range": ["10.100.4.0/22"], "landing_zone_ranges": ["10.100.5.0/24", "10.100.8.0/21"]}}}
+        message = self.problems(allocate, moved)
+        self.assertIn("payments-dev's range 10.100.4.0/24 overlaps the hub range 10.100.4.0/22", message)
+        self.assertIn("payments-dev: its range 10.100.4.0/24 is outside norwayeast's landing zone ranges", message)
+        self.assertNotIn("payments-prod: its range", message)
+        self.assertIn("overlaps the hub range", self.problems(build, GOVERNANCE, moved))
+
+    def test_a_removed_landing_zone_keeps_its_range_until_released(self):
+        self.allocate()
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.write("landing-zones/website/_workload.yaml", WORKLOAD.replace("Payments", "Website"))
+        self.write("landing-zones/website/prod.yaml", DEV)
+        self.allocate()
+        self.assertEqual(self.plan()["website-prod"]["range"], "10.100.6.0/24")  # not dev's 10.100.4.0/24
+        self.assertIn("# Removed from landing-zones/", (self.repo / IP_PLAN).read_text())
+        self.assertEqual(sorted(build(self.repo, GOVERNANCE, PLATFORM)), ["payments-prod", "website-prod"])
+        self.assertIn("payments-prod is still in landing-zones/payments/prod", self.problems(release, "payments-prod"))
+        plan, retired = release(self.repo, "payments-dev")
+        self.assertEqual((sorted(plan), retired), (["payments-prod", "website-prod"], []))
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
-        self.plan({"payments-prod": "10.100.4.0/24"})
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, GOVERNANCE, PLATFORM)
-        self.assertIn("payments-dev: no address range yet", str(caught.exception))
+        self.allocate()
+        self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.assertIn("payments-test: no address range yet", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_subnets_not_yet_allocated_are_refused(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    app: 26\n")
+        self.assertIn("payments-prod: its subnets in _generated/ip-plan.yaml are not the ones asked for", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_two_paths_with_the_same_key_are_refused(self):
+        self.write("landing-zones/payments-api/prod.yaml", PROD)
+        self.write("landing-zones/payments/api-prod.yaml", DEV)
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/api-prod and landing-zones/payments-api/prod are both the landing zone payments-api-prod", message)
 
     def test_every_problem_is_listed(self):
+        self.allocate()
         self.write("landing-zones/payments/prod.yaml", "subscription: 11111111-1111-1111-1111-111111111111\nlocation: westeurope\narchetyp: corp\nnetwork:\n  address_space: 10.0.0.0/24\n")
-        self.write("landing-zones/payments/dev.yaml", "subscription: not-a-sub\n")
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, GOVERNANCE, PLATFORM)
-        message = str(caught.exception)
+        self.write("landing-zones/payments/dev.yaml", "subscription: not-a-sub\nbudget:\n  montly: 500\n")
+        message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("'archetyp' is not a landing zone setting", message)
         self.assertIn("subscription 11111111-1111-1111-1111-111111111111 is a platform subscription", message)
         self.assertIn("location westeurope is not one of the allowed regions", message)
         self.assertIn("network.address_space is written by the IP allocator", message)
         self.assertIn("payments/dev: subscription must be a subscription ID", message)
+        self.assertIn("payments/dev: budget.montly is not a setting; use contacts, monthly", message)
+
+    def test_settings_of_the_wrong_kind_are_reported_not_crashed_on(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD.split("budget")[0] + "budget: 500\nnetwork: big\ntags: [a]\ngithub: payments\nlocation: [norwayeast]\n")
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("budget is a group of settings (contacts, monthly), not 500", message)
+        self.assertIn("network is a group of settings (size, subnets), not 'big'", message)
+        self.assertIn("tags maps each extra tag to its value", message)
+        self.assertIn("github is a group of settings (organization, repo), not 'payments'", message)
+        self.assertIn("location is one value", message)
+        self.assertIn("location ['norwayeast'] has no hub", self.problems(allocate, PLATFORM))
+
+    def test_a_repo_needs_an_organization(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n")
+        self.allocate()
+        self.assertIn("github.repo needs github.organization", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra"})
+        self.assertIsNone(configs["payments-dev"]["github"])
+
+    def test_budget_alerts_go_to_the_owner_without_contacts(self):
+        self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["budget"]["contacts"], ["payments@demo.example"])
 
     def test_a_subscription_used_twice_is_refused(self):
         self.write("landing-zones/payments/dev.yaml", PROD)
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, GOVERNANCE, PLATFORM)
-        self.assertIn("is used by more than one landing zone", str(caught.exception))
+        self.allocate()
+        self.assertIn("is used by more than one landing zone", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_a_landing_zone_split_into_chunks_reads_the_same(self):
-        self.plan({"payments-prod": "10.100.4.0/24", "payments-dev": "10.100.5.0/24"})
+        self.allocate()
         whole = build(self.repo, GOVERNANCE, PLATFORM)
         (self.repo / "landing-zones/payments/prod.yaml").unlink()
         self.write("landing-zones/payments/prod/subscription.yaml", "subscription: 33333333-3333-3333-3333-333333333333\n")
         self.write("landing-zones/payments/prod/budget.yaml", "budget:\n  monthly: 2000\n")
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM), whole)
+
+    def test_an_ip_plan_not_written_by_the_allocator_is_refused(self):
+        self.write(IP_PLAN, "payments-prod: 10.100.4.0/24\n")
+        self.assertIn("payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
 
 
 if __name__ == "__main__":

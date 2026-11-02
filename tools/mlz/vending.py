@@ -8,25 +8,38 @@ Each landing zone is four layers, each saying only what differs from the one abo
   landing-zones/<workload>/<env>.yaml       one landing zone: one subscription, one network, one state
 
 Any of them can be a folder of chunks instead of one file. The landing zone's key is <workload>-<env>.
-Address ranges are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml.
+Address ranges and subnets are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml,
+and nothing it has given ever moves.
 """
 
 from __future__ import annotations
 
-import ipaddress
 import re
+from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
 from .files import read_setting, setting_names
 from .merge import ConfigError, layer
+from .yamlout import dump
 
-# Tags filled from a landing zone's own settings; any other required tag comes from its `tags`.
+# Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
+AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
 KEYS = {"name", "owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
+SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+GITHUB_ORGANIZATION = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
+GITHUB_REPO = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+DEFAULT_SIZE = 24
 IP_PLAN = "_generated/ip-plan.yaml"
+IP_PLAN_HEADER = (
+    "Every landing zone's network: its address range and subnets.\n"
+    "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
+    "Nothing here ever moves. A removed subnet is freed; a removed landing zone keeps its range until it\n"
+    "is destroyed and released (python3 -m mlz release)."
+)
 
 
 def landing_zones(repo: Path) -> dict[str, dict]:
@@ -42,76 +55,260 @@ def landing_zones(repo: Path) -> dict[str, dict]:
             raise ConfigError(f"{folder}.yaml: a landing zone lives in a folder, landing-zones/<workload>/<env>.yaml.")
         workload_settings = read_setting(folder / "_workload") or {}
         for env in setting_names(folder):
+            key, where = f"{workload}-{env}", f"landing-zones/{workload}/{env}"
+            if key in found:
+                raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
             merged = layer(defaults, read_setting(root / "_defaults" / env) or {})
             merged = layer(merged, workload_settings)
             merged = layer(merged, read_setting(folder / env) or {})
-            found[f"{workload}-{env}"] = {"workload": workload, "environment": env, "settings": merged}
+            found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged}
     return found
 
 
-def ip_plan(repo: Path) -> dict[str, str]:
-    plan = read_setting(repo / IP_PLAN.removesuffix(".yaml")) or {}
-    return {str(k): str(v) for k, v in plan.items()}
+def section(s: dict, name: str, where: str, problems: list[str], also: set[str] = frozenset()) -> dict:
+    """A group of settings (budget, network, github), or {} when it is not set or not valid."""
+    value = s.get(name)
+    if value is None:
+        return {}
+    known = SECTIONS[name]
+    if not isinstance(value, dict):
+        problems.append(f"{where}: {name} is a group of settings ({', '.join(sorted(known))}), not {value!r}.")
+        return {}
+    problems += [f"{where}: {name}.{k} is not a setting; use {', '.join(sorted(known))}." for k in sorted(set(value) - known - also, key=str)]
+    return value
 
 
 def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[str]) -> None:
-    s, where = lz["settings"], f"landing-zones/{lz['workload']}/{lz['environment']}"
+    """Everything but the network, which wanted_network checks."""
+    s, where = lz["settings"], lz["where"]
     if not NAME.fullmatch(lz["workload"]) or not NAME.fullmatch(lz["environment"]):
         problems.append(f"{where}: folder and file names are lower-case letters, digits and hyphens (the key {key!r} is used in names).")
-    problems += [f"{where}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS)]
+    problems += [f"{where}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
-    if s.get("owner") and not EMAIL.fullmatch(str(s["owner"])):
-        problems.append(f"{where}: owner {s['owner']!r} should be the owning team's email address.")
+    for single in ("name", "owner", "archetype", "location", "subscription"):
+        if s.get(single) is not None and not isinstance(s[single], str):
+            problems.append(f"{where}: {single} is one value, not {s[single]!r}.")
+    if s.get("cost_center") is not None and (isinstance(s["cost_center"], bool) or not isinstance(s["cost_center"], (str, int))):
+        problems.append(f"{where}: cost_center is one value, not {s['cost_center']!r}.")
+    owner, archetype, subscription, location = (s.get(k) if isinstance(s.get(k), str) else None for k in ("owner", "archetype", "subscription", "location"))
+    if owner and not EMAIL.fullmatch(owner):
+        problems.append(f"{where}: owner {owner!r} should be the owning team's email address.")
     archetypes = governance["archetypes"]
-    if s.get("archetype") and s["archetype"] not in archetypes:
-        problems.append(f"{where}: archetype {s['archetype']!r} must be one of {', '.join(archetypes)}.")
-    if s.get("subscription") and not GUID.fullmatch(str(s["subscription"]).lower()):
+    if archetype and archetype not in archetypes:
+        problems.append(f"{where}: archetype {archetype!r} must be one of {', '.join(archetypes)}.")
+    if subscription and not GUID.fullmatch(subscription.lower()):
         problems.append(f"{where}: subscription must be a subscription ID.")
-    if s.get("subscription") and str(s["subscription"]).lower() in {v.lower() for v in governance["platform_subscriptions"].values()}:
-        problems.append(f"{where}: subscription {s['subscription']} is a platform subscription.")
-    location = s.get("location")
+    if subscription and subscription.lower() in {v.lower() for v in governance["platform_subscriptions"].values()}:
+        problems.append(f"{where}: subscription {subscription} is a platform subscription.")
     if location and location not in governance["allowed_regions"]:
         problems.append(f"{where}: location {location} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
     if location and location not in platform["regions"]:
         problems.append(f"{where}: location {location} has no hub to connect to.")
-    extra = s.get("tags") or {}
+
+    tags = s.get("tags") or {}
+    if not isinstance(tags, dict):
+        problems.append(f"{where}: tags maps each extra tag to its value, for example BusinessUnit: Finance.")
+        tags = {}
+    for tag, value in tags.items():
+        if tag in TAG_SETTINGS:
+            problems.append(f"{where}: tags.{tag} comes from {TAG_SETTINGS[tag]}; set that instead.")
+        elif tag in AUTOMATIC_TAGS:
+            problems.append(f"{where}: tags.{tag} is set from {AUTOMATIC_TAGS[tag]}; remove it here.")
+        elif isinstance(value, (dict, list)) or value is None:
+            problems.append(f"{where}: tags.{tag} is one value, not {value!r}.")
     for tag in governance.get("required_tags", []):
-        if tag not in TAG_SETTINGS and tag not in extra:
+        if tag not in TAG_SETTINGS and tag not in AUTOMATIC_TAGS and tag not in tags:
             problems.append(f"{where}: governance requires the {tag} tag; set it under tags: here or in a layer above.")
-    budget = s.get("budget") or {}
-    if not isinstance(budget.get("monthly", 0), int) or budget.get("monthly", 0) < 0:
-        problems.append(f"{where}: budget.monthly must be a whole amount, for example 500.")
-    for contact in budget.get("contacts") or []:
-        if not EMAIL.fullmatch(str(contact)):
-            problems.append(f"{where}: budget contact {contact!r} is not an email address.")
-    network = s.get("network") or {}
-    if not isinstance(network.get("size", 24), int) or not 16 <= network.get("size", 24) <= 28:
-        problems.append(f"{where}: network.size is a prefix length from 16 to 28, for example 24.")
+
+    budget = section(s, "budget", where, problems)
+    monthly = budget.get("monthly")
+    if monthly is not None and (type(monthly) is not int or monthly <= 0):
+        problems.append(f"{where}: budget.monthly is a whole amount, for example 500.")
+    contacts = budget.get("contacts")
+    if contacts is not None and (not isinstance(contacts, list) or not all(isinstance(c, str) and EMAIL.fullmatch(c) for c in contacts)):
+        problems.append(f"{where}: budget.contacts is a list of email addresses, for example [team@example.com].")
+
+    github = section(s, "github", where, problems)
+    organization, repo = github.get("organization"), github.get("repo")
+    if organization is not None and not (isinstance(organization, str) and GITHUB_ORGANIZATION.fullmatch(organization)):
+        problems.append(f"{where}: github.organization {organization!r} is not a GitHub organization name.")
+    if repo is not None and not (isinstance(repo, str) and GITHUB_REPO.fullmatch(repo)):
+        problems.append(f"{where}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
+    if repo is not None and organization is None:
+        problems.append(f"{where}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
+
+
+def wanted_network(where: str, s: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
+    """The network the landing zone asks for: its prefix length and {subnet: prefix length}.
+    None when it is not valid; the problems say why."""
+    before = len(problems)
+    network = section(s, "network", where, problems, also={"address_space"})
     if "address_space" in network:
         problems.append(f"{where}: network.address_space is written by the IP allocator to {IP_PLAN}; remove it here.")
+    size = network.get("size", DEFAULT_SIZE)
+    if type(size) is not int or not 16 <= size <= 28:
+        problems.append(f"{where}: network.size is a prefix length from 16 to 28, for example 24.")
+        size = None
+    subnets = network.get("subnets")
+    if subnets is None:
+        subnets = {"default": max(26, size or DEFAULT_SIZE)}  # a quarter of a /24, or all of a smaller range
+    elif not isinstance(subnets, dict) or not subnets:
+        problems.append(f"{where}: network.subnets maps each subnet's name to its prefix length, for example app: 26.")
+        subnets = {}
+    for name, length in subnets.items():
+        if not NAME.fullmatch(str(name)):
+            problems.append(f"{where}: subnet name {name!r} is lower-case letters, digits and hyphens.")
+        if type(length) is not int or not 8 <= length <= 29:
+            problems.append(f"{where}: network.subnets.{name} is a prefix length up to 29 (Azure's smallest subnet), for example 26.")
+        elif size and length < size:
+            problems.append(f"{where}: network.subnets.{name} is a /{length}, larger than the landing zone's /{size}.")
+    if len(problems) > before:
+        return None
+    if sum(2 ** (32 - length) for length in subnets.values()) > 2 ** (32 - size):
+        problems.append(f"{where}: the subnets need more addresses than a /{size} has.")
+        return None
+    return size, subnets
 
 
-def subnets(space: ipaddress.IPv4Network, wanted: dict) -> dict[str, str]:
-    """The landing zone's subnets, carved from its range in name order: {name: prefix length}."""
-    carved, cursor = {}, int(space.network_address)
-    for name, size in sorted(wanted.items(), key=lambda item: (item[1], item[0])):
-        block = ipaddress.ip_network(f"{ipaddress.ip_address(cursor)}/{size}")
-        if block.network_address != ipaddress.ip_address(cursor) or not block.subnet_of(space):
-            raise ConfigError(f"subnets {wanted} do not fit in {space}.")
-        carved[name] = str(block)
-        cursor = int(block.broadcast_address) + 1
-    return carved
+def ip_plan(repo: Path) -> dict[str, dict]:
+    """The IP plan: {key: {range, subnets: {name: block}}}, as networks."""
+    plan = read_setting(repo / IP_PLAN.removesuffix(".yaml")) or {}
+    parsed = {}
+    for key, entry in plan.items():
+        try:
+            if not isinstance(entry, dict) or set(entry) != {"range", "subnets"} or not isinstance(entry["subnets"], dict):
+                raise ValueError
+            parsed[str(key)] = {
+                "range": IPv4Network(entry["range"]),
+                "subnets": {str(name): IPv4Network(block) for name, block in entry["subnets"].items()},
+            }
+        except (TypeError, ValueError):
+            raise ConfigError(f"{IP_PLAN}: {key} is not as the IP allocator writes it; restore the file from git.") from None
+    return parsed
+
+
+def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list[str]:
+    """What no longer holds for ranges and subnets already given. Nothing given is ever moved, so a
+    conflict is reported for a person to resolve."""
+    problems = []
+    hubs = [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
+    keys = sorted(plan)
+    for index, key in enumerate(keys):
+        given = plan[key]["range"]
+        problems += [f"{IP_PLAN}: {key}'s range {given} overlaps the hub range {h}." for h in hubs if given.overlaps(h)]
+        problems += [f"{IP_PLAN}: {key}'s range {given} overlaps {other}'s {plan[other]['range']}." for other in keys[index + 1:] if given.overlaps(plan[other]["range"])]
+        blocks = sorted(plan[key]["subnets"].items(), key=lambda item: item[1])
+        problems += [f"{IP_PLAN}: {key}'s subnet {name} {block} is outside its range {given}." for name, block in blocks if not block.subnet_of(given)]
+        problems += [f"{IP_PLAN}: {key}'s subnets {a} and {b} overlap." for (a, x), (b, y) in zip(blocks, blocks[1:]) if x.overlaps(y)]
+        if key not in zones:
+            continue
+        location = zones[key]["settings"].get("location")
+        region = platform["regions"].get(location) if isinstance(location, str) else None
+        pools = [IPv4Network(p) for p in region["landing_zone_ranges"]] if region else []
+        if region and not any(given.subnet_of(p) for p in pools):
+            problems.append(f"{key}: its range {given} is outside {location}'s landing zone ranges ({', '.join(map(str, pools))}); a range never moves.")
+        if wanted.get(key) is None:
+            continue
+        size, subnets = wanted[key]
+        if given.prefixlen != size:
+            problems.append(f"{key}: network.size is {size}, but its range {given} was given as a /{given.prefixlen}; a range never changes size.")
+        for name, block in plan[key]["subnets"].items():
+            if name in subnets and subnets[name] != block.prefixlen:
+                problems.append(f"{key}: subnet {name} is a /{subnets[name]} here but was given as {block}; a subnet never changes size, so give the new one another name.")
+    return problems
+
+
+def place(pools: list[IPv4Network], size: int, taken: list[IPv4Network]) -> IPv4Network | None:
+    """The first block of this size in the pools that overlaps nothing taken."""
+    for pool in pools:
+        if pool.prefixlen > size:
+            continue  # too small for one block
+        for block in pool.subnets(new_prefix=size):
+            if not any(block.overlaps(t) for t in taken):
+                return block
+    return None
+
+
+def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], list[str]]:
+    """The IP plan with a range for every new landing zone and a block for every new subnet: the first
+    free one, largest first. Returns (plan, what changed, landing zones removed but still holding a range).
+    Writes nothing; fails with every problem when any landing zone's network is not valid."""
+    zones, plan, problems = landing_zones(repo), ip_plan(repo), []
+    wanted = {key: wanted_network(lz["where"], lz["settings"], problems) for key, lz in zones.items()}
+    for key, lz in zones.items():
+        location = lz["settings"].get("location")
+        if not isinstance(location, str) or location not in platform["regions"]:
+            problems.append(f"{lz['where']}: location {location!r} has no hub, so it has no ranges to take from.")
+    problems += plan_problems(plan, zones, wanted, platform)
+    if problems:
+        raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
+
+    taken = [entry["range"] for entry in plan.values()]
+    taken += [IPv4Network(r) for region in platform["regions"].values() for r in region["hub_range"]]
+    result, changes = {}, []
+    for key in sorted(zones):
+        size, subnets = wanted[key]
+        entry = plan.get(key)
+        if entry is None:
+            pools = [IPv4Network(p) for p in platform["regions"][zones[key]["settings"]["location"]]["landing_zone_ranges"]]
+            block = place(pools, size, taken)
+            if block is None:
+                problems.append(f"{key}: no free /{size} left in {', '.join(map(str, pools))}.")
+                continue
+            taken.append(block)
+            entry = {"range": block, "subnets": {}}
+            changes.append(f"{key}: range {block}")
+        kept = {name: block for name, block in entry["subnets"].items() if name in subnets}
+        changes += [f"{key}: freed subnet {name} {block}" for name, block in entry["subnets"].items() if name not in subnets]
+        used = list(entry["subnets"].values())  # a freed block is not given out again in the same run
+        for name, length in sorted(((n, l) for n, l in subnets.items() if n not in kept), key=lambda item: (item[1], item[0])):
+            block = place([entry["range"]], length, used)
+            if block is None:
+                problems.append(f"{key}: no free /{length} left in {entry['range']} for subnet {name}.")
+                continue
+            used.append(block)
+            kept[name] = block
+            changes.append(f"{key}: subnet {name} {block}")
+        result[key] = {"range": entry["range"], "subnets": dict(sorted(kept.items(), key=lambda item: item[1]))}
+    if problems:
+        raise ConfigError("cannot allocate:\n  " + "\n  ".join(problems))
+    retired = sorted(set(plan) - set(zones))
+    result.update({key: plan[key] for key in retired})
+    return dict(sorted(result.items())), changes, retired
+
+
+def release(repo: Path, key: str) -> tuple[dict[str, dict], list[str]]:
+    """The IP plan without a removed landing zone's range, and the removed ones still in it. Run once
+    the landing zone is destroyed."""
+    zones, plan = landing_zones(repo), ip_plan(repo)
+    if key in zones:
+        raise ConfigError(f"{key} is still in {zones[key]['where']}; remove it and destroy it before releasing its range.")
+    if key not in plan:
+        raise ConfigError(f"{key} has no range in {IP_PLAN}.")
+    del plan[key]
+    return plan, sorted(set(plan) - set(zones))
+
+
+def render_plan(plan: dict[str, dict], retired: list[str]) -> str:
+    data = {key: {"range": str(e["range"]), "subnets": {n: str(b) for n, b in e["subnets"].items()}} for key, e in plan.items()}
+    note = "Removed from landing-zones/: its range is kept until it is destroyed and released."
+    return dump(data, IP_PLAN_HEADER, {key: note for key in retired}, spaced=True)
 
 
 def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     """Each landing zone's config, by key. Fails with every problem when anything is not valid."""
     zones, plan, problems = landing_zones(repo), ip_plan(repo), []
+    wanted = {}
     for key, lz in zones.items():
         check(key, lz, governance, platform, problems)
+        wanted[key] = wanted_network(lz["where"], lz["settings"], problems)
         if key not in plan:
             problems.append(f"{key}: no address range yet; run the IP allocator (python3 -m mlz allocate).")
+        elif wanted[key] and set(plan[key]["subnets"]) != set(wanted[key][1]):
+            problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (python3 -m mlz allocate).")
+    problems += plan_problems(plan, zones, wanted, platform)
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -121,31 +318,32 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     for key, lz in zones.items():
         s = lz["settings"]
         region = platform["regions"][s["location"]]
-        space = ipaddress.ip_network(plan[key])
+        budget, github = s.get("budget") or {}, s.get("github") or {}
         configs[key] = {
             "key": key,
             "root_id": governance["root"],
             "display_name": f"{s.get('name', lz['workload'])} ({lz['environment']})",
-            "subscription_id": str(s["subscription"]).lower(),
+            "subscription_id": s["subscription"].lower(),
             "management_group_id": governance["archetypes"][s["archetype"]],
             "location": s["location"],
             "tags": {
                 **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
-                "Owner": str(s["owner"]),
+                "Owner": s["owner"],
                 "CostCenter": str(s["cost_center"]),
                 "Environment": lz["environment"],
                 "Workload": lz["workload"],
                 "ManagedBy": "mlz-core",
             },
-            "budget": {"monthly": (s.get("budget") or {}).get("monthly"), "contacts": (s.get("budget") or {}).get("contacts", [])},
+            # Budget alerts go to the owner unless contacts are given.
+            "budget": {"monthly": budget.get("monthly"), "contacts": budget.get("contacts") or [s["owner"]]},
             "network": {
-                "address_space": str(space),
-                "subnets": subnets(space, (s.get("network") or {}).get("subnets") or {"default": 26}),
+                "address_space": str(plan[key]["range"]),
+                "subnets": {name: str(block) for name, block in plan[key]["subnets"].items()},
                 "hub_virtual_network_id": region["hub_network"],
                 "dns_servers": region["dns_servers"],
                 "routes": route_table_routes(region.get("spoke_routes") or []),
             },
-            "github": s.get("github"),
+            "github": {"organization": github["organization"], "repo": github["repo"]} if github.get("repo") else None,
         }
     return configs
 
@@ -157,35 +355,9 @@ def route_table_routes(routes: list[dict]) -> dict[str, dict]:
     for route in routes:
         via = str(route["via"])
         try:
-            ipaddress.ip_address(via)
+            ip_address(via)
             hop, address = "VirtualAppliance", via
         except ValueError:
             hop, address = via, None
         shaped[route["name"]] = {"name": route["name"], "address_prefix": route["to"], "next_hop_type": hop, "next_hop_in_ip_address": address}
     return shaped
-
-
-def allocate(repo: Path, platform: dict) -> dict[str, str]:
-    """Gives every landing zone without a range the first free block of its size, and returns the new
-    entries. Ranges never move once given; a landing zone that is removed frees its range."""
-    zones, plan = landing_zones(repo), ip_plan(repo)
-    taken = [ipaddress.ip_network(v) for v in plan.values()]
-    for region in platform["regions"].values():
-        taken += [ipaddress.ip_network(r) for r in region["hub_range"]]
-    new = {}
-    for key in sorted(k for k in zones if k not in plan):
-        s = zones[key]["settings"]
-        region = platform["regions"].get(s.get("location"))
-        if region is None:
-            raise ConfigError(f"{key}: location {s.get('location')!r} has no hub, so it has no ranges to take from.")
-        size = (s.get("network") or {}).get("size", 24)
-        block = next(
-            (b for supernet in region["landing_zone_ranges"] for b in ipaddress.ip_network(supernet).subnets(new_prefix=size)
-             if not any(b.overlaps(t) for t in taken)),
-            None,
-        )
-        if block is None:
-            raise ConfigError(f"{key}: no free /{size} left in {', '.join(region['landing_zone_ranges'])}.")
-        taken.append(block)
-        new[key] = str(block)
-    return new

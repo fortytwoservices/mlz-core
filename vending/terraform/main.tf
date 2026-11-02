@@ -5,7 +5,7 @@ locals {
 
   subscription = "/subscriptions/${local.lz.subscription_id}"
   names        = module.naming.landing_zone
-  github       = try(local.lz.github.repo, null) == null ? null : local.lz.github
+  github       = local.lz.github # {organization, repo} when the landing zone has a repo, else null
 }
 
 module "naming" {
@@ -111,9 +111,9 @@ module "vending" {
       role_assignments = {
         contributor = { definition = "Contributor" }
       }
-      federated_credentials_github = local.github == null || var.github_organization == null ? {} : {
+      federated_credentials_github = local.github == null ? {} : {
         main = {
-          organization = var.github_organization
+          organization = local.github.organization
           repository   = local.github.repo
           entity       = "branch"
           value        = "main"

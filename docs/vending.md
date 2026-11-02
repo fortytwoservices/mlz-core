@@ -32,18 +32,41 @@ budget:
   monthly: 2000
 ```
 
-The landing zone's key is its folder and file name, `payments-prod`. Settings: `name`, `owner`,
-`cost_center`, `archetype`, `location`, `subscription`, `budget` (`monthly`, `contacts`), `network`
-(`size`, a prefix length, default 24; `subnets`, name to prefix length, default `default: 26`),
-`github` (`repo`), and `tags` for extra tags. Any layer can be a folder of chunks.
+The landing zone's key is its folder and file name, `payments-prod`; two paths that make the same key
+(`payments-api/prod.yaml` and `payments/api-prod.yaml`) are refused. Settings:
+
+| Setting | What it is |
+|---|---|
+| `name`, `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
+| `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
+| `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
+| `github` | `organization` and `repo`: the landing zone's repo, whose `main` branch signs in as its deploy identity. Set the organization once in `_defaults/all.yaml`. |
+| `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. |
+
+Any layer can be a folder of chunks.
 
 ## What is worked out
 
-- **Address ranges**, by the IP allocator (`python3 -m mlz allocate`): the first free block of the landing
-  zone's size in its region's `landing_zone_ranges`, never the hub's own range. It writes one file,
-  `_generated/ip-plan.yaml`, the whole IP plan in one list; a range never moves once given. Nobody types
-  an address range, and no bot edits a file people write.
-- **Subnets**, carved from the range largest first.
+- **Address ranges and subnets**, by the IP allocator (`python3 -m mlz allocate`). A new landing zone gets
+  the first free block of its size in its region's `landing_zone_ranges`, never the hub's own range; a new
+  subnet gets the first free block in its landing zone's range, largest first. It writes one file, the
+  network plan, and nobody types an address:
+
+  ```yaml
+  # _generated/ip-plan.yaml
+  payments-prod:
+    range: 10.100.4.0/24
+    subnets:
+      default: 10.100.4.0/26
+  ```
+
+  **Nothing in it ever moves.** Adding a subnet leaves the others where they are; a range or subnet never
+  changes size (give a bigger subnet a new name, then remove the old one). A removed subnet is freed, but
+  not given out again in the same run. A removed landing zone keeps its range, marked in the file, until it
+  is destroyed and someone runs `python3 -m mlz release --repo . <key>`. Every run checks what was given
+  against the platform as it is now (inside the region's ranges, clear of every hub and every other
+  landing zone) and reports a conflict rather than moving anything. It writes nothing when anything is
+  wrong.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
 - **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.

@@ -30,14 +30,15 @@ def scalar(value) -> str:
     return json.dumps(text)  # a double-quoted YAML scalar uses JSON's escapes
 
 
-def dump(data: dict, header: str = "", comments: dict[str, str] | None = None) -> str:
-    """The mapping as YAML, after the header. `comments` puts a comment line above top-level keys."""
+def dump(data: dict, header: str = "", comments: dict[str, str] | None = None, spaced: bool = False) -> str:
+    """The mapping as YAML, after the header. `comments` puts a comment line above top-level keys;
+    `spaced` puts a blank line between all of them."""
     lines = [f"# {line}" if line else "#" for line in header.splitlines()]
     if lines:
         lines.append("")
     for index, (key, value) in enumerate(data.items()):
         note = (comments or {}).get(key)
-        if note and index > 0:
+        if (note or spaced) and index > 0:
             lines.append("")
         if note:
             lines += [f"# {line}" for line in note.splitlines()]
