@@ -95,6 +95,14 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("firewall 'Gold' must be one of Standard, Premium, Basic", message)
         self.assertIn("bastion must be true or false", message)
 
+    def test_reserved_ranges_are_published_and_kept_clear_of_hubs(self):
+        self.hub("norwayeast", HUB + "reserved: [10.100.200.0/22, 192.168.0.0/16]\n")
+        self.assertEqual(build(self.repo, GOVERNANCE)["hubs"]["norwayeast"]["reserved"], ["10.100.200.0/22", "192.168.0.0/16"])
+        self.hub("norwayeast", HUB + "reserved: [10.100.0.0/24]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        self.assertIn("hubs/norwayeast: address space 10.100.0.0/22 overlaps 10.100.0.0/24, which hubs/norwayeast reserves", str(caught.exception))
+
     def test_landing_zone_ranges_belong_to_one_region(self):
         self.hub("norwayeast", HUB)
         self.hub("swedencentral", "address_space: 10.200.0.0/22\nlanding_zone_ranges: [10.100.0.0/24, 10.200.0.0/16]\n")

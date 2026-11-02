@@ -1,7 +1,7 @@
 """mlz-core's loader from the command line.
 
     python3 -m mlz platform --repo <mlz-platform> --out <config.json>
-    python3 -m mlz allocate --repo <mlz-vending>
+    python3 -m mlz allocate --repo <mlz-vending> [--check]
     python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
@@ -37,6 +37,7 @@ def main() -> int:
     a = roles.add_parser("allocate", help="give new landing zones and subnets their blocks in _generated/ip-plan.yaml")
     a.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     a.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
+    a.add_argument("--check", action="store_true", help="write nothing; fail if the IP plan is not what allocate would write (for CI)")
     r = roles.add_parser("release", help="free what a landing zone no longer uses, once it is destroyed")
     r.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     r.add_argument("key", help="the landing zone's key, <workload>-<env>")
@@ -66,7 +67,17 @@ def main() -> int:
             print(f"mlz platform: wrote {args.out}")
         elif args.role == "allocate":
             plan, changes, retired = vending.allocate(args.repo, published("platform"))
-            write_plan(args.repo, vending.render_plan(plan, retired))
+            text = vending.render_plan(plan, retired)
+            if args.check:
+                path = args.repo / vending.IP_PLAN
+                if (path.read_text() if path.exists() else "") != text:
+                    raise ConfigError(
+                        f"{vending.IP_PLAN} is not up to date; run python3 -m mlz allocate and commit it."
+                        + "".join(f"\n  {c}" for c in changes)
+                    )
+                print(f"mlz allocate: {vending.IP_PLAN} is up to date")
+                return 0
+            write_plan(args.repo, text)
             print("mlz allocate: " + (f"{len(changes)} change(s)" if changes else "nothing new") + "".join(f"\n  {c}" for c in changes))
             for key in retired:
                 print(f"mlz allocate: {key} was removed but holds its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")

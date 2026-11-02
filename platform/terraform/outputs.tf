@@ -27,6 +27,7 @@ output "contract" {
         hub_network         = details.hub_virtual_network_id
         hub_range           = local.config.hubs[region].address_space
         landing_zone_ranges = details.routing_supernet
+        reserved            = local.config.hubs[region].reserved
         firewall            = details.firewall_private_ip
         dns_servers         = details.dns_servers
         spoke_routes        = local.spoke_routes[region]

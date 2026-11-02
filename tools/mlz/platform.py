@@ -16,11 +16,11 @@ from __future__ import annotations
 import ipaddress
 from pathlib import Path
 
-from .files import read_setting, setting_names
+from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError
 
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
-HUB_KEYS = {"address_space", "landing_zone_ranges", "firewall", "dns_resolver", "bastion"}
+HUB_KEYS = {"address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion"}
 REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
 # Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
 AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
@@ -73,6 +73,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     ranges = cidrs(settings.get("landing_zone_ranges", []), f"{where}: landing_zone_ranges", problems)
     if not ranges:
         problems.append(f"{where}: landing_zone_ranges is required: where landing zone networks get their ranges.")
+    reserved = cidrs(settings.get("reserved", []), f"{where}: reserved", problems)
     tier = settings.get("firewall", "Standard")
     if tier not in FIREWALL_TIERS:
         problems.append(f"{where}: firewall {tier!r} must be one of {', '.join(FIREWALL_TIERS)}.")
@@ -100,6 +101,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
         "location": region,
         "address_space": [str(space)],
         "landing_zone_ranges": [str(r) for r in ranges],
+        "reserved": [str(r) for r in reserved],
         "firewall": {
             "sku_tier": tier,
             "subnet_address_prefix": layout["firewall"],
@@ -120,6 +122,7 @@ def build(repo: Path, governance: dict) -> dict:
     regions = setting_names(repo / "hubs")
     if not regions:
         raise ConfigError(f"{repo / 'hubs'}: no hubs; add hubs/<region>.yaml.")
+    preload(yaml_files(repo / "hubs"))
     hubs = {region: hub(region, read_setting(repo / "hubs" / region) or {}, problems) for region in regions}
 
     primary = governance["primary_region"]
@@ -130,6 +133,11 @@ def build(repo: Path, governance: dict) -> dict:
         for b, net_b in spaces[i + 1:]:
             if net_a.overlaps(net_b):
                 problems.append(f"hubs/{a} and hubs/{b}: address spaces {net_a} and {net_b} overlap.")
+    reserved = [(r, ipaddress.ip_network(n)) for r, h in hubs.items() if h for n in h["reserved"]]
+    problems += [
+        f"hubs/{a}: address space {net} overlaps {n}, which hubs/{b} reserves."
+        for a, net in spaces for b, n in reserved if net.overlaps(n)
+    ]
     # Each landing zone range belongs to one region: its firewall routes it, and the allocator fills it.
     pools = [(r, ipaddress.ip_network(p)) for r, h in hubs.items() if h for p in h["landing_zone_ranges"]]
     for i, (a, net_a) in enumerate(pools):

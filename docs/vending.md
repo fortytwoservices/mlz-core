@@ -47,8 +47,9 @@ Any layer can be a folder of chunks.
 ## What is worked out
 
 - **Address ranges and subnets**, by the IP allocator (`python3 -m mlz allocate`). A new landing zone gets
-  the first free block of its size in its region's `landing_zone_ranges`, never the hub's own range; a new
-  subnet gets the first free block in its landing zone's range, largest first. It writes one file, the
+  the first free block of its size in its region's `landing_zone_ranges`, never a hub's own range or a
+  range the platform reserves; a new subnet gets the first free block in its landing zone's range,
+  largest first. It writes one file, the
   network plan, and nobody types an address:
 
   ```yaml
@@ -67,6 +68,11 @@ Any layer can be a folder of chunks.
   the same size gets its block back. Every run checks what was given against the platform as it is now
   (inside the region's ranges, clear of every hub and every other landing zone) and reports a conflict
   rather than moving anything. It writes nothing when anything is wrong.
+
+  `python3 -m mlz allocate --check` writes nothing and fails when the plan in the repo is not what the
+  allocator would write. Run on the merge queue, it stops two pull requests that each took the same
+  free block, or one that forgot to run the allocator, before either reaches `main`. 500 landing zones
+  take about a second.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
 - **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.
