@@ -4,6 +4,12 @@ variable "root_id" {
   nullable    = false
 }
 
+variable "landing_zone" {
+  type        = string
+  default     = null
+  description = "(Optional) A landing zone's key (`<workload>-<env>`), for the names in its subscription."
+}
+
 variable "region" {
   type        = string
   description = "Azure region of the named resources, for example `norwayeast`."

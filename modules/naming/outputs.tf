@@ -17,6 +17,21 @@ output "management" {
   }
 }
 
+output "landing_zone" {
+  description = "Names in a landing zone's subscription; null without `landing_zone`."
+  value = var.landing_zone == null ? null : {
+    network_resource_group  = "rg-${var.landing_zone}-network-${local.region}"
+    identity_resource_group = "rg-${var.landing_zone}-identity-${local.region}"
+    virtual_network         = "vnet-${var.landing_zone}-${local.region}"
+    route_table             = "rt-${var.landing_zone}-${local.region}"
+    deploy_identity         = "id-${var.landing_zone}-deploy-${local.region}"
+    budget                  = "budget-${var.landing_zone}"
+    # Per subnet: format(subnet, "<subnet name>"), format(network_security_group, "<subnet name>").
+    subnet                 = "snet-%s"
+    network_security_group = "nsg-${var.landing_zone}-%s-${local.region}"
+  }
+}
+
 output "connectivity" {
   description = "Names in the connectivity subscription that other roles refer to before it is applied."
   value = {
