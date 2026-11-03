@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.3](https://github.com/fortytwoservices/mlz-core/compare/v0.1.2...v0.1.3) (2026-11-03)
+
+
+### Features
+
+* **bootstrap:** one-time setup of a customer's pipelines ([#8](https://github.com/fortytwoservices/mlz-core/issues/8)) ([f8dfa33](https://github.com/fortytwoservices/mlz-core/commit/f8dfa3372ef1e8c64593b9900a4124f9a20b717f))
+
+
+### Bug Fixes
+
+* **bootstrap:** set the existing blob service, write role IDs as Azure stores them ([#10](https://github.com/fortytwoservices/mlz-core/issues/10)) ([765a7e7](https://github.com/fortytwoservices/mlz-core/commit/765a7e79353846f34675278879247de7ed1a5c83))
+
 ## [0.1.2](https://github.com/fortytwoservices/mlz-core/compare/v0.1.1...v0.1.2) (2026-11-02)
 
 
