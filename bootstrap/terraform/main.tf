@@ -25,12 +25,15 @@ locals {
     identity        = { for key, _ in local.identities : key => "id-${local.root}-${key}-${module.naming.region_code}" }
   }
 
+  # Built-in roles by ID. Azure stores a role's ID in the form of the assignment's scope: the
+  # subscription's own form inside a subscription, the bare form on a management group. role_id below
+  # writes it that way, so plans stay clean.
   builtin = {
-    owner                    = "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
-    contributor              = "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c"
-    reader                   = "/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
-    storage_blob_contributor = "/providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-2d11-453d-a403-e96b0029c9fe"
-    storage_blob_reader      = "/providers/Microsoft.Authorization/roleDefinitions/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
+    owner                    = "8e3af657-a8ff-443c-a75c-2fe8c4bcb635"
+    contributor              = "b24988ac-6180-42a0-ab88-20f7382dd24c"
+    reader                   = "acdd72a7-3385-48ef-bd42-f606fba81ae7"
+    storage_blob_contributor = "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+    storage_blob_reader      = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   }
 
   # Every right the bootstrap grants. Vending's rights on Landing Zones and Sandboxes come from governance,
@@ -128,7 +131,8 @@ resource "azapi_resource" "state" {
   depends_on = [azapi_resource_action.register]
 }
 
-resource "azapi_resource" "blob_service" {
+# Every storage account comes with its blob service, so this sets it rather than creating it.
+resource "azapi_update_resource" "blob_service" {
   type      = "Microsoft.Storage/storageAccounts/blobServices@2024-01-01"
   name      = "default"
   parent_id = azapi_resource.state.id
@@ -147,7 +151,7 @@ resource "azapi_resource" "container" {
 
   type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01"
   name      = each.key
-  parent_id = azapi_resource.blob_service.id
+  parent_id = azapi_update_resource.blob_service.id
   body      = { properties = { publicAccess = "None" } }
 }
 
@@ -233,10 +237,14 @@ resource "azapi_resource" "role_assignment" {
   parent_id = each.value.scope
   body = {
     properties = {
-      roleDefinitionId = each.value.role
-      principalId      = azapi_resource.identity[each.value.identity].output.properties.principalId
-      principalType    = "ServicePrincipal"
-      description      = "mlz-core bootstrap: ${each.key}"
+      roleDefinitionId = startswith(each.value.role, "/") ? each.value.role : (
+        startswith(each.value.scope, "/subscriptions/")
+        ? "${join("/", slice(split("/", each.value.scope), 0, 3))}/providers/Microsoft.Authorization/roleDefinitions/${each.value.role}"
+        : "/providers/Microsoft.Authorization/roleDefinitions/${each.value.role}"
+      )
+      principalId   = azapi_resource.identity[each.value.identity].output.properties.principalId
+      principalType = "ServicePrincipal"
+      description   = "mlz-core bootstrap: ${each.key}"
     }
   }
   # A new identity can take a minute to reach every Entra ID replica.
@@ -254,7 +262,7 @@ resource "azapi_resource" "state_operator" {
   parent_id = azapi_resource.state.id
   body = {
     properties = {
-      roleDefinitionId = local.builtin.storage_blob_contributor
+      roleDefinitionId = "${local.management}/providers/Microsoft.Authorization/roleDefinitions/${local.builtin.storage_blob_contributor}"
       principalId      = each.value
       principalType    = "User"
       description      = "mlz-core bootstrap: state operator ${each.key}"
