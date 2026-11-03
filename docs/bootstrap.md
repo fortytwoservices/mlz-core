@@ -120,3 +120,14 @@ terraform -chdir=bootstrap/terraform import -var customer_file=$GOV/customer.yam
 The subjects use GitHub's immutable form, `repo:<organization>@<id>/<repository>@<id>`, which keeps a
 renamed or recreated repo from inheriting the identities. If GitHub prints a different prefix, the
 organization or repo does not use immutable subjects yet; turn them on before the first pipeline run.
+
+## Tested
+
+- 3 November 2026, in the TCAF canary tenant (root `mlz`, repos `fortytwoservices/mlz-canary-*`): 69
+  resources, then a plan with no changes, and the state moved into the account. Checked in Azure: each
+  identity holds exactly the rights in the table above, and trusts exactly its subjects. Checked in
+  GitHub: each environment waits for the reviewer and accepts only `main`; the repository variables name
+  the plan identities and each environment's `AZURE_CLIENT_ID` the apply identity.
+- Met on the way: every storage account comes with its blob service, so the bootstrap sets it rather than
+  creating it; and Azure stores a built-in role's ID in the subscription's own form when the assignment is
+  inside a subscription, so the bootstrap writes it that way to keep plans clean.
