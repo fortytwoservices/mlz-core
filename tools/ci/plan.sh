@@ -18,13 +18,13 @@ printf 'terraform {\n  backend "local" {\n    path = "%s"\n  }\n}\n' "$copy" > "
 terraform -chdir="$root" init -reconfigure -input=false -no-color >/dev/null
 set +e
 # shellcheck disable=SC2046
-terraform -chdir="$root" plan -input=false -no-color -lock=false -detailed-exitcode $(vars_for "$role" "$stack") -out="$WORK/$stack.tfplan"
+terraform -chdir="$root" plan -input=false -no-color -lock=false -detailed-exitcode $(vars_for "$role" "$stack") -out="$WORK/plans/$stack.tfplan"
 status=$?
 set -e
 if [[ $status != 1 ]]; then
-  terraform -chdir="$root" show -no-color "$WORK/$stack.tfplan" > "$WORK/plan-$stack.txt"
-  terraform -chdir="$root" show -json "$WORK/$stack.tfplan" > "$WORK/$stack.json"
-  python3 "$CORE/tools/ci/summary.py" "$WORK/$stack.json" "$stack" "$WORK/summary-$stack.md" "$WORK/changes-$stack.txt"
-  rm "$WORK/$stack.json" "$WORK/$stack.tfplan"
+  terraform -chdir="$root" show -no-color "$WORK/plans/$stack.tfplan" > "$WORK/plan-$stack.txt"
+  terraform -chdir="$root" show -json "$WORK/plans/$stack.tfplan" > "$WORK/plans/$stack.json"
+  python3 "$CORE/tools/ci/summary.py" "$WORK/plans/$stack.json" "$stack" "$WORK/summary-$stack.md" "$WORK/changes-$stack.txt"
+  rm "$WORK/plans/$stack.json" "$WORK/plans/$stack.tfplan"
 fi
 exit $status

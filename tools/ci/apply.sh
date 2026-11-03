@@ -14,13 +14,13 @@ terraform -chdir="$root" init -reconfigure -input=false -no-color \
   -backend-config="container_name=$TFSTATE_CONTAINER" \
   -backend-config="key=$stack.tfstate"
 # shellcheck disable=SC2046
-terraform -chdir="$root" plan -input=false -no-color $(vars_for "$role" "$stack") -out="$WORK/$stack.tfplan" >/dev/null
-terraform -chdir="$root" show -json "$WORK/$stack.tfplan" > "$WORK/$stack.json"
-python3 "$CORE/tools/ci/summary.py" "$WORK/$stack.json" "$stack" "$WORK/apply-summary-$stack.md" "$WORK/apply-changes-$stack.txt"
+terraform -chdir="$root" plan -input=false -no-color $(vars_for "$role" "$stack") -out="$WORK/plans/$stack.tfplan" >/dev/null
+terraform -chdir="$root" show -json "$WORK/plans/$stack.tfplan" > "$WORK/plans/$stack.json"
+python3 "$CORE/tools/ci/summary.py" "$WORK/plans/$stack.json" "$stack" "$WORK/apply-summary-$stack.md" "$WORK/apply-changes-$stack.txt"
 if ! diff -u "$reviewed" "$WORK/apply-changes-$stack.txt" > "$WORK/difference-$stack.txt"; then
   echo "::error::The plan differs from the one the reviewer saw; nothing is applied. Run the pipeline again for a fresh plan."
   cat "$WORK/difference-$stack.txt"
   exit 1
 fi
 echo "The plan matches the reviewed one: $(wc -l < "$reviewed" | tr -d ' ') change(s)."
-terraform -chdir="$root" apply -input=false -no-color "$WORK/$stack.tfplan"
+terraform -chdir="$root" apply -input=false -no-color "$WORK/plans/$stack.tfplan"
