@@ -12,17 +12,21 @@ jobs:
     secrets: inherit
 ```
 
-Upgrading is a pull request that changes the release. The workflow checks out mlz-core's code at that same
-release (it reads which one from the run's own OIDC token), so code and workflow never drift apart. The
-steps themselves are small scripts in `tools/ci/`.
+Upgrading is a pull request that changes the release. The workflow checks out mlz-core's code at the exact
+commit it came from (it reads which one from the run's own OIDC token), so code and workflow never drift
+apart. The steps themselves are small scripts in `tools/ci/`.
 
 ## What runs when
 
 | Job | When | What it does |
 |---|---|---|
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending checks the IP plan is current (`mlz allocate --check`) and writes one config per landing zone. Fails with every problem listed. |
-| `plan` | pull requests, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Puts each plan on the pull request, in one comment per stack that later runs update. The daily run fails when Azure has drifted from `main`. |
-| `apply` | `main` | Waits for a reviewer in the role's environment, then plans and applies each stack as the apply identity. Governance and platform then offer their new contract to the repos that read it (below). |
+| `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. |
+| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run; otherwise it stops and applies nothing. Governance and platform then offer their new contract to the repos that read it (below). |
+
+The summary is short enough to read: the counts, the changes by resource type, and every change to or
+removal of an existing resource by name. A reviewer approving an apply sees the plan of that very run on
+its page, and that plan is what gets applied, or nothing is.
 
 The plan identities can only read the state, and Terraform's Azure backend writes an empty state the
 first time it meets a new key, so a plan runs against a downloaded copy of its state with a local

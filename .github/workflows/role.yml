@@ -8,9 +8,11 @@
 #       secrets: inherit
 #
 # check  every run: checks the YAML and works out what the roots read.
-# plan   pull requests and the daily drift check: read-only, against a copy of the state.
-# apply  main: in the role's environment, after a reviewer approves; governance and platform then offer
-#        their contract to the repos that read it.
+# plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
+#        goes on the pull request and on the run page, where the reviewer approves the apply.
+# apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
+#        exactly the reviewed changes; governance and platform then offer their contract to the repos
+#        that read it.
 #
 # The bootstrap sets the variables (AZURE_*, TFSTATE_*, MLZ_REPOSITORIES); docs/pipelines.md lists the rest.
 name: mlz role
@@ -48,8 +50,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # The caller pins mlz-core with uses: ...@<release>; its OIDC token says which, so the code checked
-      # out below is always the release the workflow came from.
+      # The caller pins mlz-core with uses: ...@<release>; its OIDC token says which commit that is, so the
+      # code checked out below is always exactly the workflow's own.
       - name: Find the mlz-core release
         id: core
         run: |
@@ -58,9 +60,9 @@ jobs:
           ref=$(python3 -c 'import base64, json, sys
           part = sys.argv[1].split(".")[1]
           claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-          print(claims["job_workflow_ref"].split("@", 1)[1])' "$token")
-          echo "mlz-core $ref"
-          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          print(claims["job_workflow_ref"].split("@", 1)[1], claims["job_workflow_sha"])' "$token")
+          echo "mlz-core ${ref% *} at ${ref#* }"
+          echo "ref=${ref#* }" >> "$GITHUB_OUTPUT"
 
       - id: reader
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -95,7 +97,7 @@ jobs:
           retention-days: 7
 
   plan:
-    if: (github.event_name == 'pull_request' || github.event_name == 'schedule') && needs.check.outputs.stacks != '[]'
+    if: needs.check.outputs.stacks != '[]'
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -159,6 +161,23 @@ jobs:
           .mlz-core/tools/ci/plan.sh "$ROLE" "$STACK"
           echo "status=$?" >> "$GITHUB_OUTPUT"
 
+      - name: Show the plan on the run page
+        if: steps.plan.outputs.status != '1'
+        env:
+          STACK: ${{ matrix.stack }}
+        run: cat ".mlz/summary-$STACK.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.status != '1'
+        with:
+          name: mlz-${{ inputs.role }}-plan-${{ matrix.stack }}
+          path: |
+            .mlz/plan-${{ matrix.stack }}.txt
+            .mlz/summary-${{ matrix.stack }}.md
+            .mlz/changes-${{ matrix.stack }}.txt
+          include-hidden-files: true
+          retention-days: 30
+
       - name: Put the plan on the pull request
         if: github.event_name == 'pull_request'
         env:
@@ -181,7 +200,7 @@ jobs:
 
   apply:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
-    needs: check
+    needs: [check, plan]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: ${{ inputs.role }}
@@ -222,6 +241,12 @@ jobs:
         with:
           name: mlz-${{ inputs.role }}
           path: .mlz/
+
+      # The changes the reviewer saw; the apply makes exactly these or none.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-${{ inputs.role }}-plan-${{ matrix.stack }}
+          path: .mlz/reviewed/
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:

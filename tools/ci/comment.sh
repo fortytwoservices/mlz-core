@@ -5,18 +5,16 @@
 source "$(dirname "$0")/lib.sh"
 stack=$1 status=$2
 marker="<!-- mlz-plan:$stack -->"
-summary=$(grep -E '^(Plan:|No changes\.)' "$WORK/plan-$stack.txt" | head -1 || true)
-[[ $status == 1 ]] && summary="The plan failed; see the job log."
+run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 {
   echo "$marker"
-  echo "**$stack**: ${summary:-no summary}"
-  echo
-  echo "<details><summary>Plan</summary>"
-  echo
-  echo '```'
-  head -c 60000 "$WORK/plan-$stack.txt"
-  echo '```'
-  echo "</details>"
+  if [[ $status == 1 ]]; then
+    echo "**$stack**: the plan failed; see [the run]($run)."
+  else
+    cat "$WORK/summary-$stack.md"
+    echo
+    echo "The full plan is attached to [the run]($run)."
+  fi
 } > "$WORK/comment-$stack.md"
 existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
 if [[ -n $existing ]]; then
