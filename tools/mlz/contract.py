@@ -9,6 +9,20 @@ from __future__ import annotations
 from .yamlout import dump
 
 CONTRACTS = {
+    "bootstrap": {
+        "header": (
+            "What the bootstrap set up, for the governance repo.\n"
+            "Written by Fortytwo after running the bootstrap: do not edit here."
+        ),
+        "comments": {
+            "state": "Where every role's Terraform state is kept.",
+            "identities": (
+                "The pipeline identities. Each role's plan identity reads, for pull requests; its apply\n"
+                "identity changes Azure, in its approved environment. Governance grants vending's two\n"
+                "their rights on Landing Zones and Sandboxes."
+            ),
+        },
+    },
     "governance": {
         "header": (
             "What governance decided, for the platform and vending repos.\n"

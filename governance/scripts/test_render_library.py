@@ -46,6 +46,9 @@ class RenderTest(unittest.TestCase):
         groups = self.read(out, "architecture_definitions/demo.alz_architecture_definition.json")["management_groups"]
         ids = {g["id"]: (g["parent_id"], g["archetypes"]) for g in groups}
         self.assertEqual(ids["demo"], (None, ["fortytwo_root"]))
+        exists = {g["id"]: g["exists"] for g in groups}
+        self.assertTrue(exists["demo"])  # the bootstrap creates the top group
+        self.assertFalse(any(v for k, v in exists.items() if k != "demo"))
         self.assertEqual(ids["demo-platform"], ("demo", ["fortytwo_platform"]))
         self.assertEqual(ids["demo-connectivity"], ("demo-platform", ["fortytwo_connectivity"]))
         self.assertEqual(ids["demo-landing-zones"], ("demo", ["fortytwo_landing_zones"]))

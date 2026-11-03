@@ -4,6 +4,16 @@ variable "rendered_library_path" {
   nullable    = false
 }
 
+variable "bootstrap_contract_file" {
+  type        = string
+  default     = null
+  description = <<-EOT
+    The bootstrap's contract, `_generated/bootstrap.yaml`: the pipeline identities. Governance grants the
+    vending identities their rights on the Landing Zones and Sandboxes groups it creates. Without it,
+    for example when someone deploys by hand, no such rights are granted.
+  EOT
+}
+
 variable "platform_contract_file" {
   type        = string
   default     = null

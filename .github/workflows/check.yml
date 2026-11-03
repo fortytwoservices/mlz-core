@@ -87,7 +87,7 @@ jobs:
           GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.reader.outputs.token }}@github.com/fortytwoservices/az-tf-mlz-.insteadOf
           GIT_CONFIG_VALUE_0: https://github.com/fortytwoservices/az-tf-mlz-
         run: |
-          for root in governance platform vending; do
+          for root in bootstrap governance platform vending; do
             echo "::group::$root"
             terraform -chdir=$root/terraform init -backend=false -input=false -lockfile=readonly
             terraform -chdir=$root/terraform validate

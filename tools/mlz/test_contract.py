@@ -36,6 +36,17 @@ PLATFORM = {
     "private_dns": {"subscription": "a002de69-082a-4f44-b78f-c9e36e209af2", "resource_group": "rg-mlz-dns-nwe", "region": "norwayeast"},
 }
 
+BOOTSTRAP = {
+    "top_management_group": "mlz",
+    "state": {"subscription": "6d6a6044-7f37-46cd-b5f2-a8a6f75aeffe", "resource_group": "rg-mlz-bootstrap-nwe", "storage_account": "stmlzstate1a2b"},
+    "identities": {
+        "vending": {
+            "plan": {"name": "id-mlz-vending-plan-nwe", "client_id": "11111111-1111-1111-1111-111111111111", "principal_id": "22222222-2222-2222-2222-222222222222"},
+            "apply": {"name": "id-mlz-vending-apply-nwe", "client_id": "33333333-3333-3333-3333-333333333333", "principal_id": "44444444-4444-4444-4444-444444444444"},
+        }
+    },
+}
+
 
 class YamlTest(unittest.TestCase):
     def setUp(self):
@@ -51,7 +62,7 @@ class YamlTest(unittest.TestCase):
         return read_yaml(path)
 
     def test_contracts_read_back_exactly(self):
-        for kind, data in (("governance", GOVERNANCE), ("platform", PLATFORM)):
+        for kind, data in (("governance", GOVERNANCE), ("platform", PLATFORM), ("bootstrap", BOOTSTRAP)):
             self.assertEqual(self.round_trip(render(kind, data)), data, kind)
 
     def test_values_yaml_would_misread_are_quoted(self):

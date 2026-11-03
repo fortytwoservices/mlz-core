@@ -1,0 +1,15 @@
+# The one-time setup of this customer's pipelines, run by Fortytwo with mlz-core's bootstrap
+# (docs/bootstrap.md). Nothing in this file is a secret.
+
+github:
+  organization: demo-org
+  repositories:                    # the three repos made from mlz-core's templates
+    governance: mlz-governance
+    platform: mlz-platform
+    vending: mlz-vending
+  reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+
+# People who may run Terraform by hand against the state (the bootstrap itself, break-glass work),
+# by name: their Entra object IDs.
+state_operators:
+  platform-lead: 00000000-0000-0000-0000-000000000010
