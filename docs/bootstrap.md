@@ -54,7 +54,8 @@ Each landing zone also gets an identity of its own from vending, `id-<workload>-
 Contributor on its subscription, for its workload repo.
 
 The repository variables are IDs and names, never secrets: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
-(management), `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT` and `TFSTATE_CONTAINER`. `AZURE_CLIENT_ID` is
+(management), `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER` and `MLZ_REPOSITORIES` (the
+three repos, for offering contracts). `AZURE_CLIENT_ID` is
 the plan identity for the repo and the apply identity inside its environment, so a workflow always signs
 in as the identity its job is trusted for.
 

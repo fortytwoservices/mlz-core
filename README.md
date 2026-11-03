@@ -19,10 +19,11 @@ governance/
 platform/terraform/    the platform root: hubs, firewalls, DNS
 vending/terraform/     the vending root: one landing zone per state
 tools/mlz/             the loader: customer YAML in, checked config out; the IP allocator; the contracts
+tools/ci/              the pipeline steps, run by .github/workflows/role.yml in each customer repo
 modules/
   naming/              the names of everything mlz-core creates, shared by every root
 starter/
-  mlz-governance/      the demo customer.yaml and bootstrap.yaml for the template repo
+  mlz-<role>/          what each template repo starts with: its pipeline, and the demo settings
 docs/                  one page per part
 ```
 

@@ -329,6 +329,8 @@ resource "github_actions_variable" "role" {
       AZURE_CLIENT_ID         = azapi_resource.identity["${role}-plan"].output.properties.clientId
       TFSTATE_STORAGE_ACCOUNT = local.names.storage_account
       TFSTATE_CONTAINER       = role
+      # The three repos, for the pipeline that offers a contract to the repos that read it.
+      MLZ_REPOSITORIES = jsonencode({ for r in local.roles : r => "${local.github.organization}/${local.github.repositories[r]}" })
     } : "${role}/${name}" => { role = role, name = name, value = value }
   }]...)
 
