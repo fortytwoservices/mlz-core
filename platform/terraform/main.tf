@@ -40,6 +40,17 @@ module "connectivity" {
     }
   }
 
+  # The firewalls, Bastions and gateways send all their logs to the central workspace, in Azure's
+  # resource-specific tables: the rule hits a network person reads, threat intelligence, DNS proxy.
+  # Governance gives the platform's identity the right to name the workspace as a destination.
+  diagnostic_settings = {
+    workspace = {
+      name                  = "to-${local.root_id}-workspace"
+      workspace_resource_id = local.config.workspace_resource_id
+      logs                  = [{ category_group = "allLogs" }]
+    }
+  }
+
   # Every Private Link zone, in the resource group governance's DNS policy points at.
   private_dns_zones = {
     resource_group_name = module.naming.connectivity.dns_resource_group
