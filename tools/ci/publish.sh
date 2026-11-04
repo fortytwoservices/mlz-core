@@ -8,9 +8,15 @@ role=$1
 case $role in
   governance) readers="platform vending" ;;
   platform) readers="governance vending" ;;
+  vending) readers="platform" ;;
   *) exit 0 ;;
 esac
-terraform -chdir="$(root_of "$role")" output -json contract | python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
+if [[ $role == vending ]]; then
+  # Vending's contract is its IP plan, by landing zone: no single state to read it from.
+  python3 -m mlz vending-contract --repo . --out "$WORK/$role.yaml"
+else
+  terraform -chdir="$(root_of "$role")" output -json contract | python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
+fi
 path=_generated/$role.yaml
 branch=mlz/$role-contract
 for reader in $readers; do

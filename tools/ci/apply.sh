@@ -6,7 +6,7 @@
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
 role=$1 stack=$2
-root=$(root_of "$role")
+root=$(root_of "$role" "$stack")
 reviewed=$WORK/reviewed/changes-$stack.txt
 [[ -f $reviewed ]] || { echo "::error::No reviewed plan for $stack in this run; nothing is applied."; exit 1; }
 terraform -chdir="$root" init -reconfigure -input=false -no-color \

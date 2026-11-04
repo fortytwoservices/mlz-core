@@ -21,7 +21,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import contract, platform, vending
+from . import contract, firewall, platform, vending
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
 
@@ -46,6 +46,13 @@ def main() -> int:
     v.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     v.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
     v.add_argument("--out", type=Path, required=True, help="the folder for <key>.json, one per landing zone; mlz owns it")
+    f = roles.add_parser("firewall", help="firewall/ into the rules root's config")
+    f.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
+    f.add_argument("--platform-config", type=Path, required=True, help="the platform root's config, from mlz platform")
+    f.add_argument("--out", type=Path, required=True, help="where to write the rules root's config (JSON)")
+    w = roles.add_parser("vending-contract", help="each landing zone's region and range, for the platform's firewall rules")
+    w.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
+    w.add_argument("--out", type=Path, required=True, help="the YAML file to write")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
     c.add_argument("kind", choices=sorted(contract.CONTRACTS))
     c.add_argument("--out", type=Path, required=True, help="the YAML file to write, in a repo's _generated/")
@@ -56,7 +63,10 @@ def main() -> int:
         return read_yaml(path)
 
     # Every file the command reads, parsed in one terraform run before anything is read.
-    inputs = {"platform": ["hubs"], "allocate": ["landing-zones", "_generated"], "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"]}
+    inputs = {
+        "platform": ["hubs"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
+        "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
+    }
     try:
         if args.role != "contract":
             contracts = [getattr(args, name) for name in ("governance", "platform") if getattr(args, name, None)]
@@ -65,6 +75,17 @@ def main() -> int:
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(contract.render(args.kind, json.loads(sys.stdin.read())))
             print(f"mlz contract: wrote {args.out}")
+        elif args.role == "firewall":
+            path = args.repo / "_generated" / "vending.yaml"
+            config = firewall.build(args.repo, json.loads(args.platform_config.read_text()), read_yaml(path) if path.exists() else None)
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps(config, indent=2) + "\n")
+            print(f"mlz firewall: wrote {args.out}")
+        elif args.role == "vending-contract":
+            data = firewall.vending_contract(vending.landing_zones(args.repo), vending.ip_plan(args.repo))
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(contract.render("vending", data))
+            print(f"mlz vending-contract: wrote {args.out}")
         elif args.role == "platform":
             config = platform.build(args.repo, published("governance"))
             args.out.parent.mkdir(parents=True, exist_ok=True)
