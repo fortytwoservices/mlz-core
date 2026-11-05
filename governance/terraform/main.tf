@@ -125,6 +125,18 @@ module "alz" {
   subscription_placement = local.placement
 }
 
+# Diagnostic settings need the Microsoft.Insights provider registered in their subscription, and a new
+# subscription may not have it: the platform's firewalls and gateways, and the policies that deploy
+# diagnostic settings, would fail with SubscriptionNotRegistered. Landing zones get it from vending.
+resource "azapi_resource_action" "insights_provider" {
+  for_each = local.placement
+
+  type        = "Microsoft.Resources/providers@2021-04-01"
+  resource_id = "/subscriptions/${each.value.subscription_id}/providers/Microsoft.Insights"
+  action      = "register"
+  method      = "POST"
+}
+
 # The platform sends its firewalls' and gateways' logs to the workspace. Naming a workspace as a
 # destination takes two rights on it, and this role holds only those: the platform cannot read the data
 # or change the workspace.
