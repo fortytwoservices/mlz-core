@@ -8,11 +8,13 @@ vending contract (_generated/vending.yaml), or every landing zone range of the h
 
     outbound:
       - name: card-processor
-        to: [api.stripe.com]        # a name, *.name, an address or range, another landing zone, or a tag
+        to: [api.stripe.com]        # a name (lower case), *.name, an address or range, another landing zone,
+                                    # an FQDN tag (WindowsUpdate) or a service tag (AzureMonitor, Storage.NorwayEast)
         ports: [https]              # https, http, a TCP port, or udp:<port>
 
 The firewall policy holds a fixed set of rule collection groups, whatever the number of landing zones:
-`platform` for the shared rules, and PARTITIONS groups for the landing zones. A landing zone's rules are
+`platform` for the shared rules, and PARTITIONS groups for the landing zones. The `platform` group always
+holds REQUIRED too: what governance's own policies install on every machine needs to reach. A landing zone's rules are
 collections in group `lz-<nn>`, nn = sha256(key) mod PARTITIONS: the same group for ever, so adding one
 landing zone never moves another's rules. Azure caps a policy's rule collection groups, so PARTITIONS
 must never change once rules exist.
@@ -33,8 +35,26 @@ PLATFORM_PRIORITY = 500
 FIRST_PARTITION_PRIORITY = 1000
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$")
 FQDN = re.compile(r"^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
-FQDN_TAG = re.compile(r"^[A-Z][A-Za-z0-9]+(\.[A-Za-z0-9]+)*$")  # WindowsUpdate, AzureBackup, ...
+# Azure Firewall's FQDN tags, for application rules (learn.microsoft.com/azure/firewall/fqdn-tags), and
+# Office365.<product>.<category>. Any other capitalised name is a service tag, for network rules.
+FQDN_TAGS = {
+    "AppServiceEnvironment", "AzureBackup", "AzureHDInsight", "AzureKubernetesService", "MicrosoftActiveProtectionService",
+    "MicrosoftIntune", "Windows365", "WindowsDiagnostics", "WindowsUpdate", "WindowsVirtualDesktop", "citrixHdxPlusForWindows365",
+}
+SERVICE_TAG = re.compile(r"^[A-Z][A-Za-z0-9]+(\.[A-Z][A-Za-z0-9]+)?$")  # AzureMonitor, Storage.NorwayEast
 WEB_PORTS = {"https": ("Https", 443), "http": ("Http", 80)}
+
+# In every hub's platform group, whatever the customer writes: the Azure Monitor Agent, which governance's
+# policies install on every machine, reaches both tags on 443 (learn.microsoft.com/azure/azure-monitor/
+# agents/azure-monitor-agent-network-configuration). Without them, machines report nothing.
+REQUIRED = [
+    {
+        "name": "azure-monitor-agent",
+        "description": "mlz-core: the Azure Monitor Agent that governance's policies install.",
+        "to": ["AzureMonitor", "AzureResourceManager"],
+        "ports": ["https"],
+    },
+]
 
 
 def partition(key: str) -> int:
@@ -66,16 +86,18 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
 
 
 def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
-    """One rule as the firewall module takes it: an application rule for names and tags on https or http,
-    and network rules for addresses, landing zones and other ports (one for TCP, one for UDP). Returns
-    (application rule or None, {suffix: network rule})."""
+    """One rule as the firewall module takes it: an application rule for names and FQDN tags on https or
+    http, and network rules for addresses, landing zones, service tags and other ports (one for TCP, one
+    for UDP). Returns (application rule or None, {suffix: network rule})."""
     names, tags, addresses = [], [], []
     for target in rule["to"]:
         target = str(target)
         if target in zones:
             addresses.append(zones[target]["range"])
-        elif target.startswith("Office365.") or ("." not in target and FQDN_TAG.fullmatch(target)):
+        elif target in FQDN_TAGS or target.startswith("Office365."):
             tags.append(target)
+        elif SERVICE_TAG.fullmatch(target):
+            addresses.append(target)  # network rules take service tags as destination addresses
         elif FQDN.fullmatch(target):
             names.append(target.lower())
         else:
@@ -95,7 +117,7 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[s
         else:
             problems.append(f"{at}: port {port!r} is https, http, a TCP port (443) or udp:<port> (udp:53).")
     if tags and (tcp or udp or addresses):
-        problems.append(f"{at}: a tag such as {tags[0]} takes only https and http; put other targets in a rule of their own.")
+        problems.append(f"{at}: an FQDN tag such as {tags[0]} takes only https and http; put other targets in a rule of their own.")
     description = rule.get("description")
     application = None
     if (names or tags) and web:
@@ -149,9 +171,13 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
     shared = read_setting(folder / "platform") or {}
     shared_rules = read_rules("firewall/platform", shared, problems)
     for region, hub in hubs.items():
-        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 100, problems)
-        if found["application"] or found["network"]:
-            groups[region]["platform"] = {"priority": PLATFORM_PRIORITY, **found}
+        required = collections(REQUIRED, hub["landing_zone_ranges"], "mlz-core", "required", zones, 100, problems)
+        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, problems)
+        groups[region]["platform"] = {
+            "priority": PLATFORM_PRIORITY,
+            "application": {**required["application"], **found["application"]},
+            "network": {**required["network"], **found["network"]},
+        }
 
     keys = setting_names(folder / "landing-zones")
     for key in keys:

@@ -42,7 +42,7 @@ class FirewallTest(unittest.TestCase):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: card-processor\n    to: [api.stripe.com, '*.stripe.com']\n    ports: [https]\n")
         groups = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]
         name = f"lz-{partition('payments-prod'):02d}"
-        self.assertEqual(list(groups), [name])
+        self.assertEqual(set(groups), {"platform", name})
         self.assertEqual(groups[name]["priority"], 1000 + 100 * partition("payments-prod"))
         rule = groups[name]["application"]["payments-prod-application"]["rules"]["card-processor"]
         self.assertEqual(rule["source_addresses"], ["10.100.4.0/24"])
@@ -89,11 +89,32 @@ class FirewallTest(unittest.TestCase):
         self.assertIn("firewall/landing-zones/payments-prod: outbound[0]: name 'Bad_Name'", message)
         self.assertIn("'not a host' is not a name, an address or range", message)
         self.assertIn("port 'ssh' is https, http", message)
-        self.assertIn("a tag such as WindowsUpdate takes only https and http", message)
+        self.assertIn("an FQDN tag such as WindowsUpdate takes only https and http", message)
         self.assertIn("firewall/landing-zones/unknown-prod: no landing zone unknown-prod in the vending contract", message)
 
-    def test_no_rules_no_groups(self):
-        self.assertEqual(build(self.repo, PLATFORM, None)["policies"], {"norwayeast": {}})
+    def test_service_tags_become_network_rules_and_capitalised_names_stay_names(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", (
+            "outbound:\n"
+            "  - name: storage\n    to: [Storage.NorwayEast, AzureKeyVault]\n    ports: [https]\n"
+            "  - name: partner\n    to: [Partner.example.com]\n    ports: [https]\n"
+        ))
+        group = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
+        storage = group["network"]["payments-prod-network"]["rules"]["storage"]
+        self.assertEqual(storage["destination_addresses"], ["AzureKeyVault", "Storage.NorwayEast"])
+        self.assertEqual((storage["protocols"], storage["destination_ports"]), (["TCP"], ["443"]))
+        partner = group["application"]["payments-prod-application"]["rules"]["partner"]
+        self.assertEqual(partner["destination_fqdns"], ["partner.example.com"])
+
+    def test_without_rule_files_only_the_required_rules(self):
+        groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
+        self.assertEqual(list(groups), ["platform"])
+        self.assertEqual(groups["platform"]["application"], {})
+        collection = groups["platform"]["network"]["required-network"]
+        rule = collection["rules"]["azure-monitor-agent"]
+        self.assertEqual(collection["priority"], 100)  # before the customer's platform collections, at 200
+        self.assertEqual(rule["source_addresses"], ["10.100.0.0/16"])
+        self.assertEqual(rule["destination_addresses"], ["AzureMonitor", "AzureResourceManager"])
+        self.assertEqual((rule["protocols"], rule["destination_ports"]), (["TCP"], ["443"]))
 
 
 if __name__ == "__main__":

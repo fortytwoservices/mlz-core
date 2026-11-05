@@ -42,6 +42,41 @@ is reported as a conflict on the next run, never solved by moving the landing zo
 `python3 -m mlz platform` reads `hubs/` and `_generated/governance.yaml`, checks both, and writes the
 root's config (JSON, for one run, never committed); the Terraform root only reads that file.
 
+## Firewall rules
+
+Every landing zone's outbound traffic goes through its hub's firewall, which denies anything no rule
+allows. The rules live in the platform repo, next to the firewalls, so a network person reads and
+reviews them in one place:
+
+```yaml
+# firewall/landing-zones/payments-prod.yaml: what payments-prod may reach, from its own range.
+outbound:
+  - name: card-processor
+    description: Card payments.
+    to: [api.stripe.com]
+    ports: [https]
+```
+
+`firewall/platform.yaml` holds rules for every landing zone of a hub, from all its landing zone ranges. A
+rule names only where traffic goes; the source is worked out from the vending contract
+(`_generated/vending.yaml`). `to` takes:
+
+- names in lower case (`api.example.com`) and wildcards (`*.example.com`)
+- addresses and ranges, and other landing zones by key (`website-prod`)
+- FQDN tags such as `WindowsUpdate`
+- service tags such as `AzureMonitor` or `Storage.NorwayEast`
+
+`ports` takes `https`, `http`, TCP ports (`8443`) and `udp:<port>`.
+
+`python3 -m mlz firewall` turns the files into a fixed set of rule collection groups per hub. They are
+applied by their own root, `platform/rules/terraform`, the `firewall` stack, so a rule change never plans
+the hub:
+
+| Group | Priority | Holds |
+|---|---|---|
+| `platform` | 500 | `required-network` (100): what governance's own policies need, whatever the customer writes. Today, the Azure Monitor Agent, which reaches the `AzureMonitor` and `AzureResourceManager` service tags on 443. Then `firewall/platform.yaml` (200 and 205). |
+| `lz-00` to `lz-29` | 1000 to 3900 | Each landing zone's rules, in the group its key hashes to, for ever. Adding a landing zone never moves another's rules, and the 31 groups in all stay under Azure's limit per policy, however many landing zones there are. |
+
 ## Contract
 
 The `contract` output, written as `_generated/platform.yaml` in the governance and vending repos by
