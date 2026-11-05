@@ -10,6 +10,7 @@
 # check  every run: checks the YAML and works out what the roots read.
 # plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
 #        goes on the pull request and on the run page, where the reviewer approves the apply.
+# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply.
 # apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
 #        exactly the reviewed changes; governance and platform then offer their contract to the repos
 #        that read it.
@@ -198,9 +199,45 @@ jobs:
             exit 1
           fi
 
-  apply:
+  # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
+  # reviewer and apply; a stack with nothing to change asks for no approval.
+  changed:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
     needs: [check, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.changed.outputs.stacks }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mlz-${{ inputs.role }}-plan-*
+          path: .mlz/reviewed/
+          merge-multiple: true
+
+      - id: changed
+        env:
+          STACKS: ${{ needs.check.outputs.stacks }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib
+          stacks = json.loads(os.environ["STACKS"])
+          def changes(stack):  # a missing list counts as changes: the apply then stops on it
+              path = pathlib.Path(f".mlz/reviewed/changes-{stack}.txt")
+              return not path.exists() or path.read_text().strip() != ""
+          changed = [stack for stack in stacks if changes(stack)]
+          unchanged = [stack for stack in stacks if stack not in changed]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"stacks={json.dumps(changed)}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
+          EOF
+
+  apply:
+    if: needs.changed.result == 'success' && needs.changed.outputs.stacks != '[]'
+    needs: [check, changed]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: ${{ inputs.role }}
@@ -212,7 +249,7 @@ jobs:
       # The platform's stacks apply one after the other, hub first: its firewall policy holds the rules.
       max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
       matrix:
-        stack: ${{ fromJSON(needs.check.outputs.stacks) }}
+        stack: ${{ fromJSON(needs.changed.outputs.stacks) }}
     concurrency:
       group: mlz-apply-${{ inputs.role }}-${{ matrix.stack }}
       cancel-in-progress: false
