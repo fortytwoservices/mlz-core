@@ -142,6 +142,54 @@ class FirewallTest(unittest.TestCase):
         ))
         self.assertIn("rules dns and dns-udp both make a network rule named dns-udp", self.problems())
 
+    def test_regional_azurecloud_tags_are_service_tags(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: azure\n    to: [AzureCloud.norwaye]\n    ports: [https]\n")
+        group = self.lz_group()
+        self.assertEqual(group["network"]["payments-prod-network"]["rules"]["azure"]["destination_addresses"], ["AzureCloud.norwaye"])
+        self.assertEqual(group["application"], {})
+
+    def test_outbound_that_is_not_a_list_is_a_problem_not_an_empty_list(self):
+        for value in ("false", "0", "{}", "''"):
+            with self.subTest(value=value):
+                self.write("firewall/landing-zones/payments-prod.yaml", f"outbound: {value}\n")
+                self.assertIn("outbound is a list of rules", self.problems())
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n")
+        self.assertEqual(list(build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]), ["platform"])
+
+    def test_bad_names_are_problems_not_crashes(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", (
+            "outbound:\n"
+            "  - name: [a]\n    to: [203.0.113.10]\n    ports: [443]\n"
+            "  - name: 7\n    to: [203.0.113.10]\n    ports: [443]\n"
+            "  - name: Bad_Name\n    to: [not a target]\n    ports: [443]\n"
+        ))
+        problems = self.problems()
+        self.assertIn("name ['a'] is lower-case", problems)
+        self.assertIn("name 7 is lower-case", problems)
+        self.assertIn("name 'Bad_Name' is lower-case", problems)
+        self.assertIn("'not a target' is not a name", problems)  # an invalid name's targets are still checked
+
+    def test_a_wildcard_name_takes_only_web_ports(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: wild\n    to: ['*.example.com']\n    ports: [https, 8443]\n")
+        self.assertIn("a wildcard name such as *.example.com takes only https and http", self.problems())
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: wild\n    to: ['*.example.com']\n    ports: [https]\n")
+        self.assertIn("wild", self.lz_group()["application"]["payments-prod-application"]["rules"])
+
+    def test_a_basic_hub_reaches_names_only_on_web_ports(self):
+        basic = {**PLATFORM, "hubs": {"norwayeast": {**PLATFORM["hubs"]["norwayeast"], "firewall": {"sku_tier": "Basic"}}}}
+        self.write("firewall/platform.yaml", "outbound:\n  - name: sftp\n    to: [sftp.example.com]\n    ports: [22]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, basic, VENDING)
+        self.assertIn("firewall/platform: outbound[0]: a Basic firewall reaches names only on https and http", str(caught.exception))
+        self.write("firewall/platform.yaml", "outbound:\n  - name: web\n    to: [api.example.com, 203.0.113.10]\n    ports: [https, 22]\n")
+        with self.assertRaises(ConfigError):
+            build(self.repo, basic, VENDING)
+        self.write("firewall/platform.yaml", "outbound:\n  - name: web\n    to: [api.example.com, 203.0.113.10]\n    ports: [https]\n")
+        self.assertIn("web", build(self.repo, basic, VENDING)["policies"]["norwayeast"]["platform"]["application"]["platform-application"]["rules"])
+
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
         self.assertEqual(list(groups), ["platform"])

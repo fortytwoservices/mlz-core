@@ -70,7 +70,10 @@ rule names only where traffic goes; the source is worked out from the vending co
 through an application rule, which checks the name the client asks for, and the ports written as numbers
 (`443` included) through a network rule. Addresses, landing zones and service tags take every port through
 a network rule. A rule makes network rules named after it, `<name>-names` and `<name>-udp` too, so another
-rule may not take one of those names.
+rule may not take one of those names. Network rules match names by DNS resolution through the firewall's
+DNS proxy, so a name on a port written as a number cannot be a wildcard (`*.example.com` takes only `https`
+and `http`), and a Basic firewall, which has no DNS proxy, reaches names on `https` and `http` only.
+Regional service tags are written as Azure names them: `Storage.NorwayEast`, but `AzureCloud.norwaye`.
 
 `python3 -m mlz firewall` turns the files into a fixed set of rule collection groups per hub. They are
 applied by their own root, `platform/rules/terraform`, the `firewall` stack, so a rule change never plans
