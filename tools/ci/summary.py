@@ -41,27 +41,33 @@ def resource_type(address: str) -> str:
 
 def fingerprint(change: dict) -> str:
     """What the change does, values included, in a few characters. Sensitive values only ever leave as
-    part of the hash."""
+    part of the hash. The ID of the resource it starts from counts too: a deletion has no planned values,
+    and must not match the deletion of another resource at the same address."""
     what = {key: change.get(key) for key in ("actions", "after", "after_unknown")}
+    before = change.get("before")
+    what["before_id"] = before.get("id") if isinstance(before, dict) else None
     return hashlib.sha256(json.dumps(what, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> None:
     plan = json.load(open(plan_file))
-    changes, prints = [], {}
+    # (kind, address, label, fingerprint) per change. An interrupted replacement leaves a deposed object
+    # at the same address as the current one: the label tells them apart, and each keeps its own fingerprint.
+    records = []
     for change in plan.get("resource_changes", []):
         kind = KIND.get(tuple(change["change"]["actions"]))
         if kind:
-            changes.append((kind, change["address"]))
-            prints[change["address"]] = fingerprint(change["change"])
-    changes.sort(key=lambda item: (item[1], item[0]))
+            label = change["address"] + (f" deposed:{change['deposed']}" if change.get("deposed") else "")
+            records.append((kind, change["address"], label, fingerprint(change["change"])))
+    records.sort(key=lambda item: (item[2], item[0]))
+    changes = [(kind, label) for kind, _, label, _ in records]
 
     with open(changes_file, "w") as out:
-        out.writelines(f"{kind} {address} {prints[address]}\n" for kind, address in changes)
+        out.writelines(f"{kind} {label} {print_}\n" for kind, _, label, print_ in records)
 
     counts = Counter(kind for kind, _ in changes)
     by_type: dict[str, Counter] = defaultdict(Counter)
-    for kind, address in changes:
+    for kind, address, _, _ in records:
         by_type[resource_type(address)][kind] += 1
     existing = [(kind, address) for kind, address in changes if kind != "add"]
 
