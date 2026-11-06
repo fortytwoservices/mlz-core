@@ -6,14 +6,17 @@
 
 - <summary.md>: the counts, the changes by resource type, and every change to or removal of an existing
   resource by name (new resources by type only). Short enough for a pull request comment.
-- <changes.txt>: one line per change, `<actions> <address>`, sorted, outputs as `output.<name>`. The apply
-  compares its own plan with the reviewed one line by line and stops if they differ, and a stack whose
-  list is empty does not apply. Outputs count: a contract that changes on its own (a new mlz-core release)
-  must still be applied to the state, which is where the contract is published from.
+- <changes.txt>: one line per change, `<kind> <address> <fingerprint>`, sorted, outputs as `output.<name>`.
+  The fingerprint covers the change's actions in order and its planned values (known and unknown), so the
+  apply, which compares its own plan with the reviewed one line by line and stops if they differ, also
+  stops when the same resource would get different values from what the reviewer saw. A stack whose list
+  is empty does not apply. Outputs count: a contract that changes on its own (a new mlz-core release) must
+  still be applied to the state, which is where the contract is published from.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -38,23 +41,32 @@ def resource_type(address: str) -> str:
     return f"{modules[-1]}: {name}" if modules else name
 
 
+def fingerprint(change: dict) -> str:
+    """What the change does, values included, in a few characters. Sensitive values only ever leave as
+    part of the hash."""
+    what = {key: change.get(key) for key in ("actions", "after", "after_unknown")}
+    return hashlib.sha256(json.dumps(what, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> None:
     plan = json.load(open(plan_file))
-    changes = []
+    changes, prints = [], {}
     for change in plan.get("resource_changes", []):
         kind = KIND.get(tuple(change["change"]["actions"]))
         if kind:
             changes.append((kind, change["address"]))
+            prints[change["address"]] = fingerprint(change["change"])
     outputs = []
     for name, change in plan.get("output_changes", {}).items():
         kind = KIND.get(tuple(change["actions"]))
         if kind:
             outputs.append((kind, f"output.{name}"))
+            prints[f"output.{name}"] = fingerprint(change)
     changes.sort(key=lambda item: (item[1], item[0]))
     outputs.sort(key=lambda item: item[1])
 
     with open(changes_file, "w") as out:
-        out.writelines(f"{kind} {address}\n" for kind, address in changes + outputs)
+        out.writelines(f"{kind} {address} {prints[address]}\n" for kind, address in changes + outputs)
 
     counts = Counter(kind for kind, _ in changes)
     by_type: dict[str, Counter] = defaultdict(Counter)

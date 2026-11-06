@@ -29,7 +29,7 @@ module "naming" {
 
 module "rule_collection_group" {
   for_each = local.groups
-  source   = "git::https://github.com/fortytwoservices/az-tf-mlz-azure-firewall.git//modules/rule_collection_group?ref=v0.1.3"
+  source   = "git::https://github.com/fortytwoservices/az-tf-mlz-azure-firewall.git//modules/rule_collection_group?ref=v0.1.4"
 
   name                         = each.value.name
   parent_id                    = local.policy_id[each.value.region]
