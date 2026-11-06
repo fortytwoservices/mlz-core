@@ -24,6 +24,13 @@ for reader in $readers; do
   current=$(gh api "repos/$repo/contents/$path" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
   if [[ $current == "$(cat "$WORK/$role.yaml")" ]]; then
     echo "$repo: $path is up to date"
+    # A pull request left open by an earlier run offers a contract that is no longer the deployed one.
+    stale=$(gh pr list --repo "$repo" --head "$branch" --base main --state open --json number --jq '.[].number')
+    for number in $stale; do
+      gh pr close "$number" --repo "$repo" --delete-branch \
+        --comment "Closed by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID: $path on main already matches what $role deployed." >/dev/null
+      echo "$repo: closed #$number, which no longer matches what $role deployed"
+    done
     continue
   fi
   main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
