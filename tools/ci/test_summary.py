@@ -22,9 +22,9 @@ class SummaryTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def summarise(self, changes: list[dict]) -> tuple[str, str]:
+    def summarise(self, changes: list[dict], outputs: dict | None = None) -> tuple[str, str]:
         plan = self.dir / "plan.json"
-        plan.write_text(json.dumps({"resource_changes": changes}))
+        plan.write_text(json.dumps({"resource_changes": changes, "output_changes": outputs or {}}))
         main(str(plan), "governance", str(self.dir / "summary.md"), str(self.dir / "changes.txt"))
         return (self.dir / "summary.md").read_text(), (self.dir / "changes.txt").read_text()
 
@@ -53,6 +53,23 @@ class SummaryTest(unittest.TestCase):
         summary, changes = self.summarise([change("azapi_resource.x", "no-op")])
         self.assertEqual(summary, "**governance**: no changes.\n")
         self.assertEqual(changes, "")
+
+    def test_outputs_alone_are_changes(self):
+        # A contract that changes with no resource change must still apply, or it is never published.
+        summary, changes = self.summarise(
+            [change("azapi_resource.x", "no-op")],
+            {"contract": {"actions": ["update"]}, "handover": {"actions": ["no-op"]}},
+        )
+        self.assertEqual(summary, "**governance**: no resource changes.\n\n**Outputs that change:** `contract`\n")
+        self.assertEqual(changes, "change output.contract\n")
+
+    def test_outputs_follow_the_resources(self):
+        summary, changes = self.summarise(
+            [change("azapi_resource.x", "create")],
+            {"contract": {"actions": ["update"]}, "added": {"actions": ["create"]}},
+        )
+        self.assertIn("**Outputs that change:** `added`, `contract`", summary)
+        self.assertEqual(changes.splitlines(), ["add azapi_resource.x", "add output.added", "change output.contract"])
 
     def test_resource_type_keeps_the_innermost_module(self):
         self.assertEqual(resource_type("module.management.module.law.azapi_resource.this"), "law: azapi_resource.this")
