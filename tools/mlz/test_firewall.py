@@ -105,6 +105,43 @@ class FirewallTest(unittest.TestCase):
         partner = group["application"]["payments-prod-application"]["rules"]["partner"]
         self.assertEqual(partner["destination_fqdns"], ["partner.example.com"])
 
+    def lz_group(self) -> dict:
+        return build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
+
+    def test_a_name_never_gets_https_as_plain_tcp_from_an_address_beside_it(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: api\n    to: [api.example.com, 203.0.113.10]\n    ports: [https, 8443]\n")
+        group = self.lz_group()
+        network = group["network"]["payments-prod-network"]["rules"]
+        self.assertEqual((network["api"]["destination_addresses"], network["api"]["destination_fqdns"]), (["203.0.113.10/32"], []))
+        self.assertEqual(network["api"]["destination_ports"], ["443", "8443"])
+        self.assertEqual((network["api-names"]["destination_fqdns"], network["api-names"]["destination_ports"]), (["api.example.com"], ["8443"]))
+        application = group["application"]["payments-prod-application"]["rules"]["api"]
+        self.assertEqual((application["destination_fqdns"], application["protocols"]), (["api.example.com"], [{"type": "Https", "port": 443}]))
+
+    def test_a_name_keeps_a_port_written_as_a_number(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: api\n    to: [api.example.com]\n    ports: [http, 443]\n")
+        group = self.lz_group()
+        network = group["network"]["payments-prod-network"]["rules"]
+        self.assertEqual((list(network), network["api"]["destination_fqdns"], network["api"]["destination_ports"]), (["api"], ["api.example.com"], ["443"]))
+        self.assertEqual(group["application"]["payments-prod-application"]["rules"]["api"]["protocols"], [{"type": "Http", "port": 80}])
+
+    def test_names_and_addresses_on_the_same_ports_share_a_rule(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: sftp\n    to: [sftp.example.com, 203.0.113.10]\n    ports: [22]\n")
+        network = self.lz_group()["network"]["payments-prod-network"]["rules"]
+        self.assertEqual(list(network), ["sftp"])
+        self.assertEqual((network["sftp"]["destination_addresses"], network["sftp"]["destination_fqdns"]), (["203.0.113.10/32"], ["sftp.example.com"]))
+
+    def test_two_rules_never_make_the_same_network_rule(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", (
+            "outbound:\n"
+            "  - name: dns\n    to: [203.0.113.10]\n    ports: ['udp:53']\n"
+            "  - name: dns-udp\n    to: [203.0.113.11]\n    ports: [443]\n"
+        ))
+        self.assertIn("rules dns and dns-udp both make a network rule named dns-udp", self.problems())
+
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
         self.assertEqual(list(groups), ["platform"])

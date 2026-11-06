@@ -128,30 +128,49 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[s
             "destination_fqdns": sorted(names),
             "destination_fqdn_tags": sorted(tags),
         }
+    # Addresses take every port, https and http as plain TCP. Names take only the ports written as numbers:
+    # https and http reach a name through the application rule, which checks the name the client asks for,
+    # never as TCP to whatever it resolves to. When the two port sets differ, they are two rules.
+    by_address = tcp | {str(number) for _, number in web} if addresses else set()
+    by_name = tcp if names else set()
+    rules = []
+    if by_address and by_address == by_name:
+        rules.append(("", "TCP", addresses, names, tcp))
+    else:
+        if by_address:
+            rules.append(("", "TCP", addresses, [], by_address))
+        if by_name:
+            rules.append(("-names" if by_address else "", "TCP", [], names, by_name))
+    if udp and (addresses or names):
+        rules.append(("-udp", "UDP", addresses, names, udp))
     network = {}
-    # Addresses take every port, web ones as plain TCP; names take only the non-web ports here.
-    for suffix, protocol, ports in (("", "TCP", tcp | ({str(n) for _, n in web} if addresses else set())), ("-udp", "UDP", udp)):
-        targets = {"destination_addresses": sorted(set(addresses)), "destination_fqdns": sorted(names) if ports - {"80", "443"} or protocol == "UDP" or not web else []}
-        if ports and (targets["destination_addresses"] or targets["destination_fqdns"]):
-            network[suffix] = {
-                "description": description,
-                "protocols": [protocol],
-                "source_addresses": sources,
-                **targets,
-                "destination_ports": sorted(ports, key=int),
-            }
+    for suffix, protocol, to_addresses, to_names, ports in rules:
+        network[suffix] = {
+            "description": description,
+            "protocols": [protocol],
+            "source_addresses": sources,
+            "destination_addresses": sorted(set(to_addresses)),
+            "destination_fqdns": sorted(set(to_names)),
+            "destination_ports": sorted(ports, key=int),
+        }
     return application, network
 
 
 def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict, priority: int, problems: list[str]) -> dict:
     """The owner's rules as at most two collections: <owner>-network and <owner>-application."""
-    application, network = {}, {}
+    application, network, made_by = {}, {}, {}
     for index, rule in enumerate(rules):
         app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, problems)
         if app:
             application[rule["name"]] = app
         for suffix, one in net.items():
-            network[rule["name"] + suffix] = one
+            # A rule may make <name>, <name>-names and <name>-udp; another rule's name must not be one of those.
+            key = rule["name"] + suffix
+            if key in made_by:
+                problems.append(f"{where}: rules {made_by[key]} and {rule['name']} both make a network rule named {key}; rename one.")
+                continue
+            made_by[key] = rule["name"]
+            network[key] = one
     out = {"application": {}, "network": {}}
     if network:
         out["network"][f"{owner}-network"] = {"priority": priority, "action": "Allow", "rules": network}

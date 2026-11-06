@@ -66,11 +66,16 @@ rule names only where traffic goes; the source is worked out from the vending co
 - FQDN tags such as `WindowsUpdate`
 - service tags such as `AzureMonitor` or `Storage.NorwayEast`
 
-`ports` takes `https`, `http`, TCP ports (`8443`) and `udp:<port>`.
+`ports` takes `https`, `http`, TCP ports (`8443`) and `udp:<port>`. A name reaches `https` and `http`
+through an application rule, which checks the name the client asks for, and the ports written as numbers
+(`443` included) through a network rule. Addresses, landing zones and service tags take every port through
+a network rule. A rule makes network rules named after it, `<name>-names` and `<name>-udp` too, so another
+rule may not take one of those names.
 
 `python3 -m mlz firewall` turns the files into a fixed set of rule collection groups per hub. They are
 applied by their own root, `platform/rules/terraform`, the `firewall` stack, so a rule change never plans
-the hub:
+the hub. The stack runs even without a `firewall/` folder: the `platform` group always holds what mlz-core
+requires, and deleting a rules file takes its rules out of Azure.
 
 | Group | Priority | Holds |
 |---|---|---|

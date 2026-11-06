@@ -12,12 +12,10 @@ case $role in
     ;;
   platform)
     python3 -m mlz platform --repo . --out "$WORK/platform.json" >&2
-    if [[ -d firewall ]]; then
-      python3 -m mlz firewall --repo . --platform-config "$WORK/platform.json" --out "$WORK/firewall.json" >&2
-      echo '["platform","firewall"]'   # in this order: the rules need the hub's policy
-    else
-      echo '["platform"]'
-    fi
+    # The rules stack runs with or without firewall/: every hub's platform group holds the rules mlz-core
+    # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
+    python3 -m mlz firewall --repo . --platform-config "$WORK/platform.json" --out "$WORK/firewall.json" >&2
+    echo '["platform","firewall"]'   # in this order: the rules need the hub's policy
     ;;
   vending)
     python3 -m mlz allocate --repo . --check >&2

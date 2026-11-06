@@ -208,8 +208,10 @@ jobs:
       contents: read
       id-token: write # signs in as the apply identity, which only this environment may use
     strategy:
-      fail-fast: false
-      # The platform's stacks apply one after the other, hub first: its firewall policy holds the rules.
+      # The platform's stacks apply one after the other, hub first (jobs start in matrix order): its firewall
+      # policy holds the rules. If the hub fails, fail-fast cancels the queued rules job. Landing zones
+      # apply independently, so one failing never stops another.
+      fail-fast: ${{ inputs.role == 'platform' }}
       max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
       matrix:
         stack: ${{ fromJSON(needs.check.outputs.stacks) }}
