@@ -87,7 +87,9 @@ jobs:
 
       - name: Check the YAML
         id: check
-        run: echo "stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")" >> "$GITHUB_OUTPUT"
+        run: |
+          stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")  # its own assignment, so that a failed check fails the step
+          echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

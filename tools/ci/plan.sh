@@ -11,7 +11,9 @@ key=$stack.tfstate
 copy=$WORK/state/$key
 mkdir -p "$WORK/state"
 blob=(--auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" --container-name "$TFSTATE_CONTAINER" --name "$key" --only-show-errors)
-if [[ $(az storage blob exists "${blob[@]}" --query exists -o tsv) == true ]]; then
+# Its own assignment, so that a failed lookup stops the plan instead of planning every resource as new.
+exists=$(az storage blob exists "${blob[@]}" --query exists -o tsv)
+if [[ $exists == true ]]; then
   az storage blob download "${blob[@]}" --file "$copy" >/dev/null
 fi
 printf 'terraform {\n  backend "local" {\n    path = "%s"\n  }\n}\n' "$copy" > "$root/backend_override.tf"

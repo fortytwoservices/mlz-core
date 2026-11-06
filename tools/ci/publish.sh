@@ -26,7 +26,9 @@ for reader in $readers; do
   sha=$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)
   gh api -X PUT "repos/$repo/contents/$path" -f message="chore: $role contract from $GITHUB_REPOSITORY" \
     -f content="$(base64 -w0 < "$WORK/$role.yaml")" -f branch="$branch" ${sha:+-f sha="$sha"} >/dev/null
-  if ! gh pr view "$branch" --repo "$repo" >/dev/null 2>&1; then
+  # Only an open pull request counts: the branch is reused, and gh pr view also finds merged ones.
+  open=$(gh pr list --repo "$repo" --head "$branch" --base main --state open --json number --jq length)
+  if [[ $open == 0 ]]; then
     gh pr create --repo "$repo" --head "$branch" --base main --title "chore: $role contract" \
       --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Merge it to use what $role published." >/dev/null
   fi
