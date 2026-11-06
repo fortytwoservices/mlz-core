@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # apply.sh <role> <stack>: plans against the stack's state in the account, as the apply identity, and
-# applies only if the plan makes exactly the changes in the plan the reviewer saw
+# applies only if the plan makes exactly the changes in the plan the reviewer saw, to the same values
 # (.mlz/reviewed/changes-<stack>.txt, from the plan job of the same run). Otherwise it stops: Azure or the
 # state changed in between, and the run must start again.
 # shellcheck source=tools/ci/lib.sh

@@ -10,8 +10,8 @@ from pathlib import Path
 from ci.summary import main, resource_type
 
 
-def change(address: str, *actions: str) -> dict:
-    return {"address": address, "change": {"actions": list(actions)}}
+def change(address: str, *actions: str, after: dict | None = None) -> dict:
+    return {"address": address, "change": {"actions": list(actions), "after": after, "after_unknown": {}}}
 
 
 class SummaryTest(unittest.TestCase):
@@ -42,12 +42,24 @@ class SummaryTest(unittest.TestCase):
         self.assertIn('- change: `module.alz.azapi_resource.policy_assignments["mlz/B"]`', summary)
         self.assertIn('- destroy: `azapi_resource.vending_rights["x"]`', summary)
         self.assertNotIn('"mlz/A"', summary)  # new resources are counted, not listed
-        self.assertEqual(changes.splitlines(), [
+        self.assertEqual([line.rsplit(" ", 1)[0] for line in changes.splitlines()], [
             'destroy azapi_resource.vending_rights["x"]',
             'add module.alz.azapi_resource.policy_assignments["mlz/A"]',
             'change module.alz.azapi_resource.policy_assignments["mlz/B"]',
             'replace module.alz.azapi_resource.policy_assignments["mlz/C"]',
         ])
+
+    def test_the_change_list_tells_planned_values_and_action_order_apart(self):
+        # The apply compares change lists; the same address and kind with other values must not match.
+        _, reviewed = self.summarise([change("azapi_resource.x", "update", after={"tags": {"owner": "a"}})])
+        _, same = self.summarise([change("azapi_resource.x", "update", after={"tags": {"owner": "a"}})])
+        _, other = self.summarise([change("azapi_resource.x", "update", after={"tags": {"owner": "b"}})])
+        _, create_first = self.summarise([change("azapi_resource.x", "create", "delete")])
+        _, delete_first = self.summarise([change("azapi_resource.x", "delete", "create")])
+        self.assertEqual(reviewed, same)
+        self.assertNotEqual(reviewed, other)
+        self.assertNotEqual(create_first, delete_first)
+        self.assertRegex(reviewed, r"^change azapi_resource\.x [0-9a-f]{16}\n$")
 
     def test_no_changes(self):
         summary, changes = self.summarise([change("azapi_resource.x", "no-op")])
