@@ -24,7 +24,9 @@ apart. The steps themselves are small scripts in `tools/ci/`.
 |---|---|---|
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending checks the IP plan is current (`mlz allocate --check`) and writes one config per landing zone. Fails with every problem listed. |
 | `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. |
-| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. Governance and platform then offer their new contract to the repos that read it (below). |
+| `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
+| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. |
+| `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 
 The summary is short enough to read: the counts, the changes by resource type, and every change to or
 removal of an existing resource by name. A reviewer approving an apply sees the plan of that very run on
@@ -38,11 +40,13 @@ Applies of the same stack never run at the same time, and one is never cancelled
 
 ## Contracts between the repos
 
-After an apply, governance's contract goes to the platform and vending repos, and platform's to the
-governance and vending repos, each as a pull request that updates `_generated/<role>.yaml`. A person sees
-what changed before the other role uses it; merging the pull request runs that role's pipeline with it.
-If the contract did not change, nothing is opened. The pull requests come from a GitHub App that may write
-to the three repos.
+After every run on `main` in which nothing failed, governance's contract goes to the platform and vending
+repos, platform's to the governance and vending repos, and vending's to the platform repo, each as a pull
+request that updates `_generated/<role>.yaml`. A person sees what changed before the other role uses it;
+merging the pull request runs that role's pipeline with it. If the contract did not change, nothing is
+opened, and a pull request still open from an earlier run is closed: it no longer matches what was
+deployed. It runs even when nothing was applied, so a publication that failed is retried by the next run.
+The pull requests come from a GitHub App that may write to the three repos.
 
 ## What a repo needs
 

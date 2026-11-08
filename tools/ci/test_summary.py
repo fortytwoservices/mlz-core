@@ -25,9 +25,9 @@ class SummaryTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def summarise(self, changes: list[dict]) -> tuple[str, str]:
+    def summarise(self, changes: list[dict], outputs: dict | None = None) -> tuple[str, str]:
         plan = self.dir / "plan.json"
-        plan.write_text(json.dumps({"resource_changes": changes}))
+        plan.write_text(json.dumps({"resource_changes": changes, "output_changes": outputs or {}}))
         main(str(plan), "governance", str(self.dir / "summary.md"), str(self.dir / "changes.txt"))
         return (self.dir / "summary.md").read_text(), (self.dir / "changes.txt").read_text()
 
@@ -86,6 +86,35 @@ class SummaryTest(unittest.TestCase):
         summary, changes = self.summarise([change("azapi_resource.x", "no-op")])
         self.assertEqual(summary, "**governance**: no changes.\n")
         self.assertEqual(changes, "")
+
+    def test_outputs_alone_are_changes(self):
+        # A contract that changes with no resource change must still apply, or it is never published.
+        summary, changes = self.summarise(
+            [change("azapi_resource.x", "no-op")],
+            {"contract": {"actions": ["update"]}, "handover": {"actions": ["no-op"]}},
+        )
+        self.assertEqual(summary, "**governance**: no resource changes.\n\n**Outputs that change:** `contract`\n")
+        self.assertRegex(changes, r"^change output\.contract [0-9a-f]{16}\n$")
+
+    def test_outputs_follow_the_resources(self):
+        summary, changes = self.summarise(
+            [change("azapi_resource.x", "create")],
+            {"contract": {"actions": ["update"]}, "added": {"actions": ["create"]}},
+        )
+        self.assertIn("**Outputs that change:** `added`, `contract`", summary)
+        self.assertEqual([line.rsplit(" ", 1)[0] for line in changes.splitlines()], ["add azapi_resource.x", "add output.added", "change output.contract"])
+
+    def test_output_values_count_in_the_change_list(self):
+        # The apply rejects a plan whose outputs would get other values than the reviewer saw.
+        def output(after, after_unknown=False):
+            return {"contract": {"actions": ["update"], "after": after, "after_unknown": after_unknown}}
+        _, reviewed = self.summarise([], output({"root": "mlz"}))
+        _, same = self.summarise([], output({"root": "mlz"}))
+        _, other_value = self.summarise([], output({"root": "other"}))
+        _, now_unknown = self.summarise([], output({"root": "mlz"}, after_unknown=True))
+        self.assertEqual(reviewed, same)
+        self.assertNotEqual(reviewed, other_value)
+        self.assertNotEqual(reviewed, now_unknown)
 
     def test_resource_type_keeps_the_innermost_module(self):
         self.assertEqual(resource_type("module.management.module.law.azapi_resource.this"), "law: azapi_resource.this")

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# publish.sh <role>: after an apply, offers the role's contract to the repos that read it, as a pull
-# request each, so a person sees what changed before the other role uses it. Needs GH_TOKEN for an app
-# that may write to those repos, and MLZ_REPOSITORIES (from the bootstrap).
+# publish.sh <role>: after a run on main in which nothing failed, offers the role's contract to the repos
+# that read it, as a pull request each, so a person sees what changed before the other role uses it. Needs
+# GH_TOKEN for an app that may write to those repos and MLZ_REPOSITORIES (from the bootstrap); governance and
+# platform also need the Azure CLI signed in as an identity that may read the state (TFSTATE_*).
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
 role=$1
@@ -15,7 +16,13 @@ if [[ $role == vending ]]; then
   # Vending's contract is its IP plan, by landing zone: no single state to read it from.
   python3 -m mlz vending-contract --repo . --out "$WORK/$role.yaml"
 else
-  terraform -chdir="$(root_of "$role")" output -json contract | python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
+  # The contract as the state holds it, which is what terraform output prints, read without a Terraform
+  # run: the plan identity may only read the state. A state without the output fails here, loudly.
+  mkdir -p "$WORK/state"
+  az storage blob download --auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" \
+    --container-name "$TFSTATE_CONTAINER" --name "$role.tfstate" --file "$WORK/state/$role.tfstate" --only-show-errors >/dev/null
+  python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["outputs"]["contract"]["value"]))' "$WORK/state/$role.tfstate" |
+    python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
 fi
 # A run that gets here after a newer run on main must not replace the newer one's offer: only the run of
 # main's current commit publishes. The publish job also queues per role, in role.yml.

@@ -10,6 +10,7 @@
 # check  every run: checks the YAML and works out what the roots read.
 # plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
 #        goes on the pull request and on the run page, where the reviewer approves the apply.
+# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply.
 # apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
 #        exactly the reviewed changes; governance and platform then offer their contract to the repos
 #        that read it.
@@ -200,9 +201,45 @@ jobs:
             exit 1
           fi
 
-  apply:
+  # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
+  # reviewer and apply; a stack with nothing to change asks for no approval.
+  changed:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
     needs: [check, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      stacks: ${{ steps.changed.outputs.stacks }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mlz-${{ inputs.role }}-plan-*
+          path: .mlz/reviewed/
+          merge-multiple: true
+
+      - id: changed
+        env:
+          STACKS: ${{ needs.check.outputs.stacks }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib
+          stacks = json.loads(os.environ["STACKS"])
+          def changes(stack):  # a missing list counts as changes: the apply then stops on it
+              path = pathlib.Path(f".mlz/reviewed/changes-{stack}.txt")
+              return not path.exists() or path.read_text().strip() != ""
+          changed = [stack for stack in stacks if changes(stack)]
+          unchanged = [stack for stack in stacks if stack not in changed]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"stacks={json.dumps(changed)}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
+          EOF
+
+  apply:
+    if: needs.changed.result == 'success' && needs.changed.outputs.stacks != '[]'
+    needs: [check, changed]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: ${{ inputs.role }}
@@ -216,7 +253,7 @@ jobs:
       fail-fast: ${{ inputs.role == 'platform' }}
       max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
       matrix:
-        stack: ${{ fromJSON(needs.check.outputs.stacks) }}
+        stack: ${{ fromJSON(needs.changed.outputs.stacks) }}
     concurrency:
       group: mlz-apply-${{ inputs.role }}-${{ matrix.stack }}
       cancel-in-progress: false
@@ -267,33 +304,21 @@ jobs:
           STACK: ${{ matrix.stack }}
         run: .mlz-core/tools/ci/apply.sh "$ROLE" "$STACK"
 
-      - id: writer
-        if: inputs.role != 'vending' && matrix.stack == inputs.role
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          permission-contents: write
-          permission-pull-requests: write
 
-      - name: Offer the contract to the repos that read it
-        if: inputs.role != 'vending' && matrix.stack == inputs.role
-        env:
-          GH_TOKEN: ${{ steps.writer.outputs.token }}
-          MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
-        run: .mlz-core/tools/ci/publish.sh "$ROLE"
-
-  # Vending's contract is each landing zone's region and range, for the platform's firewall rules. It comes
-  # from the IP plan, so it is offered once per run, after every landing zone has applied. With no landing
-  # zones left there is nothing to apply, and the empty contract is still offered.
+  # Offers the role's contract to the repos that read it, as a pull request each, after every run on main in
+  # which nothing failed: also when no stack changed, so a publication that failed before is retried, and
+  # when there is nothing to plan, so removing the last landing zone still empties vending's contract.
+  # Governance and platform read theirs from the state, as the read-only plan identity; vending's is its
+  # IP plan, from the repo.
   publish:
     if: >-
-      always() && inputs.role == 'vending' && github.ref == 'refs/heads/main'
+      always() && github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && needs.check.result == 'success'
-      && (needs.apply.result == 'success' || (needs.apply.result == 'skipped' && needs.check.outputs.stacks == '[]'))
-    needs: [check, apply]
+      && contains(fromJSON('["success", "skipped"]'), needs.plan.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.changed.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.apply.result)
+    needs: [check, plan, changed, apply]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # One publication at a time; publish.sh skips a run that main has moved past.
@@ -302,6 +327,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      id-token: write # signs in as the plan identity to read the state
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -323,10 +349,19 @@ jobs:
           token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
+      # The mlz tools read YAML through terraform console (tools/mlz/files.py), and vending's contract comes
+      # from its YAML.
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
           terraform_version: 1.17.0
           terraform_wrapper: false
+
+      - if: inputs.role != 'vending'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - id: writer
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -337,7 +372,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Offer the contract to the platform repo
+      - name: Offer the contract to the repos that read it
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}

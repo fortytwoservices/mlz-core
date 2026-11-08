@@ -6,10 +6,12 @@
 
 - <summary.md>: the counts, the changes by resource type, and every change to or removal of an existing
   resource by name (new resources by type only). Short enough for a pull request comment.
-- <changes.txt>: one line per change, `<kind> <address> <fingerprint>`, sorted. The fingerprint covers the
-  change's actions in order and its planned values (known and unknown), so the apply, which compares its
-  own plan with the reviewed one line by line and stops if they differ, also stops when the same resource
-  would get different values from what the reviewer saw.
+- <changes.txt>: one line per change, `<kind> <address> <fingerprint>`, sorted, outputs as `output.<name>`.
+  The fingerprint covers the change's actions in order and its planned values (known and unknown), so the
+  apply, which compares its own plan with the reviewed one line by line and stops if they differ, also
+  stops when the same resource would get different values from what the reviewer saw. A stack whose list
+  is empty does not apply. Outputs count: a contract that changes on its own (a new mlz-core release) must
+  still be applied to the state, which is where the contract is published from.
 """
 
 from __future__ import annotations
@@ -61,9 +63,16 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> No
             records.append((kind, change["address"], label, fingerprint(change["change"])))
     records.sort(key=lambda item: (item[2], item[0]))
     changes = [(kind, label) for kind, _, label, _ in records]
+    outputs = []
+    for name, change in plan.get("output_changes", {}).items():
+        kind = KIND.get(tuple(change["actions"]))
+        if kind:
+            outputs.append((kind, f"output.{name}", fingerprint(change)))
+    outputs.sort(key=lambda item: item[1])
 
     with open(changes_file, "w") as out:
         out.writelines(f"{kind} {label} {print_}\n" for kind, _, label, print_ in records)
+        out.writelines(f"{kind} {name} {print_}\n" for kind, name, print_ in outputs)
 
     counts = Counter(kind for kind, _ in changes)
     by_type: dict[str, Counter] = defaultdict(Counter)
@@ -72,8 +81,10 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> No
     existing = [(kind, address) for kind, address in changes if kind != "add"]
 
     lines = []
-    if not changes:
+    if not changes and not outputs:
         lines.append(f"**{stack}**: no changes.")
+    elif not changes:
+        lines.append(f"**{stack}**: no resource changes.")
     else:
         headline = f"{counts['add']} to add, {counts['change']} to change, {counts['destroy']} to destroy"
         if counts["replace"]:
@@ -87,6 +98,8 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> No
             lines += [f"- {kind}: `{address}`" for kind, address in existing[:LISTED]]
             if len(existing) > LISTED:
                 lines.append(f"- and {len(existing) - LISTED} more; the full plan is attached to the run.")
+    if outputs:
+        lines += ["", "**Outputs that change:** " + ", ".join(f"`{name[len('output.'):]}`" for _, name, _ in outputs)]
     with open(summary_file, "w") as out:
         out.write("\n".join(lines) + "\n")
 
