@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.4](https://github.com/fortytwoservices/mlz-core/compare/v0.1.3...v0.1.4) (2026-11-08)
+
+
+### Features
+
+* **firewall:** rules by landing zone name, and the hub's logs in the central workspace ([#12](https://github.com/fortytwoservices/mlz-core/issues/12)) ([711bdce](https://github.com/fortytwoservices/mlz-core/commit/711bdcef69d13df2e7cf258ccc31e9cd7a75e75f))
+* **pipelines:** no apply and no approval for a stack whose plan changes nothing ([#13](https://github.com/fortytwoservices/mlz-core/issues/13)) ([7a7474f](https://github.com/fortytwoservices/mlz-core/commit/7a7474f94d4de2febedc649729cf58d2c85da3f7))
+* **pipelines:** one reusable workflow per role, applying only the reviewed plan ([#11](https://github.com/fortytwoservices/mlz-core/issues/11)) ([d08edac](https://github.com/fortytwoservices/mlz-core/commit/d08edac669d711e62e6027a3ad331a65ba7eba68))
+
 ## [0.1.3](https://github.com/fortytwoservices/mlz-core/compare/v0.1.2...v0.1.3) (2026-11-03)
 
 
