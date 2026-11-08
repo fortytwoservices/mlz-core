@@ -349,6 +349,13 @@ jobs:
           token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
+      # The mlz tools read YAML through terraform console (tools/mlz/files.py), and vending's contract comes
+      # from its YAML.
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
       - if: inputs.role != 'vending'
         uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
