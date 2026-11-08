@@ -10,8 +10,11 @@ from pathlib import Path
 from ci.summary import main, resource_type
 
 
-def change(address: str, *actions: str, after: dict | None = None) -> dict:
-    return {"address": address, "change": {"actions": list(actions), "after": after, "after_unknown": {}}}
+def change(address: str, *actions: str, after: dict | None = None, before: dict | None = None, deposed: str | None = None) -> dict:
+    record = {"address": address, "change": {"actions": list(actions), "before": before, "after": after, "after_unknown": {}}}
+    if deposed:
+        record["deposed"] = deposed
+    return record
 
 
 class SummaryTest(unittest.TestCase):
@@ -60,6 +63,24 @@ class SummaryTest(unittest.TestCase):
         self.assertNotEqual(reviewed, other)
         self.assertNotEqual(create_first, delete_first)
         self.assertRegex(reviewed, r"^change azapi_resource\.x [0-9a-f]{16}\n$")
+
+    def test_deleting_another_resource_at_the_same_address_does_not_match(self):
+        _, reviewed = self.summarise([change("azapi_resource.x", "delete", before={"id": "/subscriptions/s/a"})])
+        _, other = self.summarise([change("azapi_resource.x", "delete", before={"id": "/subscriptions/s/b"})])
+        self.assertNotEqual(reviewed, other)
+
+    def test_a_deposed_object_keeps_its_own_line(self):
+        _, changes = self.summarise([
+            change("azapi_resource.x", "update", after={"v": 1}),
+            change("azapi_resource.x", "delete", before={"id": "old"}, deposed="00000001"),
+        ])
+        lines = [line.rsplit(" ", 1)[0] for line in changes.splitlines()]
+        self.assertEqual(lines, ["change azapi_resource.x", "destroy azapi_resource.x deposed:00000001"])
+        _, other = self.summarise([
+            change("azapi_resource.x", "update", after={"v": 2}),
+            change("azapi_resource.x", "delete", before={"id": "old"}, deposed="00000001"),
+        ])
+        self.assertNotEqual(changes, other)  # the current object's values still count
 
     def test_no_changes(self):
         summary, changes = self.summarise([change("azapi_resource.x", "no-op")])

@@ -41,7 +41,9 @@ FQDN_TAGS = {
     "AppServiceEnvironment", "AzureBackup", "AzureHDInsight", "AzureKubernetesService", "MicrosoftActiveProtectionService",
     "MicrosoftIntune", "Windows365", "WindowsDiagnostics", "WindowsUpdate", "WindowsVirtualDesktop", "citrixHdxPlusForWindows365",
 }
-SERVICE_TAG = re.compile(r"^[A-Z][A-Za-z0-9]+(\.[A-Z][A-Za-z0-9]+)?$")  # AzureMonitor, Storage.NorwayEast
+# AzureMonitor, Storage.NorwayEast, and AzureCloud.norwaye: regional AzureCloud tags are lower case after the
+# dot (learn.microsoft.com/azure/virtual-network/service-tags-overview).
+SERVICE_TAG = re.compile(r"^[A-Z][A-Za-z0-9]+(\.[A-Za-z0-9]+)?$")
 WEB_PORTS = {"https": ("Https", 443), "http": ("Http", 80)}
 
 # In every hub's platform group, whatever the customer writes: the Azure Monitor Agent, which governance's
@@ -62,30 +64,43 @@ def partition(key: str) -> int:
 
 
 def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
+    """The rules worth checking further: every one with a string name and list targets and ports. Anything
+    else is a problem, never an empty list, so a mistyped file cannot silently remove allow rules."""
+    if not isinstance(data, dict):
+        problems.append(f"{where}: the file holds outbound, a list of rules.")
+        return []
     if set(data) - {"outbound"}:
-        problems.append(f"{where}: {', '.join(sorted(set(data) - {'outbound'}))} is not a setting; rules go under outbound.")
-    rules = data.get("outbound") or []
+        problems.append(f"{where}: {', '.join(sorted(map(str, set(data) - {'outbound'})))} is not a setting; rules go under outbound.")
+    rules = data.get("outbound")
+    if rules is None:  # absent or empty: no rules
+        return []
     if not isinstance(rules, list):
         problems.append(f"{where}: outbound is a list of rules, each with name, to and ports.")
         return []
-    names = set()
+    names, kept = set(), []
     for index, rule in enumerate(rules):
         at = f"{where}: outbound[{index}]"
         if not isinstance(rule, dict) or set(rule) - {"name", "to", "ports", "description"} or not {"name", "to", "ports"} <= set(rule):
             problems.append(f"{at}: a rule has name, to and ports (and optionally description).")
             continue
-        if not isinstance(rule["name"], str) or not NAME.fullmatch(rule["name"]):
-            problems.append(f"{at}: name {rule['name']!r} is lower-case letters, digits and hyphens.")
-        elif rule["name"] in names:
-            problems.append(f"{at}: the name {rule['name']} is used twice in this file.")
-        names.add(rule.get("name"))
+        name = rule["name"]
+        if not isinstance(name, str) or not NAME.fullmatch(name):
+            problems.append(f"{at}: name {name!r} is lower-case letters, digits and hyphens.")
+        elif name in names:
+            problems.append(f"{at}: the name {name} is used twice in this file.")
+        lists = True
         for field in ("to", "ports"):
             if not isinstance(rule[field], list) or not rule[field]:
                 problems.append(f"{at}: {field} is a list, for example {'[api.example.com]' if field == 'to' else '[https]'}.")
-    return [r for r in rules if isinstance(r, dict) and isinstance(r.get("to"), list) and isinstance(r.get("ports"), list)]
+                lists = False
+        if isinstance(name, str):  # an invalid string name is reported above, and its targets still checked
+            names.add(name)
+            if lists:
+                kept.append(rule)
+    return kept
 
 
-def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
+def shape(rule: dict, sources: list[str], at: str, zones: dict, tier: str, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
     """One rule as the firewall module takes it: an application rule for names and FQDN tags on https or
     http, and network rules for addresses, landing zones, service tags and other ports (one for TCP, one
     for UDP). Returns (application rule or None, {suffix: network rule})."""
@@ -118,6 +133,15 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[s
             problems.append(f"{at}: port {port!r} is https, http, a TCP port (443) or udp:<port> (udp:53).")
     if tags and (tcp or udp or addresses):
         problems.append(f"{at}: an FQDN tag such as {tags[0]} takes only https and http; put other targets in a rule of their own.")
+    # Names on ports written as numbers become network rules, which match names by DNS resolution: never a
+    # wildcard, and not at all on a Basic firewall (learn.microsoft.com/azure/firewall/fqdn-filtering-network-rules,
+    # features-by-sku). Both would only fail when Azure applies them.
+    if names and (tcp or udp):
+        wildcards = [name for name in names if name.startswith("*.")]
+        if wildcards:
+            problems.append(f"{at}: a wildcard name such as {wildcards[0]} takes only https and http; network rules cannot match wildcards.")
+        if tier == "Basic":
+            problems.append(f"{at}: a Basic firewall reaches names only on https and http; use addresses for other ports, or a Standard firewall.")
     description = rule.get("description")
     application = None
     if (names or tags) and web:
@@ -156,11 +180,11 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, problems: list[s
     return application, network
 
 
-def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict, priority: int, problems: list[str]) -> dict:
+def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict, priority: int, tier: str, problems: list[str]) -> dict:
     """The owner's rules as at most two collections: <owner>-network and <owner>-application."""
     application, network, made_by = {}, {}, {}
     for index, rule in enumerate(rules):
-        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, problems)
+        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, tier, problems)
         if app:
             application[rule["name"]] = app
         for suffix, one in net.items():
@@ -190,8 +214,9 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
     shared = read_setting(folder / "platform") or {}
     shared_rules = read_rules("firewall/platform", shared, problems)
     for region, hub in hubs.items():
-        required = collections(REQUIRED, hub["landing_zone_ranges"], "mlz-core", "required", zones, 100, problems)
-        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, problems)
+        tier = (hub.get("firewall") or {}).get("sku_tier", "Standard")
+        required = collections(REQUIRED, hub["landing_zone_ranges"], "mlz-core", "required", zones, 100, tier, problems)
+        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems)
         groups[region]["platform"] = {
             "priority": PLATFORM_PRIORITY,
             "application": {**required["application"], **found["application"]},
@@ -214,7 +239,8 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         group = groups[region].setdefault(name, {"priority": FIRST_PARTITION_PRIORITY + 100 * number, "application": {}, "network": {}})
         # Collections in a group are ordered by key, ten apart; only traffic from that landing zone matches them.
         place = sorted(k for k in keys if k in zones and partition(k) == number).index(key)
-        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, problems)
+        tier = (hubs[region].get("firewall") or {}).get("sku_tier", "Standard")
+        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems)
         group["application"].update(found["application"])
         group["network"].update(found["network"])
     if problems:

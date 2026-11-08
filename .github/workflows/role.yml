@@ -322,9 +322,14 @@ jobs:
         run: .mlz-core/tools/ci/publish.sh "$ROLE"
 
   # Vending's contract is each landing zone's region and range, for the platform's firewall rules. It comes
-  # from the IP plan, so it is offered once per run, after every landing zone has applied.
+  # from the IP plan, so it is offered once per run, after every landing zone has applied. With no landing
+  # zones left there is nothing to apply, and the empty contract is still offered.
   publish:
-    if: inputs.role == 'vending' && needs.apply.result == 'success'
+    if: >-
+      always() && inputs.role == 'vending' && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.check.result == 'success'
+      && (needs.apply.result == 'success' || (needs.apply.result == 'skipped' && needs.check.outputs.stacks == '[]'))
     needs: [check, apply]
     runs-on: ubuntu-latest
     timeout-minutes: 10
