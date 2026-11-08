@@ -106,7 +106,9 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, tier: str, probl
     for UDP). Returns (application rule or None, {suffix: network rule})."""
     names, tags, addresses = [], [], []
     for target in rule["to"]:
-        target = str(target)
+        if not isinstance(target, str):  # YAML true or null would otherwise read as the tags True and None
+            problems.append(f"{at}: {target!r} is not a name, an address or range, a landing zone or a tag.")
+            continue
         if target in zones:
             addresses.append(zones[target]["range"])
         elif target in FQDN_TAGS or target.startswith("Office365."):
@@ -238,7 +240,9 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         name = f"lz-{number:02d}"
         group = groups[region].setdefault(name, {"priority": FIRST_PARTITION_PRIORITY + 100 * number, "application": {}, "network": {}})
         # Collections in a group are ordered by key, ten apart; only traffic from that landing zone matches them.
-        place = sorted(k for k in keys if k in zones and partition(k) == number).index(key)
+        # Counted within this hub only: the group is this hub's, so another region's landing zones never
+        # shift these priorities.
+        place = sorted(k for k in keys if k in zones and zones[k]["region"] == region and partition(k) == number).index(key)
         tier = (hubs[region].get("firewall") or {}).get("sku_tier", "Standard")
         found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems)
         group["application"].update(found["application"])
