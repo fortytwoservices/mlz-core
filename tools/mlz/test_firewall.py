@@ -193,6 +193,24 @@ class FirewallTest(unittest.TestCase):
         self.write("firewall/platform.yaml", "outbound:\n  - name: web\n    to: [api.example.com, 203.0.113.10]\n    ports: [https]\n")
         self.assertIn("web", build(self.repo, basic, VENDING)["policies"]["norwayeast"]["platform"]["application"]["platform-application"]["rules"])
 
+    def test_targets_that_are_not_strings_are_problems(self):
+        self.write("firewall/landing-zones/payments-prod.yaml",
+                   "outbound:\n  - name: odd\n    to: [true, null, 8080]\n    ports: [https]\n")
+        problems = self.problems()
+        for value in ("True", "None", "8080"):
+            self.assertIn(f"{value} is not a name, an address or range", problems)
+
+    def test_priorities_count_only_the_hub_s_own_landing_zones(self):
+        number = partition("payments-prod")
+        other = next(f"aa-{i}" for i in range(10_000) if partition(f"aa-{i}") == number and f"aa-{i}" < "payments-prod")
+        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}}}
+        vending = {"landing_zones": {**VENDING["landing_zones"], other: {"region": "swedencentral", "range": "10.200.4.0/24"}}}
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
+        before = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
+        self.write(f"firewall/landing-zones/{other}.yaml", "outbound:\n  - name: api\n    to: [203.0.113.11]\n    ports: [443]\n")
+        after = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
+        self.assertEqual(after, before)  # a zone in another hub, sorting first in the same partition, moves nothing here
+
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
         self.assertEqual(list(groups), ["platform"])
