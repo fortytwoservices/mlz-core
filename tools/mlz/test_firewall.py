@@ -97,6 +97,7 @@ class FirewallTest(unittest.TestCase):
             "outbound:\n"
             "  - name: storage\n    to: [Storage.NorwayEast, AzureKeyVault]\n    ports: [https]\n"
             "  - name: partner\n    to: [Partner.example.com]\n    ports: [https]\n"
+            "  - name: short\n    to: [Partner.com]\n    ports: [https]\n"
         ))
         group = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
         storage = group["network"]["payments-prod-network"]["rules"]["storage"]
@@ -104,6 +105,8 @@ class FirewallTest(unittest.TestCase):
         self.assertEqual((storage["protocols"], storage["destination_ports"]), (["TCP"], ["443"]))
         partner = group["application"]["payments-prod-application"]["rules"]["partner"]
         self.assertEqual(partner["destination_fqdns"], ["partner.example.com"])
+        short = group["application"]["payments-prod-application"]["rules"]["short"]
+        self.assertEqual(short["destination_fqdns"], ["partner.com"])
 
     def lz_group(self) -> dict:
         return build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]

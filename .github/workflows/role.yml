@@ -296,6 +296,10 @@ jobs:
     needs: [check, apply]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # One publication at a time; publish.sh skips a run that main has moved past.
+    concurrency:
+      group: mlz-publish-${{ inputs.role }}
+      cancel-in-progress: false
     permissions:
       contents: read
     steps:
