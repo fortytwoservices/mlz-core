@@ -8,9 +8,22 @@ role=$1
 case $role in
   governance) readers="platform vending" ;;
   platform) readers="governance vending" ;;
+  vending) readers="platform" ;;
   *) exit 0 ;;
 esac
-terraform -chdir="$(root_of "$role")" output -json contract | python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
+if [[ $role == vending ]]; then
+  # Vending's contract is its IP plan, by landing zone: no single state to read it from.
+  python3 -m mlz vending-contract --repo . --out "$WORK/$role.yaml"
+else
+  terraform -chdir="$(root_of "$role")" output -json contract | python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
+fi
+# A run that gets here after a newer run on main must not replace the newer one's offer: only the run of
+# main's current commit publishes. The publish job also queues per role, in role.yml.
+head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+if [[ $head != "$GITHUB_SHA" ]]; then
+  echo "main is at $head now, not at this run's $GITHUB_SHA: the newer run offers the contract."
+  exit 0
+fi
 path=_generated/$role.yaml
 branch=mlz/$role-contract
 for reader in $readers; do

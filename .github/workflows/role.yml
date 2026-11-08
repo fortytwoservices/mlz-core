@@ -210,7 +210,11 @@ jobs:
       contents: read
       id-token: write # signs in as the apply identity, which only this environment may use
     strategy:
-      fail-fast: false
+      # The platform's stacks apply one after the other, hub first (jobs start in matrix order): its firewall
+      # policy holds the rules. If the hub fails, fail-fast cancels the queued rules job. Landing zones
+      # apply independently, so one failing never stops another.
+      fail-fast: ${{ inputs.role == 'platform' }}
+      max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
       matrix:
         stack: ${{ fromJSON(needs.check.outputs.stacks) }}
     concurrency:
@@ -264,7 +268,7 @@ jobs:
         run: .mlz-core/tools/ci/apply.sh "$ROLE" "$STACK"
 
       - id: writer
-        if: inputs.role != 'vending'
+        if: inputs.role != 'vending' && matrix.stack == inputs.role
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
@@ -274,7 +278,66 @@ jobs:
           permission-pull-requests: write
 
       - name: Offer the contract to the repos that read it
-        if: inputs.role != 'vending'
+        if: inputs.role != 'vending' && matrix.stack == inputs.role
+        env:
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
+        run: .mlz-core/tools/ci/publish.sh "$ROLE"
+
+  # Vending's contract is each landing zone's region and range, for the platform's firewall rules. It comes
+  # from the IP plan, so it is offered once per run, after every landing zone has applied. With no landing
+  # zones left there is nothing to apply, and the empty contract is still offered.
+  publish:
+    if: >-
+      always() && inputs.role == 'vending' && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.check.result == 'success'
+      && (needs.apply.result == 'success' || (needs.apply.result == 'skipped' && needs.check.outputs.stacks == '[]'))
+    needs: [check, apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One publication at a time; publish.sh skips a run that main has moved past.
+    concurrency:
+      group: mlz-publish-${{ inputs.role }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: reader
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.AZ_TF_MODULE_READER_CLIENT_ID }}
+          private-key: ${{ secrets.AZ_TF_MODULE_READER_PRIVATE_KEY }}
+          owner: fortytwoservices
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: fortytwoservices/mlz-core
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          token: ${{ steps.reader.outputs.token }}
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - id: writer
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Offer the contract to the platform repo
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}

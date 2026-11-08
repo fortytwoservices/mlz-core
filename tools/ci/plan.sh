@@ -6,7 +6,7 @@
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
 role=$1 stack=$2
-root=$(root_of "$role")
+root=$(root_of "$role" "$stack")
 key=$stack.tfstate
 copy=$WORK/state/$key
 mkdir -p "$WORK/state"

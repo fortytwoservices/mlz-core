@@ -125,6 +125,57 @@ module "alz" {
   subscription_placement = local.placement
 }
 
+# Diagnostic settings need the Microsoft.Insights provider registered in their subscription, and a new
+# subscription may not have it: the platform's firewalls and gateways, and the policies that deploy
+# diagnostic settings, would fail with SubscriptionNotRegistered. Landing zones get it from vending.
+resource "azapi_resource_action" "insights_provider" {
+  for_each = local.placement
+
+  type        = "Microsoft.Resources/providers@2021-04-01"
+  resource_id = "/subscriptions/${each.value.subscription_id}/providers/Microsoft.Insights"
+  action      = "register"
+  method      = "POST"
+}
+
+# The platform sends its firewalls' and gateways' logs to the workspace. Naming a workspace as a
+# destination takes two rights on it, and this role holds only those: the platform cannot read the data
+# or change the workspace.
+resource "azapi_resource" "workspace_destination_role" {
+  count = local.bootstrap == null ? 0 : 1
+
+  type      = "Microsoft.Authorization/roleDefinitions@2022-04-01"
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/workspace-destination")
+  parent_id = "/subscriptions/${local.subscriptions.management}" # Azure keeps custom roles at subscription level
+  body = {
+    properties = {
+      roleName    = "${local.config.root_id} log destination"
+      description = "mlz-core: name the central workspace as the destination of diagnostic settings, nothing more."
+      type        = "CustomRole"
+      permissions = [{
+        actions    = ["Microsoft.OperationalInsights/workspaces/read", "Microsoft.OperationalInsights/workspaces/sharedKeys/action"]
+        notActions = []
+      }]
+      assignableScopes = [azapi_resource.management_resource_group.id]
+    }
+  }
+}
+
+resource "azapi_resource" "workspace_destination" {
+  count = local.bootstrap == null ? 0 : 1
+
+  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/governance/platform-apply/workspace/${local.bootstrap.identities.platform.apply.principal_id}")
+  parent_id = module.management.resource_id
+  body = {
+    properties = {
+      roleDefinitionId = azapi_resource.workspace_destination_role[0].id
+      principalId      = local.bootstrap.identities.platform.apply.principal_id
+      principalType    = "ServicePrincipal"
+      description      = "mlz-core governance: platform-apply/workspace-destination"
+    }
+  }
+}
+
 resource "azapi_resource" "vending_rights" {
   for_each = local.vending_rights
 

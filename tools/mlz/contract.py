@@ -9,6 +9,13 @@ from __future__ import annotations
 from .yamlout import dump
 
 CONTRACTS = {
+    "vending": {
+        "header": (
+            "Each landing zone's region and address range, for the platform's firewall rules.\n"
+            "Written by CI from mlz-vending after every apply: do not edit here."
+        ),
+        "comments": {"landing_zones": "A firewall rule names a landing zone by its key; this is where its traffic comes from."},
+    },
     "bootstrap": {
         "header": (
             "What the bootstrap set up, for the governance repo.\n"
