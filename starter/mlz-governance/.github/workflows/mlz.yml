@@ -9,6 +9,12 @@ on:
     - cron: "23 5 * * *" # daily drift check
   workflow_dispatch:
 
+# A new push to a pull request cancels its older run, so an older plan never replaces the newer one's
+# comment. Other runs never cancel each other (a group of their own); main's applies queue in role.yml.
+concurrency:
+  group: mlz-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   id-token: write

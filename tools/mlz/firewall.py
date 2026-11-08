@@ -41,9 +41,9 @@ FQDN_TAGS = {
     "AppServiceEnvironment", "AzureBackup", "AzureHDInsight", "AzureKubernetesService", "MicrosoftActiveProtectionService",
     "MicrosoftIntune", "Windows365", "WindowsDiagnostics", "WindowsUpdate", "WindowsVirtualDesktop", "citrixHdxPlusForWindows365",
 }
-# AzureMonitor, Storage.NorwayEast, and AzureCloud.norwaye: regional AzureCloud tags are lower case after the
-# dot (learn.microsoft.com/azure/virtual-network/service-tags-overview).
-SERVICE_TAG = re.compile(r"^[A-Z][A-Za-z0-9]+(\.[A-Za-z0-9]+)?$")
+# AzureMonitor, Storage.NorwayEast, and AzureCloud.norwaye: only the regional AzureCloud tags are lower case
+# after the dot (learn.microsoft.com/azure/virtual-network/service-tags-overview), so Partner.com stays a name.
+SERVICE_TAG = re.compile(r"^([A-Z][A-Za-z0-9]+(\.[A-Z][A-Za-z0-9]+)?|AzureCloud\.[a-z0-9]+)$")
 WEB_PORTS = {"https": ("Https", 443), "http": ("Http", 80)}
 
 # In every hub's platform group, whatever the customer writes: the Azure Monitor Agent, which governance's
