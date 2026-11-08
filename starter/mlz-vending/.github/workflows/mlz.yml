@@ -1,0 +1,28 @@
+# This repo's pipeline: mlz-core's vending role, at the release pinned below. To upgrade, change the release.
+name: mlz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 5 * * *" # daily drift check
+  workflow_dispatch:
+
+# A new push to a pull request cancels its older run, so an older plan never replaces the newer one's
+# comment. Other runs never cancel each other (a group of their own); main's applies queue in role.yml.
+concurrency:
+  group: mlz-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  vending:
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.4
+    with:
+      role: vending
+    secrets: inherit

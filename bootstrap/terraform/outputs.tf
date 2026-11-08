@@ -24,12 +24,16 @@ output "contract" {
 }
 
 output "handover" {
-  description = "The commands that hand a new landing zone subscription to vending, for the subscription runbook."
+  description = "The commands that hand subscriptions to the pipelines, by moving them into the tree. Run as someone who may move them (Owner on the subscription, and rights on the group it is in now)."
   value       = <<-EOT
-    # Hand a new landing zone subscription to vending. Run as someone who is Owner on it, once per subscription.
-    SUBSCRIPTION=<new subscription ID>
-    az role assignment create --assignee-object-id ${azapi_resource.identity["vending-apply"].output.properties.principalId} --assignee-principal-type ServicePrincipal --role Owner --scope /subscriptions/$SUBSCRIPTION
-    az role assignment create --assignee-object-id ${azapi_resource.identity["vending-plan"].output.properties.principalId} --assignee-principal-type ServicePrincipal --role Reader --scope /subscriptions/$SUBSCRIPTION
+    # Once, after the bootstrap: the platform subscriptions into the top group. Governance moves them on.
+    %{for name, scope in local.subscriptions~}
+    az account management-group subscription add --name ${local.root} --subscription ${trimprefix(scope, "/subscriptions/")}   # ${name}
+    %{endfor~}
+
+    # For each new landing zone subscription, before its YAML is merged. Vending moves it on to Corp,
+    # Online or Sandboxes, as its YAML says.
+    az account management-group subscription add --name ${local.root}-landing-zones --subscription <new subscription ID>
   EOT
 }
 

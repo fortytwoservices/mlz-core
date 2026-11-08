@@ -36,8 +36,9 @@ locals {
     storage_blob_reader      = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
   }
 
-  # Every right the bootstrap grants. Vending's rights on Landing Zones and Sandboxes come from governance,
-  # which creates those groups; a new landing zone subscription is handed to vending by the handover step.
+  # Every right the bootstrap grants. Subscriptions get their rights from the tree once they are handed
+  # over (moved into it, see the handover output), so the pipelines never need rights on the tenant's
+  # default group. Vending's rights on Landing Zones and Sandboxes come from governance, which creates them.
   role_assignments = merge(
     {
       "governance-apply/top-group"  = { identity = "governance-apply", role = local.builtin.owner, scope = local.top_group }
@@ -47,11 +48,6 @@ locals {
       "vending-apply/hub-peering"   = { identity = "vending-apply", role = azapi_resource.hub_peering.id, scope = local.connectivity }
       "vending-plan/connectivity"   = { identity = "vending-plan", role = local.builtin.reader, scope = local.connectivity }
     },
-    # Governance places the platform subscriptions in its tree; until it has, it reaches them directly.
-    merge([for name, scope in local.subscriptions : {
-      "governance-apply/${name}" = { identity = "governance-apply", role = local.builtin.owner, scope = scope }
-      "governance-plan/${name}"  = { identity = "governance-plan", role = local.builtin.reader, scope = scope }
-    }]...),
     # State: each role's plan identity reads its own container, and its apply identity writes it.
     merge([for role in local.roles : {
       "${role}-apply/state" = { identity = "${role}-apply", role = local.builtin.storage_blob_contributor, scope = azapi_resource.container[role].id }
@@ -329,6 +325,8 @@ resource "github_actions_variable" "role" {
       AZURE_CLIENT_ID         = azapi_resource.identity["${role}-plan"].output.properties.clientId
       TFSTATE_STORAGE_ACCOUNT = local.names.storage_account
       TFSTATE_CONTAINER       = role
+      # The three repos, for the pipeline that offers a contract to the repos that read it.
+      MLZ_REPOSITORIES = jsonencode({ for r in local.roles : r => "${local.github.organization}/${local.github.repositories[r]}" })
     } : "${role}/${name}" => { role = role, name = name, value = value }
   }]...)
 

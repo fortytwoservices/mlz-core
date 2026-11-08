@@ -38,8 +38,8 @@ never change Azure.
 
 | Identity | Rights from the bootstrap | Rights from governance |
 |---|---|---|
-| `governance-plan` | Reader on `<root>` and on each platform subscription; reads the `governance` container | |
-| `governance-apply` | Owner on `<root>` and on each platform subscription, until governance has placed them; writes the `governance` container | |
+| `governance-plan` | Reader on `<root>`; reads the `governance` container | |
+| `governance-apply` | Owner on `<root>`; writes the `governance` container | |
 | `platform-plan` | Reader on the connectivity subscription; reads the `platform` container | |
 | `platform-apply` | Contributor on the connectivity subscription; writes the `platform` container | |
 | `vending-plan` | Reader on the connectivity subscription; reads the `vending` container | Reader on Landing Zones and Sandboxes |
@@ -54,7 +54,8 @@ Each landing zone also gets an identity of its own from vending, `id-<workload>-
 Contributor on its subscription, for its workload repo.
 
 The repository variables are IDs and names, never secrets: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`
-(management), `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT` and `TFSTATE_CONTAINER`. `AZURE_CLIENT_ID` is
+(management), `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER` and `MLZ_REPOSITORIES` (the
+three repos, for offering contracts). `AZURE_CLIENT_ID` is
 the plan identity for the repo and the apply identity inside its environment, so a workflow always signs
 in as the identity its job is trusted for.
 
@@ -63,19 +64,28 @@ time it meets a new key (a new landing zone, a role's first run), even with `-lo
 downloads a copy of its state, when there is one, and plans against that copy with a local backend; only
 the apply job, in its environment, uses the backend itself.
 
-## Handing a new subscription to vending
+## Handing subscriptions to the pipelines
 
-Azure lets an identity move a subscription into a management group only if it is Owner on that
-subscription. So whoever creates a landing zone subscription (for a CSP customer, in Partner Center)
-hands it to vending once, before its YAML is merged:
+To move a subscription into a management group, Azure asks for rights on the subscription, on the
+group it goes to, and on the group it is in now. New subscriptions sit in the tenant's default group
+(the tenant root, or a group such as `unmanaged_subscriptions`), where no pipeline has, or should have,
+any rights. So a person hands each subscription over once, by moving it into the tree; from there the
+pipelines' rights on the tree cover it:
 
 ```sh
 terraform -chdir=bootstrap/terraform output -raw handover
 ```
 
-prints the two commands, with the identities filled in: Owner for `vending-apply`, which places and
-builds it, and Reader for `vending-plan`, which plans it. Once the subscription is in Corp, Online or
-Sandboxes, vending's rights there cover it.
+prints the commands:
+
+- **The platform subscriptions**, once, after the bootstrap: into `<root>`. Governance then moves each into
+  Management, Connectivity or Identity.
+- **Each new landing zone subscription** (for a CSP customer, created in Partner Center), before its YAML is
+  merged: into `<root>-landing-zones`. Vending, Owner there, moves it on to Corp, Online or Sandboxes, as its
+  YAML says.
+
+Whoever runs them needs Owner on the subscription and rights on the group it is in now, as the person
+who created it normally has.
 
 Vending does not create subscriptions yet; it adopts existing ones. For EA and MCA customers it could
 create them itself, and then the handover step disappears for them.
@@ -101,7 +111,9 @@ terraform output -raw backend_config > backend.hcl
 rm backend_override.tf
 terraform init -migrate-state -backend-config=backend.hcl
 
-# 3. Check the subjects match what GitHub issues, then publish the contract to the governance repo.
+# 3. Hand the platform subscriptions over (the first commands in: terraform output -raw handover).
+
+# 4. Check the subjects match what GitHub issues, then publish the contract to the governance repo.
 terraform output oidc_subjects
 gh api repos/<organization>/<repository>/actions/oidc/customization/sub   # sub_claim_prefix, per repo
 terraform output -json contract | PYTHONPATH=../../tools python3 -m mlz contract bootstrap --out $GOV/_generated/bootstrap.yaml
