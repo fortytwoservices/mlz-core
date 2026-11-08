@@ -12,7 +12,9 @@ jobs:
     secrets: inherit
 ```
 
-Upgrading is a pull request that changes the release. The workflow checks out mlz-core's code at the exact
+The starters' workflow also cancels a pull request's older run when a newer push starts one, so an older
+plan never replaces the newer one's comment; other runs never cancel each other. Upgrading is a pull request
+that changes the release. The workflow checks out mlz-core's code at the exact
 commit it came from (it reads which one from the run's own OIDC token), so code and workflow never drift
 apart. The steps themselves are small scripts in `tools/ci/`.
 
