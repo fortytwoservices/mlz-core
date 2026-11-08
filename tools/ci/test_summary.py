@@ -104,6 +104,18 @@ class SummaryTest(unittest.TestCase):
         self.assertIn("**Outputs that change:** `added`, `contract`", summary)
         self.assertEqual([line.rsplit(" ", 1)[0] for line in changes.splitlines()], ["add azapi_resource.x", "add output.added", "change output.contract"])
 
+    def test_output_values_count_in_the_change_list(self):
+        # The apply rejects a plan whose outputs would get other values than the reviewer saw.
+        def output(after, after_unknown=False):
+            return {"contract": {"actions": ["update"], "after": after, "after_unknown": after_unknown}}
+        _, reviewed = self.summarise([], output({"root": "mlz"}))
+        _, same = self.summarise([], output({"root": "mlz"}))
+        _, other_value = self.summarise([], output({"root": "other"}))
+        _, now_unknown = self.summarise([], output({"root": "mlz"}, after_unknown=True))
+        self.assertEqual(reviewed, same)
+        self.assertNotEqual(reviewed, other_value)
+        self.assertNotEqual(reviewed, now_unknown)
+
     def test_resource_type_keeps_the_innermost_module(self):
         self.assertEqual(resource_type("module.management.module.law.azapi_resource.this"), "law: azapi_resource.this")
         self.assertEqual(resource_type('module.vending.module.vnet["a.b"].azapi_resource.peering["x"]'), "vnet: azapi_resource.peering")
