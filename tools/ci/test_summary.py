@@ -28,7 +28,7 @@ class SummaryTest(unittest.TestCase):
     def summarise(self, changes: list[dict], outputs: dict | None = None) -> tuple[str, str]:
         plan = self.dir / "plan.json"
         plan.write_text(json.dumps({"resource_changes": changes, "output_changes": outputs or {}}))
-        main(str(plan), "governance", str(self.dir / "summary.md"), str(self.dir / "changes.txt"))
+        self.exit_code = main(str(plan), "governance", str(self.dir / "summary.md"), str(self.dir / "changes.txt"))
         return (self.dir / "summary.md").read_text(), (self.dir / "changes.txt").read_text()
 
     def test_counts_types_and_names_every_change_to_an_existing_resource(self):
@@ -115,6 +115,28 @@ class SummaryTest(unittest.TestCase):
         self.assertEqual(reviewed, same)
         self.assertNotEqual(reviewed, other_value)
         self.assertNotEqual(reviewed, now_unknown)
+
+    def test_a_plan_that_replaces_or_deletes_a_firewall_policy_is_refused(self):
+        # The rules live inside the policy and are applied by their own stack, planned before the hub applies.
+        address = 'module.hub.module.firewall["norwayeast"].module.firewall_policy[0].azapi_resource.this'
+        policy = {"id": "/subscriptions/s/firewallPolicies/afwp-mlz-hub-nwe", "name": "afwp-mlz-hub-nwe",
+                  "type": "Microsoft.Network/firewallPolicies@2024-05-01"}
+        for actions, verb in ((("create", "delete"), "replaces"), (("delete", "create"), "replaces"), (("delete",), "deletes")):
+            with self.subTest(actions=actions):
+                summary, changes = self.summarise([change(address, *actions, before=policy)])
+                self.assertEqual(self.exit_code, 3)
+                self.assertTrue(summary.startswith(f"**Refused:** this plan {verb} the firewall policy `afwp-mlz-hub-nwe`"))
+                self.assertIn(address, changes)  # the change list is still written, for the run page
+
+    def test_policy_updates_and_rule_group_deletions_are_not_refused(self):
+        policy = {"id": "p", "name": "afwp-mlz-hub-nwe", "type": "Microsoft.Network/firewallPolicies@2024-05-01"}
+        group = {"id": "g", "name": "lz-07", "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups@2024-05-01"}
+        summary, _ = self.summarise([
+            change("module.hub.azapi_resource.policy", "update", before=policy, after=policy),
+            change('module.rule_collection_group["norwayeast/lz-07"].azapi_resource.this', "delete", before=group),
+        ])
+        self.assertEqual(self.exit_code, 0)
+        self.assertNotIn("Refused", summary)
 
     def test_resource_type_keeps_the_innermost_module(self):
         self.assertEqual(resource_type("module.management.module.law.azapi_resource.this"), "law: azapi_resource.this")
