@@ -35,6 +35,10 @@ env:
   ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
   TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
   TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+  # Python runs from the customer's checkout, which a pull request controls. Without this, a file such as
+  # mlz/ or json.py at its root would be imported before mlz-core's own code and the standard library, in a
+  # step that may hold a write token. Python 3.11 and later honour it.
+  PYTHONSAFEPATH: "1"
 
 jobs:
   check:
@@ -85,6 +89,29 @@ jobs:
         with:
           terraform_version: 1.17.0
           terraform_wrapper: false
+
+      # On a vending pull request, a new landing zone or subnet gets its addresses here: the allocator runs and
+      # its plan is committed to the pull request, which starts the run that plans with them.
+      - id: plan-writer
+        if: inputs.role == 'vending' && github.event_name == 'pull_request'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write # to bring a branch up to date with its base first
+
+      - name: Bring the IP plan up to date
+        if: inputs.role == 'vending' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.plan-writer.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: .mlz-core/tools/ci/ip-plan.sh
 
       - name: Check the YAML
         id: check
