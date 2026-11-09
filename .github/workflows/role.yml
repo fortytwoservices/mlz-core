@@ -196,6 +196,10 @@ jobs:
           STATUS: ${{ steps.plan.outputs.status }}
         run: |
           if [[ $STATUS == 1 ]]; then echo "::error::The plan failed."; exit 1; fi
+          if [[ $STATUS == 3 ]]; then
+            echo "::error::The plan is refused: it deletes or replaces a firewall policy, and every rule in it would go too. The plan above says which."
+            exit 1
+          fi
           if [[ $EVENT == schedule && $STATUS == 2 ]]; then
             echo "::error::Drift: Azure differs from main. The plan above shows how."
             exit 1

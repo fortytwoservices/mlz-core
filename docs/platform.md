@@ -77,7 +77,8 @@ Regional service tags are written as Azure names them: `Storage.NorwayEast`, but
 
 `python3 -m mlz firewall` turns the files into a fixed set of rule collection groups per hub. They are
 applied by their own root, `platform/rules/terraform`, the `firewall` stack, so a rule change never plans
-the hub. The stack runs even without a `firewall/` folder: the `platform` group always holds what mlz-core
+the hub. The pipeline refuses a hub plan that deletes or replaces the firewall policy, since the rules live
+inside it ([pipelines](pipelines.md)). The stack runs even without a `firewall/` folder: the `platform` group always holds what mlz-core
 requires, and deleting a rules file takes its rules out of Azure.
 
 | Group | Priority | Holds |

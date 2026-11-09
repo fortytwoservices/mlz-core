@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 # A new push to a pull request cancels its older run, so an older plan never replaces the newer one's
-# comment. Other runs never cancel each other (a group of their own); main's applies queue in role.yml.
+# comment. Other runs never cancel each other here (a group of their own); main's runs queue below.
 concurrency:
   group: mlz-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -22,7 +22,13 @@ permissions:
 
 jobs:
   platform:
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.4
+    # Runs on main go one at a time, first in first out, so each one plans only after the one before has
+    # applied, and the plan a reviewer approves already includes it. Pull requests and the daily drift check
+    # get a group of their own and never wait here.
+    concurrency:
+      group: mlz-main-${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 'queue' || github.run_id }}
+      queue: max
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.4 # x-release-please-version
     with:
       role: platform
     secrets: inherit

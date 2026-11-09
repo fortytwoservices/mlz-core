@@ -2,7 +2,8 @@
 
     python3 summary.py <plan.json> <stack> <summary.md> <changes.txt>
 
-<plan.json> is `terraform show -json` of a saved plan. Writes:
+<plan.json> is `terraform show -json` of a saved plan. Exits 3 when it refuses the plan: a plan that deletes
+or replaces a firewall policy, whose rule collection groups would go with it (REFUSED, below). Writes:
 
 - <summary.md>: the counts, the changes by resource type, and every change to or removal of an existing
   resource by name (new resources by type only). Short enough for a pull request comment.
@@ -30,6 +31,14 @@ KIND = {
     ("create", "delete"): "replace",
 }
 LISTED = 200  # changes to existing resources shown by name
+REFUSED = 3  # exit code: the plan does something the pipeline never applies
+
+# A firewall policy holds the rules, which are applied by a stack of their own, planned before the hub
+# applies. Deleting or replacing the policy would delete every rule in it while the rules plan says
+# nothing changes, so the firewall would deny traffic until the rules are written again. In mlz-core the
+# policy is only replaced when its name, resource group or region changes; a release that does that ships
+# its own migration step.
+FIREWALL_POLICY = re.compile(r"^microsoft\.network/firewallpolicies@", re.IGNORECASE)
 
 
 def resource_type(address: str) -> str:
@@ -51,16 +60,19 @@ def fingerprint(change: dict) -> str:
     return hashlib.sha256(json.dumps(what, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> None:
+def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> int:
     plan = json.load(open(plan_file))
     # (kind, address, label, fingerprint) per change. An interrupted replacement leaves a deposed object
     # at the same address as the current one: the label tells them apart, and each keeps its own fingerprint.
-    records = []
+    records, refused = [], []
     for change in plan.get("resource_changes", []):
         kind = KIND.get(tuple(change["change"]["actions"]))
         if kind:
             label = change["address"] + (f" deposed:{change['deposed']}" if change.get("deposed") else "")
             records.append((kind, change["address"], label, fingerprint(change["change"])))
+            before = change["change"].get("before")
+            if "delete" in change["change"]["actions"] and isinstance(before, dict) and FIREWALL_POLICY.match(str(before.get("type", ""))):
+                refused.append((kind, before.get("name") or label, label))
     records.sort(key=lambda item: (item[2], item[0]))
     changes = [(kind, label) for kind, _, label, _ in records]
     outputs = []
@@ -81,6 +93,14 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> No
     existing = [(kind, address) for kind, address in changes if kind != "add"]
 
     lines = []
+    for kind, name, label in refused:
+        verb = "replaces" if kind == "replace" else "deletes"
+        lines += [
+            f"**Refused:** this plan {verb} the firewall policy `{name}` (`{label}`). Every rule in it would be "
+            "deleted with it, and the firewall would deny traffic until the rules are written again. A firewall "
+            "policy only changes in place; renaming or moving one needs a migration step from a release.",
+            "",
+        ]
     if not changes and not outputs:
         lines.append(f"**{stack}**: no changes.")
     elif not changes:
@@ -102,7 +122,8 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> No
         lines += ["", "**Outputs that change:** " + ", ".join(f"`{name[len('output.'):]}`" for _, name, _ in outputs)]
     with open(summary_file, "w") as out:
         out.write("\n".join(lines) + "\n")
+    return REFUSED if refused else 0
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    sys.exit(main(*sys.argv[1:]))
