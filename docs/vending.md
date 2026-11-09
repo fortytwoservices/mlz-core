@@ -69,10 +69,17 @@ Any layer can be a folder of chunks.
   (inside the region's ranges, clear of every hub and every other landing zone) and reports a conflict
   rather than moving anything. It writes nothing when anything is wrong.
 
+  **Nobody runs the allocator by hand.** On a pull request, the pipeline runs it on the pull request merged
+  into `main` and, when anything new needs addresses, commits the plan to the pull request
+  (`chore: IP plan for this pull request`, from the pipeline's GitHub App). That run stops there; the run
+  of the new commit checks and plans with the addresses, and the reviewer sees them in the pull request.
+  Because it allocates on top of `main`, blocks another pull request has already merged are never given
+  out twice. You can still run `python3 -m mlz allocate --repo .` yourself, for example to see the
+  addresses before pushing.
+
   `python3 -m mlz allocate --check` writes nothing and fails when the plan in the repo is not what the
-  allocator would write. Run on the merge queue, it stops two pull requests that each took the same
-  free block, or one that forgot to run the allocator, before either reaches `main`. 500 landing zones
-  take about a second.
+  allocator would write. On `main` it stops two pull requests that each took the same free block, if both
+  were merged before either was brought up to date. 500 landing zones take about a second.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
 - **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.

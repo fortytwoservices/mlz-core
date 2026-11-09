@@ -86,6 +86,26 @@ jobs:
           terraform_version: 1.17.0
           terraform_wrapper: false
 
+      # On a vending pull request, a new landing zone or subnet gets its addresses here: the allocator runs and
+      # its plan is committed to the pull request, which starts the run that plans with them.
+      - id: plan-writer
+        if: inputs.role == 'vending' && github.event_name == 'pull_request'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
+      - name: Bring the IP plan up to date
+        if: inputs.role == 'vending' && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ steps.plan-writer.outputs.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .mlz-core/tools/ci/ip-plan.sh
+
       - name: Check the YAML
         id: check
         run: |
