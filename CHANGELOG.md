@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.5](https://github.com/fortytwoservices/mlz-core/compare/v0.1.4...v0.1.5) (2026-11-09)
+
+
+### Features
+
+* **pipelines:** main runs queue one after another; a plan that deletes a firewall policy is refused ([#15](https://github.com/fortytwoservices/mlz-core/issues/15)) ([124d2ac](https://github.com/fortytwoservices/mlz-core/commit/124d2ac1b303f0676ab898955b1fc4fc9aa7c840))
+
 ## [0.1.4](https://github.com/fortytwoservices/mlz-core/compare/v0.1.3...v0.1.4) (2026-11-08)
 
 
