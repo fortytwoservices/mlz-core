@@ -97,13 +97,16 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: write
+          permission-pull-requests: write # to bring a branch up to date with its base first
 
       - name: Bring the IP plan up to date
         if: inputs.role == 'vending' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ steps.plan-writer.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: .mlz-core/tools/ci/ip-plan.sh
 
       - name: Check the YAML

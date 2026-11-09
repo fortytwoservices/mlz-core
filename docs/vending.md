@@ -74,7 +74,10 @@ Any layer can be a folder of chunks.
   (`chore: IP plan for this pull request`, from the pipeline's GitHub App). That run stops there; the run
   of the new commit checks and plans with the addresses, and the reviewer sees them in the pull request.
   Because it allocates on top of `main`, blocks another pull request has already merged are never given
-  out twice. You can still run `python3 -m mlz allocate --repo .` yourself, for example to see the
+  out twice. If `main` changed the plan since the branch was made, the pipeline first brings the branch up
+  to date with `main` (a merge commit from the same App), so the plan it commits next never conflicts with
+  `main`'s. The commit is made only if the branch has not moved in the meantime; a newer push has a run of
+  its own. You can still run `python3 -m mlz allocate --repo .` yourself, for example to see the
   addresses before pushing.
 
   `python3 -m mlz allocate --check` writes nothing and fails when the plan in the repo is not what the
