@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.6](https://github.com/fortytwoservices/mlz-core/compare/v0.1.5...v0.1.6) (2026-11-09)
+
+
+### Features
+
+* **vending:** the pipeline commits the IP plan to the pull request ([#17](https://github.com/fortytwoservices/mlz-core/issues/17)) ([f9a7ebe](https://github.com/fortytwoservices/mlz-core/commit/f9a7ebe6edc09182361ccfd8492e7d737aac66a0))
+
 ## [0.1.5](https://github.com/fortytwoservices/mlz-core/compare/v0.1.4...v0.1.5) (2026-11-09)
 
 
