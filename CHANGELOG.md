@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/fortytwoservices/mlz-core/compare/v0.1.6...v0.1.7) (2026-11-10)
+
+
+### Features
+
+* **pipeline:** run from a customer's own GitHub organisation ([#21](https://github.com/fortytwoservices/mlz-core/issues/21)) ([4e9d9e1](https://github.com/fortytwoservices/mlz-core/commit/4e9d9e108e806f913b592f658f574d72cb5e2b9c))
+
 ## [0.1.6](https://github.com/fortytwoservices/mlz-core/compare/v0.1.5...v0.1.6) (2026-11-09)
 
 
