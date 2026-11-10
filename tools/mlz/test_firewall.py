@@ -11,7 +11,7 @@ from mlz.merge import ConfigError
 
 PLATFORM = {
     "root_id": "mlz",
-    "connectivity_subscription_id": "a002de69-082a-4f44-b78f-c9e36e209af2",
+    "connectivity_subscription_id": "00000000-0000-0000-0000-000000000002",
     "hubs": {"norwayeast": {"landing_zone_ranges": ["10.100.0.0/16"]}},
 }
 VENDING = {"landing_zones": {
