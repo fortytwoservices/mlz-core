@@ -17,9 +17,9 @@ GOVERNANCE = {
     "allowed_regions": ["norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral"],
     "required_tags": ["Owner", "CostCenter"],
     "archetypes": {"corp": "mlz-lz-corp", "online": "mlz-lz-online", "sandbox": "mlz-sandboxes"},
-    "platform_subscriptions": {"management": "6d6a6044-7f37-46cd-b5f2-a8a6f75aeffe"},
+    "platform_subscriptions": {"management": "00000000-0000-0000-0000-000000000001"},
     "monitoring": {
-        "workspace": "/subscriptions/6d6a6044-7f37-46cd-b5f2-a8a6f75aeffe/resourceGroups/rg-mlz-management-nwe"
+        "workspace": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-mlz-management-nwe"
         "/providers/Microsoft.OperationalInsights/workspaces/law-mlz-management-nwe"
     },
 }
@@ -33,12 +33,12 @@ PLATFORM = {
             "spoke_routes": [{"name": "default", "to": "0.0.0.0/0", "via": "10.100.0.4"}],
         }
     },
-    "private_dns": {"subscription": "a002de69-082a-4f44-b78f-c9e36e209af2", "resource_group": "rg-mlz-dns-nwe", "region": "norwayeast"},
+    "private_dns": {"subscription": "00000000-0000-0000-0000-000000000002", "resource_group": "rg-mlz-dns-nwe", "region": "norwayeast"},
 }
 
 BOOTSTRAP = {
     "top_management_group": "mlz",
-    "state": {"subscription": "6d6a6044-7f37-46cd-b5f2-a8a6f75aeffe", "resource_group": "rg-mlz-bootstrap-nwe", "storage_account": "stmlzstate1a2b"},
+    "state": {"subscription": "00000000-0000-0000-0000-000000000001", "resource_group": "rg-mlz-bootstrap-nwe", "storage_account": "stmlzstate1a2b"},
     "identities": {
         "vending": {
             "plan": {"name": "id-mlz-vending-plan-nwe", "client_id": "11111111-1111-1111-1111-111111111111", "principal_id": "22222222-2222-2222-2222-222222222222"},

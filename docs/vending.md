@@ -26,7 +26,7 @@ archetype: corp                       # corp, online or sandbox
 
 ```yaml
 # payments/prod.yaml: payments in production, one subscription
-subscription: 4f6e5589-48dd-43f1-9955-43475966658d
+subscription: 00000000-0000-0000-0000-000000000005
 budget:
   monthly: 2000
 ```
