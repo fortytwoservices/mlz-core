@@ -2,10 +2,14 @@
 #
 #   jobs:
 #     mlz:
-#       uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.4
+#       uses: fortytwoservices/mlz-core/.github/workflows/role.yml@vX.Y.Z
 #       with:
 #         role: governance
-#       secrets: inherit
+#       secrets:
+#         MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+#
+# The secret is passed by name: `secrets: inherit` only reaches a workflow in the caller's own organisation
+# or enterprise, and mlz-core is called from the customer's.
 #
 # check  every run: checks the YAML and works out what the roots read.
 # plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
@@ -24,6 +28,10 @@ on:
       role:
         description: "governance, platform or vending"
         type: string
+        required: true
+    secrets:
+      MLZ_RELEASE_APP_PRIVATE_KEY:
+        description: "the private key of the customer's MLZ App, which opens the contract pull requests and commits the IP plan"
         required: true
 
 permissions: {}
@@ -46,8 +54,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      id-token: write # to learn which mlz-core release this run comes from
     outputs:
+      core-repository: ${{ steps.core.outputs.repository }}
       core-ref: ${{ steps.core.outputs.ref }}
       stacks: ${{ steps.check.outputs.stacks }}
     steps:
@@ -55,34 +63,30 @@ jobs:
         with:
           persist-credentials: false
 
-      # The caller pins mlz-core with uses: ...@<release>; its OIDC token says which commit that is, so the
-      # code checked out below is always exactly the workflow's own.
+      # The caller pins mlz-core with uses: ...@<release>; job.workflow_sha is the commit that release points
+      # at, and every job checks out mlz-core there, so the code is always exactly the workflow's own. An
+      # empty value would make actions/checkout fetch the caller's own repo as .mlz-core, whose scripts a
+      # pull request controls, so this stops instead.
       - name: Find the mlz-core release
         id: core
+        env:
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
-          token=$(curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=mlz-core" |
-            python3 -c 'import json, sys; print(json.load(sys.stdin)["value"])')
-          ref=$(python3 -c 'import base64, json, sys
-          part = sys.argv[1].split(".")[1]
-          claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
-          print(claims["job_workflow_ref"].split("@", 1)[1], claims["job_workflow_sha"])' "$token")
-          echo "mlz-core ${ref% *} at ${ref#* }"
-          echo "ref=${ref#* }" >> "$GITHUB_OUTPUT"
-
-      - id: reader
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AZ_TF_MODULE_READER_CLIENT_ID }}
-          private-key: ${{ secrets.AZ_TF_MODULE_READER_PRIVATE_KEY }}
-          owner: fortytwoservices
-          permission-contents: read
+          if [[ ! $WORKFLOW_SHA =~ ^[0-9a-f]{40}$ || -z $WORKFLOW_REPOSITORY || $WORKFLOW_REPOSITORY == "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::GitHub did not say which mlz-core commit this workflow comes from (job.workflow_repository '$WORKFLOW_REPOSITORY', job.workflow_sha '$WORKFLOW_SHA')."
+            exit 1
+          fi
+          echo "$WORKFLOW_REPOSITORY ${WORKFLOW_REF#*@} at $WORKFLOW_SHA"
+          echo "repository=$WORKFLOW_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: fortytwoservices/mlz-core
+          repository: ${{ steps.core.outputs.repository }}
           ref: ${{ steps.core.outputs.ref }}
           path: .mlz-core
-          token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -146,20 +150,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - id: reader
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AZ_TF_MODULE_READER_CLIENT_ID }}
-          private-key: ${{ secrets.AZ_TF_MODULE_READER_PRIVATE_KEY }}
-          owner: fortytwoservices
-          permission-contents: read
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: fortytwoservices/mlz-core
+          repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
-          token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -181,10 +176,6 @@ jobs:
       - name: Plan
         id: plan
         env:
-          # The modules are internal repos; only this step gets the token.
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.reader.outputs.token }}@github.com/fortytwoservices/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/fortytwoservices/
           STACK: ${{ matrix.stack }}
         run: |
           set +e
@@ -295,20 +286,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - id: reader
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AZ_TF_MODULE_READER_CLIENT_ID }}
-          private-key: ${{ secrets.AZ_TF_MODULE_READER_PRIVATE_KEY }}
-          owner: fortytwoservices
-          permission-contents: read
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: fortytwoservices/mlz-core
+          repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
-          token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -329,9 +311,6 @@ jobs:
 
       - name: Apply
         env:
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ steps.reader.outputs.token }}@github.com/fortytwoservices/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/fortytwoservices/
           STACK: ${{ matrix.stack }}
         run: .mlz-core/tools/ci/apply.sh "$ROLE" "$STACK"
 
@@ -364,20 +343,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - id: reader
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: ${{ vars.AZ_TF_MODULE_READER_CLIENT_ID }}
-          private-key: ${{ secrets.AZ_TF_MODULE_READER_PRIVATE_KEY }}
-          owner: fortytwoservices
-          permission-contents: read
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: fortytwoservices/mlz-core
+          repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
-          token: ${{ steps.reader.outputs.token }}
           persist-credentials: false
 
       # The mlz tools read YAML through terraform console (tools/mlz/files.py), and vending's contract comes

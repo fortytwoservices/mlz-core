@@ -9,8 +9,13 @@ jobs:
     uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.6 # x-release-please-version
     with:
       role: governance
-    secrets: inherit
+    secrets:
+      MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
 ```
+
+mlz-core and the `az-tf-mlz-*` modules it uses are public, so a customer's repo needs no Fortytwo credential to
+run them. The secret is passed by name because `secrets: inherit` only reaches a workflow in the caller's own
+organisation or enterprise.
 
 Upgrading is a pull request that changes the release; each mlz-core release moves the starters' pin to
 itself. The starters' workflow also decides which runs wait for which:
@@ -73,12 +78,12 @@ The pull requests come from a GitHub App that may write to the three repos.
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `AZ_TF_MODULE_READER_CLIENT_ID`, secret `AZ_TF_MODULE_READER_PRIVATE_KEY` | the app that reads mlz-core and the `az-tf-mlz-*` modules, while they are internal |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens the contract pull requests and commits the IP plan to vending pull requests; installed on the three repos |
 
-For customers, creating and installing these apps is part of the install: nothing deploys until they are
-in place. mlz-core's Actions access must allow the customer's repos to call its workflows (for internal
-use, "accessible from repositories in the organization").
+For customers, creating and installing this app is part of the install: nothing deploys until it is in
+place. If the customer's organisation allows only selected actions and reusable workflows, its Actions
+policy must allow `fortytwoservices/mlz-core/.github/workflows/role.yml` and the actions it uses (each is
+pinned by commit in `role.yml`).
 
 ## The first run
 
