@@ -82,7 +82,12 @@ for reader in $readers; do
     fi
     wrote=true
     put_contract "$repo" 2>/dev/null || wrote=false
-    if [[ $(open_pull "$repo") == "$open" ]]; then
+    if ! now=$(open_pull "$repo"); then
+      echo "::error::$repo: could not tell whether #$open is still open, so its branch is left as it is; the next run on main tries again."
+      failed=true
+      continue
+    fi
+    if [[ $now == "$open" ]]; then
       if [[ $wrote == true ]]; then
         echo "$repo: offered the new $path in #$open"
       else
