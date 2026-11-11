@@ -202,6 +202,14 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.renamed, [(repo, "master", "main") for repo in REPOS.values()])
         self.assertEqual({branch for _, branch, _, _, _ in github.commits}, {"main"})
 
+    def test_an_unknown_bootstrap_setting_is_refused(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "state_operator: {}\n")
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml: state_operator is not a setting"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers:", "  reviewer:"))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml: github.reviewer is not a setting"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+
     def test_a_half_made_repo_gets_its_starter_as_a_pull_request(self):
         github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-vending"])
         install.step_repos(github, self.folder, self.out)

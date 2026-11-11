@@ -52,6 +52,9 @@ MAIN_RULESET = {
         }},
     ],
 }
+# bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
+BOOTSTRAP_SETTINGS = ("github", "state_operators")
+GITHUB_SETTINGS = ("organization", "repositories", "reviewers")
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
 
@@ -61,7 +64,13 @@ def settings(folder: Path) -> tuple[dict, dict]:
     missing = [str(f) for f in files if not f.is_file()]
     if missing:
         raise ConfigError(f"missing {', '.join(missing)}: --settings is the folder with the customer's customer.yaml and bootstrap.yaml.")
-    return read_yaml(files[0]), read_yaml(files[1])
+    customer, bootstrap = read_yaml(files[0]), read_yaml(files[1])
+    github = bootstrap.get("github")
+    unknown = [str(k) for k in bootstrap if k not in BOOTSTRAP_SETTINGS]
+    unknown += [f"github.{k}" for k in github if k not in GITHUB_SETTINGS] if isinstance(github, dict) else []
+    if unknown:
+        raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}) and state_operators.")
+    return customer, bootstrap
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:

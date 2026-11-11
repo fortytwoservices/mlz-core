@@ -22,6 +22,18 @@
         },
         {
           "type": "generic",
+          "path": "starter/mlz-governance/.vscode/settings.json"
+        },
+        {
+          "type": "generic",
+          "path": "starter/mlz-platform/.vscode/settings.json"
+        },
+        {
+          "type": "generic",
+          "path": "starter/mlz-vending/.vscode/settings.json"
+        },
+        {
+          "type": "generic",
           "path": "docs/pipelines.md"
         }
       ]

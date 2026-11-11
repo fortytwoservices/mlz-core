@@ -31,6 +31,10 @@ budget:
   monthly: 2000
 ```
 
+The vending starter comes with `_defaults/all.yaml`, its settings commented out, and a complete landing
+zone in `landing-zones/_examples/payments/`, which vending skips: a folder whose name starts with `_` is
+never a workload. Copy the folder to `landing-zones/payments/` to start from it.
+
 The landing zone's key is its folder and file name, `payments-prod`; two paths that make the same key
 (`payments-api/prod.yaml` and `payments/api-prod.yaml`) are refused. Settings:
 

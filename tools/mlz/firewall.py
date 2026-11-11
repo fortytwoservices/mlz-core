@@ -32,6 +32,8 @@ from .files import read_setting, setting_names
 from .merge import ConfigError
 
 PARTITIONS = 30
+# A rules file holds `outbound`, a list of rules; a rule has these settings, the first three required.
+RULE_KEYS = ("name", "to", "ports", "description")
 PLATFORM_PRIORITY = 500
 FIRST_PARTITION_PRIORITY = 1000
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$")
@@ -83,7 +85,7 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     names, kept = set(), []
     for index, rule in enumerate(rules):
         at = f"{where}: outbound[{index}]"
-        if not isinstance(rule, dict) or set(rule) - {"name", "to", "ports", "description"} or not {"name", "to", "ports"} <= set(rule):
+        if not isinstance(rule, dict) or set(rule) - set(RULE_KEYS) or not set(RULE_KEYS[:3]) <= set(rule):
             problems.append(f"{at}: a rule has name, to and ports (and optionally description).")
             continue
         name = rule["name"]

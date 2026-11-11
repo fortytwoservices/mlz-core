@@ -72,19 +72,17 @@ class GitHub:
             self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
         return sha
 
-    def commit_files(self, repo: str, branch: str, head: str, files: dict[str, str], message: str) -> None:
-        """One commit with the files, made only if the branch is still at head."""
+    def commit_files(self, repo: str, branch: str, head: str, files: dict[str, str | None], message: str) -> None:
+        """One commit with the files (None deletes one), made only if the branch is still at head."""
         mutation = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }"
-        additions = [{"path": path, "contents": base64.b64encode(text.encode()).decode()} for path, text in sorted(files.items())]
+        additions = [{"path": path, "contents": base64.b64encode(text.encode()).decode()} for path, text in sorted(files.items()) if text is not None]
+        deletions = [{"path": path} for path, text in sorted(files.items()) if text is None]
         self._api("graphql", "POST", {"query": mutation, "variables": {"input": {
             "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
             "expectedHeadOid": head,
             "message": {"headline": message},
-            "fileChanges": {"additions": additions},
+            "fileChanges": {"additions": additions, **({"deletions": deletions} if deletions else {})},
         }}})
-
-    def commit_file(self, repo: str, branch: str, head: str, path: str, text: str, message: str) -> None:
-        self.commit_files(repo, branch, head, {path: text}, message)
 
     # Pull requests
 

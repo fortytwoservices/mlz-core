@@ -69,6 +69,13 @@ LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
 WORKLOAD_ARCHETYPES = ("landing_zones", "sandbox")
 TAG_KEYS = ("required", "inherited", "exempt_resource_groups", "in_sandboxes")
 OPTIONAL_GROUPS = ("security", "local")
+# Every top-level setting customer.yaml may have: what governance reads, the keys of defaults.yaml, and
+# parent_management_group_id, which the bootstrap reads. Anything else is refused: a mistyped key would
+# otherwise be ignored, and the default it meant to override used.
+SETTINGS = (
+    "name", "root_id", "root_display_name", "primary_region", "security_contact", "parent_management_group_id",
+    "subscriptions", "allowed_regions", "management_groups", "tags", "policy_assignments_to_remove",
+)
 # The archetypes in platform/alz; policy_assignments_to_remove may name only these.
 ALZ_ARCHETYPES = (
     "root", "platform", "management", "connectivity", "identity", "security",
@@ -130,7 +137,7 @@ def mapping(value, name: str, problems: list[str]) -> dict:
 
 
 def validate(config: dict) -> None:
-    problems = []
+    problems = [f"{key!s}: unknown; use {', '.join(SETTINGS)}." for key in config if key not in SETTINGS]
     for key in ("root_id", "root_display_name", "primary_region", "security_contact"):
         if not config.get(key):
             problems.append(f"{key} is required.")
@@ -153,6 +160,9 @@ def validate(config: dict) -> None:
             f"root_id {config['root_id']!r}: 2 to 16 lower-case letters, digits and hyphens, "
             "starting and ending with a letter or digit."
         )
+    parent = config.get("parent_management_group_id")
+    if parent is not None and not (isinstance(parent, str) and parent):
+        problems.append("parent_management_group_id must be the ID of an existing management group.")
     regions = string_list(config.get("allowed_regions"), "allowed_regions", problems)
     if config.get("allowed_regions") in (None, []):
         problems.append("allowed_regions must list at least one region.")

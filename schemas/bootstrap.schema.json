@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ bootstrap",
+  "description": "The one-time setup of the customer's pipelines, run by Fortytwo with mlz-core's bootstrap.",
+  "type": "object",
+  "properties": {
+    "github": {
+      "description": "The customer's GitHub organization, repos and reviewers.",
+      "type": "object",
+      "properties": {
+        "organization": {
+          "type": "string",
+          "description": "The customer's GitHub organization.",
+          "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
+        "repositories": {
+          "description": "The three repos, by role.",
+          "type": "object",
+          "properties": {
+            "governance": {
+              "type": "string",
+              "description": "The governance repo's name."
+            },
+            "platform": {
+              "type": "string",
+              "description": "The platform repo's name."
+            },
+            "vending": {
+              "type": "string",
+              "description": "The vending repo's name."
+            }
+          },
+          "additionalProperties": false
+        },
+        "reviewers": {
+          "description": "GitHub users who approve every apply.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "state_operators": {
+      "description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string",
+        "description": "An Entra object ID.",
+        "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+      }
+    }
+  },
+  "additionalProperties": false
+}

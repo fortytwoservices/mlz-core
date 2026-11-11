@@ -1,0 +1,9 @@
+# payments in production, the landing zone payments-prod: one subscription, one network, one state.
+
+subscription: 00000000-0000-0000-0000-000000000005   # handed over to vending before this file is merged
+budget:
+  monthly: 2000                       # the alerts go to the owner
+network:
+  subnets:                            # the IP allocator gives out their addresses
+    app: 26
+    data: 27

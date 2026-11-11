@@ -1,0 +1,22 @@
+# Outbound rules for every landing zone, from all of a hub's landing zone ranges. The firewall denies
+# anything no rule allows; what governance's own policies need is always allowed. A rule names only where
+# traffic goes. What a rule takes: docs/platform.md in mlz-core.
+
+# outbound:
+#   - name: windows-update
+#     description: Patches for every Windows VM.
+#     to: [WindowsUpdate]
+#     ports: [https, http]
+#   - name: ubuntu-packages
+#     description: Package updates for Ubuntu VMs.
+#     to: [archive.ubuntu.com, security.ubuntu.com]
+#     ports: [https, http]
+
+# One landing zone's own rules go in firewall/landing-zones/<key>.yaml, from its own range, in the same
+# shape. For example, firewall/landing-zones/payments-prod.yaml:
+#
+# outbound:
+#   - name: card-processor
+#     description: Card payments.
+#     to: [api.stripe.com]
+#     ports: [https]

@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ landing zone",
+  "description": "A layer of landing zone settings: landing-zones/_defaults/all.yaml, _defaults/<env>.yaml, <workload>/_workload.yaml or <workload>/<env>.yaml. Each says only what differs from the one above.",
+  "type": "object",
+  "properties": {
+    "owner": {
+      "type": "string",
+      "description": "The owning team's email address. Becomes the Owner tag, and gets the budget alerts unless budget.contacts names others.",
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$",
+      "maxLength": 256
+    },
+    "cost_center": {
+      "description": "The cost center. Becomes the CostCenter tag.",
+      "type": [
+        "string",
+        "integer"
+      ],
+      "maxLength": 256
+    },
+    "archetype": {
+      "type": "string",
+      "description": "The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).",
+      "enum": [
+        "corp",
+        "online",
+        "sandbox",
+        "local"
+      ]
+    },
+    "location": {
+      "type": "string",
+      "description": "The Azure region, one of governance's allowed regions with a hub, for example norwayeast.",
+      "pattern": "^[a-z0-9]+$",
+      "examples": [
+        "norwayeast",
+        "norwaywest",
+        "westeurope",
+        "northeurope",
+        "swedencentral"
+      ]
+    },
+    "subscription": {
+      "type": "string",
+      "description": "The landing zone's subscription ID, handed to vending before this file is merged.",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "budget": {
+      "description": "The landing zone's monthly budget.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "monthly": {
+          "description": "A whole amount per month, in the subscription's currency. No monthly, no budget.",
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "contacts": {
+          "description": "Who gets the budget alerts, as email addresses (default: the owner).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "network": {
+      "description": "The spoke network. Its addresses come from the IP allocator, in _generated/ip-plan.yaml, never from here.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "size": {
+          "description": "The range's prefix length, from 16 to 28. The IP allocator gives out the block.",
+          "type": "integer",
+          "minimum": 16,
+          "maximum": 28,
+          "default": 24
+        },
+        "subnets": {
+          "description": "Each subnet's name to its prefix length, up to 29 (default: one subnet, default, a /26 or the whole of a smaller range).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$"
+          },
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 8,
+            "maximum": 29
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "github": {
+      "description": "The landing zone's own repo.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "organization": {
+          "type": "string",
+          "description": "The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.",
+          "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
+        "repo": {
+          "type": "string",
+          "description": "The landing zone's repo, whose main branch signs in as its deploy identity.",
+          "pattern": "^[A-Za-z0-9._-]{1,100}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tags": {
+      "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "maxProperties": 45,
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ],
+        "maxLength": 256
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -26,6 +26,13 @@ chunks is an error that names both files.
 Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, no `reserved` ranges. The primary
 region (from governance) must have a hub.
 
+The platform starter comes with `hubs/norwayeast.yaml` and `firewall/platform.yaml`, every setting in them
+commented out. Until the hub file has its address space and landing zone ranges, the platform's check
+stops, so nothing is built from the starter as it comes; rename the file if the primary region is another.
+If governance's contract pull request has already failed its run for that reason, bring its branch up to
+date once the hub file is merged (`gh pr update-branch <number> -R <the platform repo>`): a re-run would check
+the same commit again, while the run of that merge checks the pull request with the hub, and merges it.
+
 `reserved` lists ranges the IP allocator must never hand out: existing virtual networks, on-premises
 sites, partner links, anything inside `landing_zone_ranges` that mlz-core does not manage. A hub's own
 address space may not overlap any hub's reserved ranges. Reserving a range a landing zone already holds

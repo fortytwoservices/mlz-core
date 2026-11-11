@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ hub",
+  "description": "The hub network in one region: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+  "type": "object",
+  "properties": {
+    "address_space": {
+      "type": "string",
+      "description": "The hub's own range, a /23 or larger (a /22 is usual). Its subnets are carved from it.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+    },
+    "landing_zone_ranges": {
+      "description": "Where landing zone networks get their address ranges.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "reserved": {
+      "description": "Ranges never given to a landing zone: existing networks, on-premises sites, partner links.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+          }
+        }
+      ]
+    },
+    "firewall": {
+      "type": "string",
+      "description": "The hub's Azure Firewall tier.",
+      "enum": [
+        "Standard",
+        "Premium",
+        "Basic"
+      ],
+      "default": "Standard"
+    },
+    "dns_resolver": {
+      "description": "A DNS resolver for Private Link names, for landing zones and on-premises.",
+      "type": "boolean",
+      "default": true
+    },
+    "bastion": {
+      "description": "Azure Bastion, for VMs in any landing zone.",
+      "type": "boolean",
+      "default": false
+    }
+  },
+  "additionalProperties": false
+}

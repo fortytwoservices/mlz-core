@@ -1,0 +1,7 @@
+# The payments workload, all its environments. An example: vending skips _examples/, so nothing here is
+# deployed. Copy the folder to landing-zones/payments/ and change it.
+
+owner: payments-team@demo.example     # the owning team; becomes the Owner tag
+cost_center: "4711"                   # becomes the CostCenter tag
+archetype: corp                       # corp, online or sandbox
+location: norwayeast                  # a region with a hub

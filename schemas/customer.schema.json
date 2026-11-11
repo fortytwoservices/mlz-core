@@ -1,0 +1,181 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ customer",
+  "description": "Customer-wide settings for governance. Any setting in mlz-core's governance/defaults.yaml can be overridden here.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The customer's name, for people reading this file."
+    },
+    "root_id": {
+      "type": "string",
+      "description": "The prefix of every management group ID and many resource names: 2 to 16 lower-case letters, digits and hyphens.",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,14}[a-z0-9]$"
+    },
+    "root_display_name": {
+      "type": "string",
+      "description": "The top management group's display name."
+    },
+    "primary_region": {
+      "type": "string",
+      "description": "Where the platform's own resources go; one of allowed_regions.",
+      "pattern": "^[a-z0-9]+$"
+    },
+    "security_contact": {
+      "type": "string",
+      "description": "Defender for Cloud's security alerts go to this email address.",
+      "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$"
+    },
+    "parent_management_group_id": {
+      "type": "string",
+      "description": "An existing management group to build the tree below, instead of the tenant root."
+    },
+    "subscriptions": {
+      "description": "The platform subscriptions, each moved into the management group of the same name. management and connectivity are required.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "management": {
+          "type": "string",
+          "description": "A subscription ID.",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "connectivity": {
+          "type": "string",
+          "description": "A subscription ID.",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "identity": {
+          "type": "string",
+          "description": "A subscription ID.",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        },
+        "security": {
+          "type": "string",
+          "description": "A subscription ID.",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "allowed_regions": {
+      "description": "Regions resources and resource groups may be created in.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9]+$"
+      },
+      "minItems": 1
+    },
+    "management_groups": {
+      "description": "The optional management groups: security under Platform, local under Landing Zones.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "security": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "local": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "tags": {
+      "description": "Tag policies. A key given here replaces the default's whole list.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "required": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9]{0,11}$"
+          },
+          "description": "Tags required on every resource group in the landing zones (deny)."
+        },
+        "inherited": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z][A-Za-z0-9]{0,11}$"
+          },
+          "description": "Tags copied from the resource group to resources that lack them (modify)."
+        },
+        "exempt_resource_groups": {
+          "description": "Resource groups Azure creates itself, where the required tags are not enforced. One * per pattern.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 90,
+            "pattern": "^[^*]*[*]?[^*]*$"
+          }
+        },
+        "in_sandboxes": {
+          "description": "Whether sandboxes must tag their resource groups too.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy_assignments_to_remove": {
+      "description": "ALZ policy assignments to leave out, by archetype.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "propertyNames": {
+        "enum": [
+          "root",
+          "platform",
+          "management",
+          "connectivity",
+          "identity",
+          "security",
+          "landing_zones",
+          "corp",
+          "online",
+          "local",
+          "sandbox",
+          "decommissioned"
+        ]
+      },
+      "additionalProperties": {
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

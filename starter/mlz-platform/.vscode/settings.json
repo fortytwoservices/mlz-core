@@ -1,0 +1,10 @@
+// Editor help for this repo's YAML: the schemas of the mlz-core release this repo runs, which Red Hat's
+// YAML extension reads (extensions.json recommends it). The file belongs to mlz-core: an upgrade
+// (python3 -m mlz upgrade) replaces it with the new release's version, so keep your own settings in your
+// user settings.
+{
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.1.11/schemas/hub.schema.json": ["hubs/*.yaml", "hubs/*.yml", "hubs/*/*.yaml", "hubs/*/*.yml"], // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.1.11/schemas/firewall.schema.json": ["firewall/**/*.yaml", "firewall/**/*.yml"] // x-release-please-version
+  }
+}
