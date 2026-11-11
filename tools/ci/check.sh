@@ -26,6 +26,16 @@ case $role in
     fi
     ;;
   vending)
+    # Vending works everything out from governance's and platform's contracts. Until both are here, it waits
+    # and plans nothing: on a first deployment it goes last, and its contract pull requests merge themselves
+    # meanwhile; a contract gone missing from a vending already deployed never plans its landing zones away.
+    for contract in governance platform; do
+      if [[ ! -f _generated/$contract.yaml ]]; then
+        echo "::notice::No $contract contract yet (_generated/$contract.yaml): vending waits for it; nothing is planned or changed." >&2
+        echo '[]'
+        exit 0
+      fi
+    done
     python3 -m mlz allocate --repo . --check >&2
     python3 -m mlz vending --repo . --out "$WORK/vending" >&2
     python3 -c 'import json, pathlib, sys; print(json.dumps(sorted(p.stem for p in pathlib.Path(sys.argv[1]).glob("*.json"))))' "$WORK/vending"

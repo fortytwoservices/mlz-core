@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # publish.sh <role>: after a run on main in which nothing failed, offers the role's contract to the repos
-# that read it, as a pull request each, so a person sees what changed before the other role uses it. Needs
+# that read it, as a pull request each. The reading repo's run on that pull request merges it once it has
+# checked and planned it (tools/ci/merge.sh); a contract it does not accept stays open for a person. Needs
 # GH_TOKEN for an app that may write to those repos and MLZ_REPOSITORIES (from the bootstrap); governance and
 # platform also need the Azure CLI signed in as an identity that may read the state (TFSTATE_*).
 # shellcheck source=tools/ci/lib.sh
@@ -13,6 +14,14 @@ case $role in
   *) exit 0 ;;
 esac
 if [[ $role == vending ]]; then
+  # Until vending has both contracts, it has planned nothing, and an empty contract would start the platform's
+  # firewall rules stack before its hub exists (docs/platform.md).
+  for contract in governance platform; do
+    if [[ ! -f _generated/$contract.yaml ]]; then
+      echo "No $contract contract here yet: vending offers nothing until it has run with both."
+      exit 0
+    fi
+  done
   # Vending's contract is its IP plan, by landing zone: no single state to read it from.
   python3 -m mlz vending-contract --repo . --out "$WORK/$role.yaml"
 else
@@ -47,17 +56,23 @@ for reader in $readers; do
     done
     continue
   fi
-  main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
-  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$main" >/dev/null 2>&1 ||
-    gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$main" -F force=true >/dev/null
+  # An open pull request gets the new contract on its own branch. Moved back to main, the branch would
+  # close it, since a pull request with nothing to merge is closed. Otherwise the branch starts again from main.
+  open=$(gh pr list --repo "$repo" --head "$branch" --base main --state open --json number --jq '.[0].number // empty')
+  if [[ -z $open ]]; then
+    main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
+    gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$main" >/dev/null 2>&1 ||
+      gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$main" -F force=true >/dev/null
+  elif [[ $(gh api "repos/$repo/contents/$path?ref=$branch" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true) == "$(cat "$WORK/$role.yaml")" ]]; then
+    echo "$repo: #$open already offers this $path"
+    continue
+  fi
   sha=$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)
   gh api -X PUT "repos/$repo/contents/$path" -f message="chore: $role contract from $GITHUB_REPOSITORY" \
     -f content="$(base64 -w0 < "$WORK/$role.yaml")" -f branch="$branch" ${sha:+-f sha="$sha"} >/dev/null
-  # Only an open pull request counts: the branch is reused, and gh pr view also finds merged ones.
-  open=$(gh pr list --repo "$repo" --head "$branch" --base main --state open --json number --jq length)
-  if [[ $open == 0 ]]; then
+  if [[ -z $open ]]; then
     gh pr create --repo "$repo" --head "$branch" --base main --title "chore: $role contract" \
-      --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Merge it to use what $role published." >/dev/null
+      --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This repo's run merges it once it has checked and planned it; the apply on main then waits for this repo's reviewer. If the run fails, or this repo's rules need a review first, it stays open for a person." >/dev/null
   fi
-  echo "$repo: offered the new $path"
+  echo "$repo: offered the new $path${open:+ in #$open}"
 done

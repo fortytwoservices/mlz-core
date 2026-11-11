@@ -63,6 +63,7 @@ engineer's own GitHub login, which needs write access to the repos and the `work
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
+| `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
 
 The summary is short enough to read: the counts, the changes by resource type, and every change to or
 removal of an existing resource by name. A reviewer approving an apply sees the plan of that very run on
@@ -91,18 +92,31 @@ does not run through the pipeline.
 
 After every run on `main` in which nothing failed, governance's contract goes to the platform and vending
 repos, platform's to the governance and vending repos, and vending's to the platform repo, each as a pull
-request that updates `_generated/<role>.yaml`. A person sees what changed before the other role uses it;
-merging the pull request runs that role's pipeline with it. If the contract did not change, nothing is
-opened, and a pull request still open from an earlier run is closed: it no longer matches what was
-deployed. It runs even when nothing was applied, so a publication that failed is retried by the next run.
-The pull requests come from a GitHub App that may write to the three repos.
+request that updates `_generated/<role>.yaml`. If the contract did not change, nothing is opened, and a pull
+request still open from an earlier run is closed: it no longer matches what was deployed. A pull request
+still open with an older contract gets the new one on its branch. Publishing runs even when nothing was
+applied, so a publication that failed is retried by the next run.
+
+The reading repo's run on that pull request merges it once `check` and `plan` have passed on it. A person's
+merge would add no control: the contract says what the other role has already deployed, and the run on
+`main` that the merge starts still waits for this role's reviewer, whose plan shows what the contract
+changes. A contract that fails this repo's check or plan stays on its pull request, not on `main`. On
+vending, a contract that gives landing zones their addresses gets the IP plan committed to the pull request
+first, and the run of that commit merges it. Until vending has both governance's and platform's contracts,
+it waits: its check plans nothing, and it publishes nothing.
+
+A contract pull request stays open for a person when its run fails, when it changes more than
+`_generated/`, or when the repo's own rules refuse the merge, for example a ruleset that asks for a review:
+that is how a customer keeps contracts for a person to merge. The run page says which. Once what stopped a
+run is fixed, re-running its failed jobs runs the merge after them. The pull requests come from a GitHub
+App that may write to the three repos, and the App merges them.
 
 ## What a repo needs
 
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens the contract pull requests and commits the IP plan to vending pull requests; installed on the three repos |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests and commits the IP plan to vending pull requests; installed on the three repos |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions
@@ -111,7 +125,8 @@ pinned by commit in `role.yml`).
 
 ## The first run
 
-The roles depend on each other's contracts, so a new customer goes in this order:
+The roles depend on each other's contracts, so a new customer goes in this order. The contracts move on by
+themselves; what a person does is approve each apply, and hand over landing zone subscriptions.
 
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.

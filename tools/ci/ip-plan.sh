@@ -13,6 +13,13 @@ source "$(dirname "$0")/lib.sh"
 path=_generated/ip-plan.yaml
 message="chore: IP plan for this pull request"
 
+# The addresses come from the platform's contract: without it there is nothing to give out yet, and the
+# check says vending waits for it.
+if [[ ! -f _generated/platform.yaml ]]; then
+  echo "No platform contract yet (_generated/platform.yaml): no addresses to give out."
+  exit 0
+fi
+
 # Writes the plan, or nothing at all and fails when anything is wrong (a conflict, a landing zone that does
 # not fit): that failure is the check's own, with every problem listed.
 python3 -m mlz allocate --repo . >&2

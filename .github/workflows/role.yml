@@ -16,8 +16,9 @@
 #        goes on the pull request and on the run page, where the reviewer approves the apply.
 # changed main: the stacks whose plan changes something; only those wait for a reviewer and apply.
 # apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
-#        exactly the reviewed changes; governance and platform then offer their contract to the repos
-#        that read it.
+#        exactly the reviewed changes.
+# publish main: offers the role's contract to the repos that read it, as a pull request each.
+# merge  a contract pull request: merges it once check and plan have passed on it.
 #
 # The bootstrap sets the variables (AZURE_*, TFSTATE_*, MLZ_REPOSITORIES); docs/pipelines.md lists the rest.
 name: mlz role
@@ -31,7 +32,7 @@ on:
         required: true
     secrets:
       MLZ_RELEASE_APP_PRIVATE_KEY:
-        description: "the private key of the customer's MLZ App, which opens the contract pull requests and commits the IP plan"
+        description: "the private key of the customer's MLZ App, which opens and merges the contract pull requests and commits the IP plan"
         required: true
 
 permissions: {}
@@ -378,3 +379,43 @@ jobs:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
         run: .mlz-core/tools/ci/publish.sh "$ROLE"
+
+  # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
+  # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's
+  # merge would add no control. One that fails here stays open, and main never gets it.
+  merge:
+    if: >-
+      always() && github.event_name == 'pull_request'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && startsWith(github.head_ref, 'mlz/') && endsWith(github.head_ref, '-contract')
+      && needs.check.result == 'success'
+      && contains(fromJSON('["success", "skipped"]'), needs.plan.result)
+    needs: [check, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      - id: merger
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Merge the contract
+        env:
+          GH_TOKEN: ${{ steps.merger.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .mlz-core/tools/ci/merge.sh

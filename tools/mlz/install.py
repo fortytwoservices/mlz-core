@@ -355,9 +355,10 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
     github.commit_files(repo, CONTRACT_BRANCH, head, {CONTRACT_PATH: text}, "chore: bootstrap contract")
     url = url or github.create_pull(
         repo, CONTRACT_BRANCH, base, "chore: bootstrap contract",
-        "The pipeline identities and the state account from the bootstrap. Merging it runs governance's first "
-        "deployment with them.\n\nThen, in order: merge the governance contract into platform and vending, platform's "
-        "into governance and vending (governance's second run points the Private Link DNS policy at the zones), "
-        "and hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
-    out(f"publish: {url}")
+        "The pipeline identities and the state account from the bootstrap. Governance's run merges it once it has "
+        "checked and planned it, and the run on main that starts is governance's first deployment, which waits for "
+        "its reviewer.\n\nFrom there the contracts go between the repos by themselves, each run on main waiting for "
+        "its reviewer: platform, governance again (its Private Link DNS policy then points at the zones), and vending. "
+        "Hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
+    out(f"publish: {url} merges itself once governance's run has checked and planned it; its apply then waits for the reviewer")
     return url
