@@ -4,6 +4,7 @@
     python3 -m mlz allocate --repo <mlz-vending> [--check]
     python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
+    python3 -m mlz explain  --repo <mlz-vending> <key>
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
     python3 -m mlz install  repos|check|bootstrap|handover|publish --settings <dir> [--tenant <id>] [--yes]
@@ -24,7 +25,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import contract, firewall, install, platform, schema, upgrade, vending
+from . import contract, explain, firewall, install, platform, schema, upgrade, vending
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -50,6 +51,11 @@ def main() -> int:
     v.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     v.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
     v.add_argument("--out", type=Path, required=True, help="the folder for <key>.json, one per landing zone; mlz owns it")
+    e = roles.add_parser("explain", help="a landing zone's values, and where each one comes from")
+    e.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
+    e.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml, if there)")
+    e.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml, if there)")
+    e.add_argument("key", help="the landing zone's key, <workload>-<env>")
     f = roles.add_parser("firewall", help="firewall/ into the rules root's config")
     f.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     f.add_argument("--platform-config", type=Path, required=True, help="the platform root's config, from mlz platform")
@@ -122,6 +128,7 @@ def main() -> int:
     inputs = {
         "platform": ["hubs"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
         "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
+        "explain": ["landing-zones", "_generated"],
     }
     try:
         if args.role != "contract":
@@ -145,6 +152,18 @@ def main() -> int:
                 args.out.parent.mkdir(parents=True, exist_ok=True)
                 args.out.write_text(json.dumps(config, indent=2) + "\n")
                 print(f"mlz firewall: wrote {args.out}")
+        elif args.role == "explain":
+            zones = vending.landing_zones(args.repo)
+            if args.key not in zones:
+                raise ConfigError(f"no landing zone {args.key}; the landing zones are {', '.join(sorted(zones)) or 'none yet'}.")
+            # The contracts are optional here: before they are published, the values they bring say so.
+            governance, platform_contract = (
+                read_yaml(path) if path.is_file() else None
+                for path in (getattr(args, name) or args.repo / "_generated" / f"{name}.yaml" for name in ("governance", "platform"))
+            )
+            lz, plan = zones[args.key], vending.ip_plan(args.repo)
+            parts = explain.explain(args.repo, args.key, lz, plan, governance, platform_contract)
+            print(explain.render(args.repo, args.key, lz, parts, explain.problems(args.key, lz, plan, governance, platform_contract)), end="")
         elif args.role == "vending-contract":
             data = firewall.vending_contract(vending.landing_zones(args.repo), vending.ip_plan(args.repo))
             args.out.parent.mkdir(parents=True, exist_ok=True)
