@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -210,6 +212,18 @@ class FirewallTest(unittest.TestCase):
         self.write(f"firewall/landing-zones/{other}.yaml", "outbound:\n  - name: api\n    to: [203.0.113.11]\n    ports: [443]\n")
         after = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
         self.assertEqual(after, before)  # a zone in another hub, sorting first in the same partition, moves nothing here
+
+    def test_landing_zone_rules_wait_for_the_vending_contract(self):
+        # The platform's first deployment: rules files exist, vending has published nothing yet.
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
+        self.assertEqual(list(groups), ["platform"])
+        self.assertIn("no vending contract yet (_generated/vending.yaml): the rules for payments-prod wait for it", stderr.getvalue())
+        # Once the contract exists, a key it does not name stops the check again.
+        with self.assertRaisesRegex(ConfigError, "no landing zone payments-prod in the vending contract"):
+            build(self.repo, PLATFORM, {"landing_zones": {}})
 
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]

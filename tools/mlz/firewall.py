@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 from ipaddress import IPv4Network
 from pathlib import Path
 
@@ -226,6 +227,13 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         }
 
     keys = setting_names(folder / "landing-zones")
+    if vending is None and keys:
+        # The platform's first deployment comes before any landing zone: vending needs the platform's contract
+        # first, so stopping here would stop the hub for good (met rebuilding the canary, 2026-11-11). The
+        # landing zones' rules wait for vending's contract instead. Once it exists, a key it does not name is
+        # a mistake again, and stops the check below.
+        print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} wait for it", file=sys.stderr)
+        keys = []
     for key in keys:
         where = f"firewall/landing-zones/{key}"
         if key not in zones:

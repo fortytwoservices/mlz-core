@@ -59,7 +59,9 @@ outbound:
 
 `firewall/platform.yaml` holds rules for every landing zone of a hub, from all its landing zone ranges. A
 rule names only where traffic goes; the source is worked out from the vending contract
-(`_generated/vending.yaml`). `to` takes:
+(`_generated/vending.yaml`). A file in `firewall/landing-zones/` for a key that contract does not name
+stops the check, since it is usually a typo. Before vending has published anything, on the platform's
+first deployment, those files wait instead, with a notice, so the hub can be built first. `to` takes:
 
 - names in lower case (`api.example.com`) and wildcards (`*.example.com`)
 - addresses and ranges, and other landing zones by key (`website-prod`)
