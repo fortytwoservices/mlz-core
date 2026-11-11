@@ -121,6 +121,18 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(root["policy_assignments_to_remove"], [])
         self.assertTrue((rl.GOVERNANCE / "lib/policy_definitions/Deny-RG-Without-Tag.alz_policy_definition.json").exists())
 
+    def test_an_unknown_top_level_setting_is_refused(self):
+        # A typo for allowed_regions, which would otherwise be ignored and the default regions used.
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "allowed_region: [norwayeast]\n")
+        self.assertIn("allowed_region: unknown; use name, root_id,", str(caught.exception))
+
+    def test_every_default_and_the_bootstraps_settings_are_known(self):
+        defaults = rl.load_yaml(DEFAULTS)
+        self.assertLessEqual(set(defaults), set(rl.SETTINGS))
+        config, _ = self.render(self.BASE + "name: Demo customer\nparent_management_group_id: contoso-root\n")
+        self.assertEqual(config["root_id"], "demo")
+
     def test_quoted_or_unknown_management_group_flags_are_refused(self):
         with self.assertRaises(rl.RenderError) as caught:
             self.render(self.BASE + 'management_groups:\n  security: "false"\n  local: "false"\n  secuirty: false\n')

@@ -41,8 +41,10 @@ PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform ac
 
 Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrade-v0.1.8`:
 
-- It replaces `.github/workflows/mlz.yml` with the release's starter for the repo's role, so changes on the
-  caller's side ship with the release. The file belongs to mlz-core; settings go in the YAML.
+- It replaces the files that belong to mlz-core with the release's starter for the repo's role:
+  `.github/workflows/mlz.yml`, so changes on the caller's side ship with the release, and the editor
+  settings in `.vscode/`, so the editor reads the schemas of the release the repo runs. Settings go in the
+  YAML. Going back to a release from before the editor settings removes them.
 - Its description carries the release notes between the two releases, breaking changes first.
 
 `--to` defaults to the latest release, an older release is a rollback (the description says so), and

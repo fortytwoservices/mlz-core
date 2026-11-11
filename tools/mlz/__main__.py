@@ -7,6 +7,7 @@
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
     python3 -m mlz install  repos|check|bootstrap|handover|publish --settings <dir> [--tenant <id>] [--yes]
+    python3 -m mlz schema   --out schemas
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -23,7 +24,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import contract, firewall, install, platform, upgrade, vending
+from . import contract, firewall, install, platform, schema, upgrade, vending
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -63,6 +64,8 @@ def main() -> int:
     u.add_argument("repositories", nargs="+", metavar="owner/repo", help="the customer's GitHub repos to move")
     u.add_argument("--to", metavar="vX.Y.Z", help="the release to move to (default: the latest)")
     u.add_argument("--dry-run", action="store_true", help="show the change and the pull request's text; open nothing")
+    sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
+    sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -70,6 +73,10 @@ def main() -> int:
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, or move the subscriptions, without asking")
     args = parser.parse_args()
+
+    if args.role == "schema":
+        print(f"mlz schema: wrote {', '.join(schema.write(args.out))} to {args.out}")
+        return 0
 
     if args.role == "install":
         try:

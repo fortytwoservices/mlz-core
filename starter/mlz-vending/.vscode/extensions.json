@@ -1,0 +1,4 @@
+// Red Hat's YAML extension, which reads the schemas in settings.json. The file belongs to mlz-core.
+{
+  "recommendations": ["redhat.vscode-yaml"]
+}

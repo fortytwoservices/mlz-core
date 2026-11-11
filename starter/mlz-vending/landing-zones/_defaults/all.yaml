@@ -1,0 +1,14 @@
+# Settings every landing zone shares. Each layer after it says only what differs: _defaults/<env>.yaml for
+# an environment, <workload>/_workload.yaml for a workload, <workload>/<env>.yaml for one landing zone.
+# A complete landing zone is in _examples/, which vending skips. What each setting does: docs/vending.md
+# in mlz-core.
+
+# github:
+#   organization: demo-org          # where the landing zones' own repos are
+
+# network:
+#   size: 24                        # each landing zone's range (the default); a landing zone may say otherwise
+
+# tags:
+#   BusinessUnit: Shared            # an extra tag on everything; Owner, CostCenter, Environment, Workload
+#                                   # and ManagedBy are set for you

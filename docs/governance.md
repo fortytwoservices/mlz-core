@@ -7,7 +7,8 @@ library and a per-customer rendering step.
 ## How it fits together
 
 1. The customer's `customer.yaml` holds only what differs from Fortytwo's defaults
-   (`governance/defaults.yaml`).
+   (`governance/defaults.yaml`). A key that is neither one of governance's settings nor in the defaults
+   is refused, so a mistyped key cannot leave its default in place unnoticed.
 2. `governance/scripts/render_library.py` merges the two, checks them, and writes the customer's part of
    the ALZ library: the management group tree, Fortytwo's archetype overrides and the tag policy
    assignments, plus `config.json` for Terraform. Management group IDs cannot be templated at plan time,
