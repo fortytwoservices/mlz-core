@@ -133,8 +133,9 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - It ends by checking that every identity trusts a subject GitHub actually issues to its repo.
 4. **`handover`** moves the platform subscriptions into `<root>`, after asking. A subscription already anywhere
    in the tree stays where it is, so a run after governance never pulls one back out.
-5. **`publish`** offers `_generated/bootstrap.yaml` to the governance repo as a pull request. Merging it runs
-   governance's first deployment; the first run's order is in `docs/pipelines.md`.
+5. **`publish`** offers `_generated/bootstrap.yaml` to the governance repo as a pull request. Governance's run
+   merges it once it has checked and planned it, and the run on `main` that starts is governance's first
+   deployment, which waits for its reviewer; the first run's order is in `docs/pipelines.md`.
 
 Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
 command in `terraform output -raw handover`).
