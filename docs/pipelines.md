@@ -17,8 +17,8 @@ mlz-core and the `az-tf-mlz-*` modules it uses are public, so a customer's repo 
 run them. The secret is passed by name because `secrets: inherit` only reaches a workflow in the caller's own
 organisation or enterprise.
 
-Upgrading is a pull request that changes the release; each mlz-core release moves the starters' pin to
-itself. The starters' workflow also decides which runs wait for which:
+Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
+wait for which:
 
 - **Runs on `main` go one at a time**, first in first out (a concurrency group with `queue: max` on the job
   that calls `role.yml`). A run starts only when the one before it has finished, review included, so it
@@ -29,6 +29,30 @@ itself. The starters' workflow also decides which runs wait for which:
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact
 commit it came from (it reads which one from the run's own OIDC token), so code and workflow never drift
 apart. The steps themselves are small scripts in `tools/ci/`.
+
+## Upgrading a customer
+
+A customer stays on its release until Fortytwo decides to move it. Then an engineer runs, from an mlz-core
+checkout:
+
+```sh
+PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to v0.1.8
+```
+
+Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrade-v0.1.8`:
+
+- It replaces `.github/workflows/mlz.yml` with the release's starter for the repo's role, so changes on the
+  caller's side ship with the release. The file belongs to mlz-core; settings go in the YAML.
+- Its description carries the release notes between the two releases, breaking changes first.
+
+`--to` defaults to the latest release, an older release is a rollback (the description says so), and
+`--dry-run` shows the change and the text without opening anything. Running it again while the pull
+request is open changes nothing.
+
+Merging changes nothing in Azure. The pipeline plans with the new release, and the apply waits for the
+repo's reviewer, so the three repos can move on different days, platform last. The command runs on the
+engineer's own GitHub login, which needs write access to the repos and the `workflow` scope
+(`gh auth refresh -h github.com -s workflow`), since the pull request changes a workflow file.
 
 ## What runs when
 
