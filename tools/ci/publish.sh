@@ -56,6 +56,7 @@ put_contract() {
     -f content="$(base64 -w0 < "$WORK/$role.yaml")" -f branch="$branch" ${sha:+-f sha="$sha"} >/dev/null
 }
 
+failed=false
 for reader in $readers; do
   repo=$(python3 -c 'import json, os, sys; print(json.loads(os.environ["MLZ_REPOSITORIES"])[sys.argv[1]])' "$reader")
   current=$(gh api "repos/$repo/contents/$path" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
@@ -79,8 +80,16 @@ for reader in $readers; do
       echo "$repo: #$open already offers this $path"
       continue
     fi
-    if put_contract "$repo" 2>/dev/null && [[ $(open_pull "$repo") == "$open" ]]; then
-      echo "$repo: offered the new $path in #$open"
+    wrote=true
+    put_contract "$repo" 2>/dev/null || wrote=false
+    if [[ $(open_pull "$repo") == "$open" ]]; then
+      if [[ $wrote == true ]]; then
+        echo "$repo: offered the new $path in #$open"
+      else
+        # Still open, so its branch is left as it is: reset, it would close the pull request.
+        echo "::error::$repo: could not write the new $path to the branch of #$open; the next run on main tries again."
+        failed=true
+      fi
       continue
     fi
   fi
@@ -92,3 +101,4 @@ for reader in $readers; do
     --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This repo's run merges it once it has checked and planned it; the apply on main then waits for this repo's reviewer. If the run fails, or this repo's rules need a review first, it stays open for a person." >/dev/null
   echo "$repo: offered the new $path"
 done
+[[ $failed == false ]]
