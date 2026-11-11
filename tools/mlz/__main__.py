@@ -93,11 +93,13 @@ def main() -> int:
             print(f"mlz contract: wrote {args.out}")
         elif args.role == "firewall":
             path = args.repo / "_generated" / "vending.yaml"
+            if not path.exists():
+                # Without vending's contract the files are checked, and nothing is written: a config without the
+                # landing zones would plan their rules away. An older one at --out goes first, before the checks,
+                # so that not even a failed check leaves one behind to plan with.
+                args.out.unlink(missing_ok=True)
             config = firewall.build(args.repo, json.loads(args.platform_config.read_text()), read_yaml(path) if path.exists() else None)
             if config is None:
-                # Without vending's contract the files are checked, and nothing is written: a config without the
-                # landing zones would plan their rules away. An older one at --out goes too, so none is used.
-                args.out.unlink(missing_ok=True)
                 print(f"mlz firewall: checked; nothing written until vending's contract ({path}) exists")
             else:
                 args.out.parent.mkdir(parents=True, exist_ok=True)

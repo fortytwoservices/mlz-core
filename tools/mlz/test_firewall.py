@@ -271,6 +271,18 @@ class FirewallTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertIn("checked; nothing written until vending's contract", run.stdout)
 
+    def test_without_a_contract_a_failed_check_leaves_no_config_behind(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [not a host]\n    ports: [443]\n")
+        out = self.repo / ".mlz" / "firewall.json"
+        out.parent.mkdir()
+        out.write_text("{}")
+        platform_config = self.repo / ".mlz" / "platform.json"
+        platform_config.write_text(json.dumps(PLATFORM))
+        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out)],
+                             capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+        self.assertEqual(run.returncode, 1)
+        self.assertFalse(out.exists())
+
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, {"landing_zones": {}})["policies"]["norwayeast"]  # vending published, no zones yet
         self.assertEqual(list(groups), ["platform"])
