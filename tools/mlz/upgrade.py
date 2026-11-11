@@ -154,17 +154,27 @@ class GitHub:
         pulls = self._api(f"repos/{repo}/pulls?state=open&head={owner}:{branch}")
         return pulls[0]["html_url"] if pulls else None
 
-    def reset_branch(self, repo: str, branch: str, base: str) -> None:
-        """The branch at the base branch's head: created, or moved back there (it is the upgrade's own)."""
+    def reset_branch(self, repo: str, branch: str, base: str) -> str:
+        """The branch at the base branch's head, created or moved back there (it is the upgrade's own); returns
+        that commit."""
         sha = self._api(f"repos/{repo}/git/ref/heads/{base}")["object"]["sha"]
         if self._api(f"repos/{repo}/git/ref/heads/{branch}", missing_ok=True):
             self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True})
         else:
             self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
+        return sha
 
-    def put_file(self, repo: str, path: str, branch: str, text: str, sha: str, message: str) -> None:
-        content = base64.b64encode(text.encode()).decode()
-        self._api(f"repos/{repo}/contents/{path}", "PUT", {"message": message, "content": content, "branch": branch, "sha": sha})
+    def commit_file(self, repo: str, branch: str, head: str, path: str, text: str, message: str) -> None:
+        """One commit with the file, made only if the branch is still at head. GitHub signs commits made this
+        way (createCommitOnBranch), so they show as verified; the REST contents API leaves them unsigned."""
+        mutation = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }"
+        change = {"path": path, "contents": base64.b64encode(text.encode()).decode()}
+        self._api("graphql", "POST", {"query": mutation, "variables": {"input": {
+            "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
+            "expectedHeadOid": head,
+            "message": {"headline": message},
+            "fileChanges": {"additions": [change]},
+        }}})
 
     def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
         return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]
@@ -173,7 +183,7 @@ class GitHub:
 def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
     """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened."""
     base = github.default_branch(repo)
-    current_text, current_sha = github.file(repo, WORKFLOW, base)
+    current_text, _ = github.file(repo, WORKFLOW, base)
     if current_text is None:
         raise ConfigError(f"{repo} has no {WORKFLOW} on {base}: is it an MLZ repo?")
     core, current = pin_of(current_text)
@@ -203,8 +213,8 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     if existing:
         out(f"{repo}: the upgrade to {target} is already open: {existing}")
         return existing
-    github.reset_branch(repo, branch, base)
-    github.put_file(repo, WORKFLOW, branch, new_text, current_sha, title)
+    head = github.reset_branch(repo, branch, base)
+    github.commit_file(repo, branch, head, WORKFLOW, new_text, title)
     url = github.create_pull(repo, branch, base, title, body)
     out(f"{repo}: {current} -> {target}: {url}")
     return url

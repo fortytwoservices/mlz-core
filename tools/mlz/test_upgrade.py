@@ -53,9 +53,10 @@ class FakeGitHub:
 
     def reset_branch(self, repo, branch, base):
         self.writes.append(("branch", repo, branch, base))
+        return "head-of-main"
 
-    def put_file(self, repo, path, branch, text, sha, message):
-        self.writes.append(("file", repo, path, branch, text, sha, message))
+    def commit_file(self, repo, branch, head, path, text, message):
+        self.writes.append(("file", repo, branch, head, path, text, message))
 
     def create_pull(self, repo, branch, base, title, body):
         self.writes.append(("pull", repo, branch, base, title, body))
@@ -103,8 +104,8 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
         branch, written, pull = github.writes
         self.assertEqual(branch, ("branch", "acme/mlz-governance", "mlz/upgrade-v0.1.7", "main"))
-        _, _, path, on, text, sha, message = written
-        self.assertEqual((path, on, sha, message), (WORKFLOW, "mlz/upgrade-v0.1.7", "sha-main", "chore: mlz-core v0.1.7"))
+        _, _, on, head, path, text, message = written
+        self.assertEqual((on, head, path, message), ("mlz/upgrade-v0.1.7", "head-of-main", WORKFLOW, "chore: mlz-core v0.1.7"))
         self.assertEqual(pin_of(text), (CORE, "v0.1.7"))
         self.assertNotIn("x-release-please", text)
         body = pull[5]
