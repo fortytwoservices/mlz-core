@@ -177,10 +177,16 @@ class Terraform:
             self.env["GITHUB_TOKEN"] = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True).stdout.strip()
 
     def prepare(self) -> None:
+        """The root as this mlz-core has it: files from an earlier copy go first, and the checkout's override files
+        (a git-ignored backend_override.tf from running the root by hand) are never copied, since either would
+        change what the root does. The bootstrap step writes its own override while the state is local."""
         for source, target in ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming")):
             target.mkdir(parents=True, exist_ok=True)
+            for old in target.glob("*.tf"):
+                old.unlink()
             for path in [*source.glob("*.tf"), *source.glob(".terraform.lock.hcl")]:
-                shutil.copy2(path, target / path.name)
+                if not path.name.endswith("override.tf"):
+                    shutil.copy2(path, target / path.name)
 
     def run(self, *arguments: str, capture: bool = False) -> subprocess.CompletedProcess:
         return subprocess.run(["terraform", f"-chdir={self.root}", *arguments], env=self.env, capture_output=capture, text=True)
@@ -203,8 +209,6 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     local = not backend.exists()
     if local:
         override.write_text(f'terraform {{\n  backend "local" {{\n    path = "{terraform.work / "bootstrap.tfstate"}"\n  }}\n}}\n')
-    else:
-        override.unlink(missing_ok=True)
     init = ["init", "-input=false", "-reconfigure"] + ([] if local else [f"-backend-config={backend}"])
     if terraform.run(*init).returncode:
         raise ConfigError("terraform init failed; see above.")

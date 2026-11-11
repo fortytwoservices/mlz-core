@@ -24,6 +24,16 @@ class GitHub:
             raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
         return json.loads(run.stdout) if run.stdout.strip() else None
 
+    def _pages(self, path: str) -> list:
+        """Every item of a listing, not only its first page."""
+        found, page = [], 1
+        while True:
+            batch = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or []
+            found += batch
+            if len(batch) < 100:
+                return found
+            page += 1
+
     # Repos and files
 
     def repo(self, repo: str) -> dict | None:
@@ -96,19 +106,13 @@ class GitHub:
 
     def releases(self, core: str) -> dict[str, str]:
         """Every published release: tag to release notes."""
-        found, page = {}, 1
-        while True:
-            batch = self._api(f"repos/{core}/releases?per_page=100&page={page}")
-            found.update({r["tag_name"]: r.get("body") or "" for r in batch if not r["draft"] and not r["prerelease"]})
-            if len(batch) < 100:
-                return found
-            page += 1
+        return {r["tag_name"]: r.get("body") or "" for r in self._pages(f"repos/{core}/releases") if not r["draft"] and not r["prerelease"]}
 
     # Settings
 
     def add_ruleset(self, repo: str, ruleset: dict) -> bool:
         """The repo's own ruleset, created unless one of that name exists (which is left as it is). True if made."""
-        if any(r["name"] == ruleset["name"] and r.get("source_type") == "Repository" for r in self._api(f"repos/{repo}/rulesets") or []):
+        if any(r["name"] == ruleset["name"] for r in self._pages(f"repos/{repo}/rulesets?includes_parents=false")):
             return False
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True

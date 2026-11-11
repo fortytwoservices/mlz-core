@@ -13,6 +13,7 @@ import unittest.mock
 from pathlib import Path
 
 from mlz import install
+from mlz.github import GitHub
 from mlz.merge import ConfigError
 
 CUSTOMER = """name: Acme
@@ -384,6 +385,54 @@ class InstallTest(unittest.TestCase):
     def test_publish_needs_the_state_in_its_account(self):
         with self.assertRaisesRegex(ConfigError, "run mlz install bootstrap first"):
             install.step_publish(FakeGitHub(), FakeTerraform(self.work), self.folder, self.out)
+
+
+class PrepareTest(unittest.TestCase):
+    """The real Terraform.prepare, against a checkout of mlz-core made in a temporary folder."""
+
+    def test_the_copy_is_the_checkouts_root_without_its_override_files_or_older_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            core, work = Path(tmp) / "core", Path(tmp) / "work"
+            for folder in ("bootstrap/terraform", "modules/naming"):
+                (core / folder).mkdir(parents=True)
+                (core / folder / "main.tf").write_text("# main\n")
+            (core / "bootstrap/terraform/backend_override.tf").write_text('terraform {\n  backend "local" {}\n}\n')
+            (core / "bootstrap/terraform/.terraform.lock.hcl").write_text("# lock\n")
+            (work / "bootstrap/terraform").mkdir(parents=True)
+            (work / "bootstrap/terraform/removed.tf").write_text("# from an older mlz-core\n")
+            with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
+                install.Terraform(work, "tenant").prepare()
+            root = work / "bootstrap/terraform"
+            self.assertEqual(sorted(p.name for p in root.iterdir()), [".terraform.lock.hcl", "main.tf"])
+            self.assertTrue((work / "modules/naming/main.tf").exists())
+
+
+class PagedGitHub(GitHub):
+    """GitHub with its API in memory: a listing answers per_page items a page."""
+
+    def __init__(self, listings: dict[str, list]):
+        self.listings, self.posted = listings, []
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method == "POST":
+            self.posted.append((path, body))
+            return {}
+        base, _, query = path.partition("?")
+        params = dict(part.split("=") for part in query.split("&"))
+        size, page = int(params["per_page"]), int(params["page"])
+        return self.listings[base][(page - 1) * size:page * size]
+
+
+class GitHubTest(unittest.TestCase):
+    def test_a_ruleset_past_the_first_page_is_found_and_not_made_again(self):
+        rulesets = [{"name": f"other-{n}"} for n in range(120)] + [{"name": "main"}]
+        github = PagedGitHub({"repos/acme/mlz-platform/rulesets": rulesets})
+        self.assertFalse(github.add_ruleset("acme/mlz-platform", install.MAIN_RULESET))
+        self.assertEqual(github.posted, [])
+
+    def test_every_page_of_releases_is_read(self):
+        releases = [{"tag_name": f"v0.{n}.0", "body": "", "draft": False, "prerelease": False} for n in range(150)]
+        self.assertEqual(len(PagedGitHub({"repos/f/mlz-core/releases": releases}).releases("f/mlz-core")), 150)
 
 
 if __name__ == "__main__":
