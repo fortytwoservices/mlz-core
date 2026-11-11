@@ -131,6 +131,27 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("**Breaking changes in these releases:**", body)
         self.assertLess(body.index("pass the secret by name"), body.index("## Release notes"))
 
+    def test_a_breaking_change_keeps_its_migration_steps(self):
+        text = (
+            "## [0.2.0](https://example) (2026-11-20)\n\n\n### ⚠ BREAKING CHANGES\n\n"
+            "* **pipeline:** the release App's key is passed by name\n"
+            "  Add MLZ_RELEASE_APP_PRIVATE_KEY to the caller's secrets.\n\n"
+            "  The starter does this; a changed mlz.yml needs it by hand.\n"
+            "* **vending:** budgets need an owner\n\n"
+            "### Features\n\n* **pipeline:** something new\n"
+        )
+        entries = breaking_changes(text)
+        self.assertEqual(len(entries), 2)
+        self.assertIn("Add MLZ_RELEASE_APP_PRIVATE_KEY", entries[0])
+        self.assertIn("a changed mlz.yml needs it by hand", entries[0])
+        self.assertNotIn("something new", "\n".join(entries))
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.2.0": text})
+        self.run_upgrade(github)
+        warnings = github.writes[2][5].split("## Release notes")[0]
+        self.assertIn("  * **pipeline:** the release App's key is passed by name\n    Add MLZ_RELEASE_APP_PRIVATE_KEY", warnings)
+        self.assertIn("    The starter does this; a changed mlz.yml needs it by hand.", warnings)
+        self.assertIn("  * **vending:** budgets need an owner", warnings)
+
     def test_a_rollback_says_so_and_lists_what_it_takes_out(self):
         github = FakeGitHub(caller("governance", "v0.1.7"), {t: notes(t) for t in ("v0.1.5", "v0.1.6", "v0.1.7")})
         self.run_upgrade(github, "v0.1.5")

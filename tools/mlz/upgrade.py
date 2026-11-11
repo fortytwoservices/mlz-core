@@ -65,14 +65,18 @@ def releases_between(releases: dict[str, str], current: str, target: str) -> lis
 
 
 def breaking_changes(notes: str) -> list[str]:
-    """The entries under release-please's "BREAKING CHANGES" heading."""
-    found, inside = [], False
+    """The entries under release-please's "BREAKING CHANGES" heading, each whole: a bullet and every line up to
+    the next bullet or heading, so a migration step written under the bullet stays with it."""
+    entries: list[list[str]] = []
+    inside = False
     for line in notes.splitlines():
         if line.startswith("#"):
             inside = "BREAKING CHANGES" in line
-        elif inside and line.strip().startswith("*"):
-            found.append(line.strip())
-    return found
+        elif inside and re.match(r"[*-] ", line):
+            entries.append([line.strip()])
+        elif inside and entries:
+            entries[-1].append(line.rstrip())
+    return ["\n".join(entry).rstrip() for entry in entries]
 
 
 def demoted(notes: str) -> str:
@@ -98,7 +102,11 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
             "state (a provider upgrade, for example), going back can fail: check their notes first.",
         ]
     if breaking:
-        lines += ["- **Breaking changes in these releases:**"] + [f"  {entry}" for entry in breaking]
+        lines += ["- **Breaking changes in these releases:**"]
+        for entry in breaking:
+            first, *rest = entry.split("\n")
+            # Continuation lines nest under their bullet, which sits under "Breaking changes".
+            lines += [f"  {first}"] + [f"    {line.strip()}" if line.strip() else "" for line in rest]
     else:
         lines += ["- No breaking changes are listed in these releases."]
     lines += [
