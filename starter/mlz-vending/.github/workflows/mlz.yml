@@ -1,4 +1,5 @@
-# This repo's pipeline: mlz-core's vending role, at the release pinned below. To upgrade, change the release.
+# This repo's pipeline: mlz-core's vending role, at the release pinned below. The file belongs to mlz-core:
+# an upgrade (python3 -m mlz upgrade) replaces it with the new release's version, so keep settings in the YAML.
 name: mlz
 
 on:

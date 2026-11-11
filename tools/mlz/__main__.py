@@ -5,6 +5,7 @@
     python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
+    python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -21,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import contract, firewall, platform, vending
+from . import contract, firewall, platform, upgrade, vending
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
 
@@ -56,7 +57,22 @@ def main() -> int:
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
     c.add_argument("kind", choices=sorted(contract.CONTRACTS))
     c.add_argument("--out", type=Path, required=True, help="the YAML file to write, in a repo's _generated/")
+    u = roles.add_parser("upgrade", help="open a pull request moving a customer repo to another mlz-core release")
+    u.add_argument("repositories", nargs="+", metavar="owner/repo", help="the customer's GitHub repos to move")
+    u.add_argument("--to", metavar="vX.Y.Z", help="the release to move to (default: the latest)")
+    u.add_argument("--dry-run", action="store_true", help="show the change and the pull request's text; open nothing")
     args = parser.parse_args()
+
+    if args.role == "upgrade":
+        # Repos on GitHub, not a checkout: nothing to preload. One failing repo does not stop the others.
+        github, failed = upgrade.GitHub(), 0
+        for repository in args.repositories:
+            try:
+                upgrade.upgrade(github, repository, args.to, args.dry_run)
+            except ConfigError as error:
+                print(f"mlz upgrade: {repository}: {error}", file=sys.stderr)
+                failed += 1
+        return 1 if failed else 0
 
     def published(name: str) -> dict:
         path = getattr(args, name, None) or args.repo / "_generated" / f"{name}.yaml"

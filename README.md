@@ -18,7 +18,8 @@ governance/
   terraform/           the governance root
 platform/terraform/    the platform root: hubs, firewalls, DNS
 vending/terraform/     the vending root: one landing zone per state
-tools/mlz/             the loader: customer YAML in, checked config out; the IP allocator; the contracts
+tools/mlz/             the loader: customer YAML in, checked config out; the IP allocator; the contracts;
+                       mlz upgrade, which opens the pull request moving a customer to another release
 tools/ci/              the pipeline steps, run by .github/workflows/role.yml in each customer repo
 modules/
   naming/              the names of everything mlz-core creates, shared by every root
