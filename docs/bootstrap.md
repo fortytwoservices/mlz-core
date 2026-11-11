@@ -122,7 +122,7 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    force push, no deletion.
 2. **`check`** confirms the customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and
    `MLZ_RELEASE_APP_PRIVATE_KEY`). Making the App needs a browser, so that step stays manual.
-3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<root_id>`, or
+3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the
      state into that account. Your new rights on the account can take minutes to apply, so the move is tried
