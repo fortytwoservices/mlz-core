@@ -14,13 +14,11 @@ changes a workflow file: gh auth refresh -h github.com -s workflow.
 
 from __future__ import annotations
 
-import base64
 import difflib
-import json
 import re
-import subprocess
 from typing import Callable
 
+from .github import GitHub  # noqa: F401  (re-exported for python3 -m mlz upgrade)
 from .merge import ConfigError
 
 WORKFLOW = ".github/workflows/mlz.yml"
@@ -125,69 +123,6 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
     return "\n".join(lines).rstrip() + "\n"
 
 
-class GitHub:
-    """The calls the upgrade makes, through the gh CLI and the engineer's own login."""
-
-    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
-        command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else [])
-        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
-        if run.returncode:
-            if missing_ok and "HTTP 404" in run.stderr:
-                return None
-            hint = " Add the scope with: gh auth refresh -h github.com -s workflow" if "workflow" in run.stderr and "scope" in run.stderr else ""
-            raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
-        return json.loads(run.stdout) if run.stdout.strip() else None
-
-    def default_branch(self, repo: str) -> str:
-        return self._api(f"repos/{repo}")["default_branch"]
-
-    def file(self, repo: str, path: str, ref: str) -> tuple[str, str] | tuple[None, None]:
-        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
-        if not found:
-            return None, None
-        return base64.b64decode(found["content"]).decode(), found["sha"]
-
-    def releases(self, core: str) -> dict[str, str]:
-        """Every published release of mlz-core: tag to release notes."""
-        found, page = {}, 1
-        while True:
-            batch = self._api(f"repos/{core}/releases?per_page=100&page={page}")
-            found.update({r["tag_name"]: r.get("body") or "" for r in batch if not r["draft"] and not r["prerelease"]})
-            if len(batch) < 100:
-                return {tag: notes for tag, notes in found.items() if version(tag)}
-            page += 1
-
-    def open_pull(self, repo: str, branch: str) -> str | None:
-        owner = repo.split("/")[0]
-        pulls = self._api(f"repos/{repo}/pulls?state=open&head={owner}:{branch}")
-        return pulls[0]["html_url"] if pulls else None
-
-    def reset_branch(self, repo: str, branch: str, base: str) -> str:
-        """The branch at the base branch's head, created or moved back there (it is the upgrade's own); returns
-        that commit."""
-        sha = self._api(f"repos/{repo}/git/ref/heads/{base}")["object"]["sha"]
-        if self._api(f"repos/{repo}/git/ref/heads/{branch}", missing_ok=True):
-            self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True})
-        else:
-            self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
-        return sha
-
-    def commit_file(self, repo: str, branch: str, head: str, path: str, text: str, message: str) -> None:
-        """One commit with the file, made only if the branch is still at head. GitHub signs commits made this
-        way (createCommitOnBranch), so they show as verified; the REST contents API leaves them unsigned."""
-        mutation = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }"
-        change = {"path": path, "contents": base64.b64encode(text.encode()).decode()}
-        self._api("graphql", "POST", {"query": mutation, "variables": {"input": {
-            "branch": {"repositoryNameWithOwner": repo, "branchName": branch},
-            "expectedHeadOid": head,
-            "message": {"headline": message},
-            "fileChanges": {"additions": [change]},
-        }}})
-
-    def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
-        return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]
-
-
 def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
     """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened."""
     base = github.default_branch(repo)
@@ -196,7 +131,7 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         raise ConfigError(f"{repo} has no {WORKFLOW} on {base}: is it an MLZ repo?")
     core, current = pin_of(current_text)
     role = role_of(current_text)
-    releases = github.releases(core)
+    releases = {tag: notes for tag, notes in github.releases(core).items() if version(tag)}
     if not releases:
         raise ConfigError(f"{core} has no releases.")
     target = target or max(releases, key=version)
