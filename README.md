@@ -5,7 +5,8 @@ The versioned code behind Fortytwo's managed landing zones. Customer repos, made
 
 Each customer gets three pipelines, one per role: governance (the management group tree, policies and
 central management), platform (the hubs) and vending (the landing zones). A one-time bootstrap sets up
-what they run on. One page per part in `docs/`: start with `docs/bootstrap.md`, whose `mlz install` sets a new customer up.
+what they run on. One page per part in `docs/`: start with `docs/bootstrap.md`, whose `mlz install` sets a
+new customer up.
 
 ## Layout
 
