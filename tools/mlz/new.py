@@ -6,7 +6,8 @@
 It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/_workload.yaml, with
 only what no layer above sets: a required setting given on the command line is written as given, one
 not given is written commented out, so the check names it until someone fills it in. A setting given that
-a layer above already has at the same value is left out. It writes nothing over a file that is there, and
+a layer above already has at the same value is left out, but for the subscription, which is always the
+landing zone's own. It writes nothing over a file that is there, and
 commits nothing: the files go into a pull request, whose run gives the landing zone its addresses.
 """
 
@@ -70,18 +71,26 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         # Given at a value no layer above has, or required and set nowhere above.
         return [(k, given.get(k)) for k in keys if given.get(k) is not None and above.get(k) != given[k] or given.get(k) is None and above.get(k) in (None, "")]
 
-    written = []
+    def create(path: Path, text: str) -> None:
+        # Exclusive: a file another run wrote since the checks above is never written over.
+        try:
+            with path.open("x") as file:
+                file.write(text)
+        except FileExistsError:
+            raise ConfigError(f"{path} is there already.") from None
+        written.append(path)
+
+    written: list[Path] = []
     if not folder.exists():
         folder.mkdir()
         body = needed(WORKLOAD_SETTINGS)
         if body:
-            workload_file = folder / "_workload.yaml"
-            workload_file.write_text("\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
-            written.append(workload_file)
-        rest = ("location", "subscription")
+            create(folder / "_workload.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
+        rest = ("location",)
     else:
-        rest = (*WORKLOAD_SETTINGS, "location", "subscription")
-    body = needed(rest)
+        rest = (*WORKLOAD_SETTINGS, "location")
+    # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in.
+    body = needed(rest) + [("subscription", given.get("subscription"))]
     header = f"# {workload} in {env}, the landing zone {key}: one subscription, one network, one state."
     extra = [
         "",
@@ -92,6 +101,5 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         "#   subnets:",
         "#     app: 26",
     ]
-    target.write_text("\n".join([header, "", *lines(body), *extra]) + "\n")
-    written.append(target)
+    create(target, "\n".join([header, "", *lines(body), *extra]) + "\n")
     return written

@@ -61,6 +61,24 @@ class NewLandingZoneTest(unittest.TestCase):
         self.assertNotIn("cost_center", self.read("landing-zones/payments/dev.yaml"))
         self.assertFalse((self.repo / "landing-zones/payments/_workload.yaml").read_text() != WORKLOAD)
 
+    def test_the_subscription_is_always_in_the_landing_zones_own_file(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "subscription: 55555555-5555-5555-5555-555555555555\n")
+        new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555"})
+        self.assertIn("\nsubscription: 55555555-5555-5555-5555-555555555555", self.read("landing-zones/payments/dev.yaml"))
+
+    def test_a_file_written_meanwhile_is_not_written_over(self):
+        # Another run wrote the file after this one's checks: the exclusive write refuses, and leaves it as it was.
+        original = new.read_setting
+        def written_meanwhile(base):
+            found = original(base)
+            if base == self.repo / "landing-zones/payments/dev":
+                self.write("landing-zones/payments/dev.yaml", "subscription: theirs\n")
+            return found
+        with mock.patch.object(new, "read_setting", written_meanwhile):
+            with self.assertRaisesRegex(ConfigError, "dev.yaml is there already"):
+                new.landing_zone(self.repo, "payments", "dev", NOTHING)
+        self.assertEqual(self.read("landing-zones/payments/dev.yaml"), "subscription: theirs\n")
+
     def test_a_cost_center_of_digits_stays_text(self):
         new.landing_zone(self.repo, "billing", "prod", {**NOTHING, "cost_center": "0042"})
         self.assertEqual(vending.landing_zones(self.repo)["billing-prod"]["settings"]["cost_center"], "0042")
