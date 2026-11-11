@@ -127,7 +127,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the
      state into that account. Your new rights on the account can take minutes to apply, so the move is tried
      again for up to five minutes.
-   - Without `--yes` it shows the plan and asks before applying; with no terminal to answer, it stops.
+   - Without `--yes` it shows the plan and asks before applying. Only a terminal can answer: piped input or
+     a script counts as no, and `--yes` is the way to go ahead without a person.
    - It ends by checking that every identity trusts a subject GitHub actually issues to its repo.
 4. **`handover`** moves the platform subscriptions into `<root>`, after asking. A subscription already anywhere
    in the tree stays where it is, so a run after governance never pulls one back out.

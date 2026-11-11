@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -286,6 +288,15 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "not applied"):
             install.step_bootstrap(FakeGitHub(), terraform, self.folder, out=self.out, ask=lambda q: "n")
         self.assertNotIn("apply", [call[0] for call in terraform.calls])
+
+    def test_a_piped_yes_is_not_an_answer(self):
+        stdin, stdout = sys.stdin, sys.stdout
+        sys.stdin, sys.stdout = io.StringIO("y\n"), io.StringIO()
+        try:
+            self.assertEqual(install.answer("Apply this plan? [y/N] "), "")
+            self.assertIn("run again with --yes", sys.stdout.getvalue())
+        finally:
+            sys.stdin, sys.stdout = stdin, stdout
 
     def test_subjects_github_does_not_issue_are_refused(self):
         subjects = {"vending-apply": "repo:acme/mlz-vending:environment:vending"}

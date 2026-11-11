@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -84,7 +85,11 @@ def starter_files(role: str, folder: Path) -> dict[str, str]:
 
 
 def answer(question: str) -> str:
-    """The person's answer; none (no terminal, as in CI or a script) counts as no."""
+    """The person's answer, read only from a terminal: a pipe or a script never answers (a piped "y" would
+    otherwise approve an apply), so without one it counts as no. --yes is the way to say yes without a person."""
+    if not sys.stdin.isatty():
+        print(f"{question}no terminal to ask; run again with --yes to go ahead")
+        return ""
     try:
         return input(question)
     except EOFError:
