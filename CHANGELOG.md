@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/fortytwoservices/mlz-core/compare/v0.1.11...v0.2.0) (2026-11-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **schemas:** governance refuses a top-level key in customer.yaml that is neither one of its settings nor in governance/defaults.yaml, and mlz install refuses an unknown key in bootstrap.yaml. Before upgrading, remove or correct any such key: the governance check names each one.
+
+### Features
+
+* **schemas:** editor help for customer YAML, and example settings in the starters ([#31](https://github.com/fortytwoservices/mlz-core/issues/31)) ([bb37fa4](https://github.com/fortytwoservices/mlz-core/commit/bb37fa48fe827803debe5519557eedb35418e9b1))
+
 ## [0.1.11](https://github.com/fortytwoservices/mlz-core/compare/v0.1.10...v0.1.11) (2026-11-11)
 
 
