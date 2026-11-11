@@ -36,6 +36,9 @@ class GitHub:
         """A private repo in an organisation, with GitHub's first commit, so that a branch exists to commit to."""
         return self._api(f"orgs/{owner}/repos", "POST", {"name": name, "private": True, "auto_init": True})
 
+    def rename_branch(self, repo: str, branch: str, name: str) -> None:
+        self._api(f"repos/{repo}/branches/{branch}/rename", "POST", {"new_name": name})
+
     def file(self, repo: str, path: str, ref: str) -> tuple[str, str] | tuple[None, None]:
         found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
         if not found:

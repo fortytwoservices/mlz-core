@@ -67,7 +67,7 @@ def main() -> int:
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
     i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish)")
-    i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<root_id>)")
+    i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, or move the subscriptions, without asking")
     args = parser.parse_args()
 
@@ -84,7 +84,8 @@ def main() -> int:
                     install.step_handover(install.Azure(args.tenant), args.settings, args.yes)
                 else:
                     customer, _ = install.settings(args.settings)
-                    work = args.work or Path.home() / ".mlz" / "install" / customer["root_id"]
+                    # A root ID is unique only within its tenant: two customers may both be "mlz".
+                    work = args.work or Path.home() / ".mlz" / "install" / args.tenant / customer["root_id"]
                     terraform = install.Terraform(work, args.tenant)
                     if args.step == "bootstrap":
                         install.step_bootstrap(GitHub(), terraform, args.settings, args.yes)

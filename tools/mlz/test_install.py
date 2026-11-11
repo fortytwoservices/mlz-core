@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -31,12 +32,20 @@ BOOTSTRAP = """github:
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
 
 
+WORKFLOW = ".github/workflows/mlz.yml"
+
+
 class FakeGitHub:
-    def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None):
-        self.repos = {repo: {"private": private} for repo in existing}
+    def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
+                 org_branch="main", existing_branch="main", half_made=()):
+        self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
+        self.org_branch = org_branch
+        # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
+        self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
+        self.files.update(files or {})
+        self.renamed = []
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
-        self.files = files or {}
         self._open_pull = open_pull
         self.created, self.commits, self.rulesets, self.pulls, self.branches = [], [], [], [], []
 
@@ -45,10 +54,14 @@ class FakeGitHub:
 
     def create_repo(self, owner, name):
         self.created.append(f"{owner}/{name}")
-        self.repos[f"{owner}/{name}"] = {"private": True}
+        self.repos[f"{owner}/{name}"] = {"private": True, "default_branch": self.org_branch}
 
     def default_branch(self, repo):
-        return "main"
+        return self.repos.get(repo, {}).get("default_branch", "main")
+
+    def rename_branch(self, repo, branch, name):
+        self.renamed.append((repo, branch, name))
+        self.repos[repo]["default_branch"] = name
 
     def head(self, repo, branch):
         return f"head-of-{branch}"
@@ -164,6 +177,45 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         self.assertEqual((github.created, github.commits), ([], []))
         self.assertTrue(any("is not private" in line for line in self.printed))
+
+    def test_a_new_repo_on_another_default_branch_moves_to_main_first(self):
+        github = FakeGitHub(org_branch="master")
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.renamed, [(repo, "master", "main") for repo in REPOS.values()])
+        self.assertEqual({branch for _, branch, _, _, _ in github.commits}, {"main"})
+
+    def test_a_half_made_repo_gets_its_starter(self):
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-vending"])
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual([repo for repo, *_ in github.commits], ["acme/mlz-vending"])
+        self.assertIn(WORKFLOW, github.commits[0][3])
+        self.assertIn("acme/mlz-vending: given the missing files of the vending starter", self.printed)
+
+    def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
+        own = ("acme/mlz-governance", "customer.yaml")
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={own: ("name: Ours\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        added = github.commits[0][3]
+        self.assertIn(WORKFLOW, added)
+        self.assertNotIn("customer.yaml", added)  # already there: never replaced
+        self.assertIn("bootstrap.yaml", added)
+
+    def test_an_adopted_repo_on_another_default_branch_is_named(self):
+        install.step_repos(FakeGitHub(existing=REPOS.values(), existing_branch="master"), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: its default branch is master, but the pipelines run on main; rename it", self.printed)
+
+    def test_a_relative_work_folder_becomes_absolute(self):
+        previous = os.environ.get("GITHUB_TOKEN")
+        os.environ["GITHUB_TOKEN"] = "not-used"
+        try:
+            terraform = install.Terraform(Path("relative/work"), "tenant")
+        finally:
+            if previous is None:
+                os.environ.pop("GITHUB_TOKEN")
+            else:
+                os.environ["GITHUB_TOKEN"] = previous
+        self.assertTrue(terraform.work.is_absolute())
+        self.assertEqual(terraform.root, terraform.work / "bootstrap" / "terraform")
 
     def test_the_main_ruleset_allows_changes_through_pull_requests_only(self):
         rules = {rule["type"] for rule in install.MAIN_RULESET["rules"]}

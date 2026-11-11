@@ -28,7 +28,7 @@ from typing import Callable
 from . import contract
 from .files import read_yaml
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER
+from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -100,12 +100,26 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         found = github.repo(repo)
         if found is None:
             github.create_repo(owner, name)
-            branch = github.default_branch(repo)
-            github.commit_files(repo, branch, github.head(repo, branch), starter_files(role, folder), f"chore: mlz-{role} from mlz-core {release()}")
-            out(f"{repo}: created, private, with the {role} starter")
+            # The workflows, the environments' branch policy and the plan identities' trust all name main; the
+            # organisation's default name for a new branch may be another.
+            if github.default_branch(repo) != "main":
+                github.rename_branch(repo, github.default_branch(repo), "main")
+            created = True
         else:
-            note = "" if found.get("private") else " (it is not private; change that in its settings if it should be)"
-            out(f"{repo}: exists, files left as they are{note}")
+            created = False
+            if not found.get("private"):
+                out(f"{repo}: it is not private; change that in its settings if it should be")
+            if found.get("default_branch", "main") != "main":
+                out(f"{repo}: its default branch is {found['default_branch']}, but the pipelines run on main; rename it")
+        # A repo made here whose starter commit failed (or any repo without the workflow) gets the starter's
+        # missing files; a file that is there already is never replaced.
+        branch = github.default_branch(repo)
+        if created or github.file(repo, WORKFLOW, branch)[0] is None:
+            missing = {path: text for path, text in starter_files(role, folder).items() if created or github.file(repo, path, branch)[0] is None}
+            github.commit_files(repo, branch, github.head(repo, branch), missing, f"chore: mlz-{role} from mlz-core {release()}")
+            out(f"{repo}: {'created, private, with' if created else 'given the missing files of'} the {role} starter")
+        else:
+            out(f"{repo}: exists, files left as they are")
         github.upsert_ruleset(repo, MAIN_RULESET)
         out(f"{repo}: ruleset main (pull requests only, no force push or deletion)")
 
@@ -138,8 +152,9 @@ class Terraform:
     backend config and plan never mix with another customer's."""
 
     def __init__(self, work: Path, tenant: str):
-        self.work = work
-        self.root = work / "bootstrap" / "terraform"
+        # Absolute, since terraform runs with -chdir into the root below it.
+        self.work = work.expanduser().resolve()
+        self.root = self.work / "bootstrap" / "terraform"
         self.env = {**os.environ, "ARM_TENANT_ID": tenant}
         self.env.setdefault("GITHUB_TOKEN", subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True).stdout.strip())
 
