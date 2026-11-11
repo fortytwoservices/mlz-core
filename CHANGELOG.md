@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.10](https://github.com/fortytwoservices/mlz-core/compare/v0.1.9...v0.1.10) (2026-11-11)
+
+
+### Features
+
+* **install:** mlz install sets a new customer up, step by step ([#27](https://github.com/fortytwoservices/mlz-core/issues/27)) ([45a926d](https://github.com/fortytwoservices/mlz-core/commit/45a926d84a03e1bb2cbae8d66535d9e0373a483b))
+
 ## [0.1.9](https://github.com/fortytwoservices/mlz-core/compare/v0.1.8...v0.1.9) (2026-11-11)
 
 
