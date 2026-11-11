@@ -243,9 +243,16 @@ resource "azapi_resource" "role_assignment" {
       description   = "mlz-core bootstrap: ${each.key}"
     }
   }
-  # A new identity can take a minute to reach every Entra ID replica.
-  retry      = { error_message_regex = ["PrincipalNotFound"] }
+  # A new identity can take a minute to reach every Entra ID replica, and the person's own rights take a
+  # while to reach a group created moments ago: the first assignment on the new top group was refused with
+  # AuthorizationFailed in the TCAF canary on 2026-11-11, and made on the next run. A real lack of rights
+  # still fails, after ten minutes.
+  retry      = { error_message_regex = ["PrincipalNotFound", "AuthorizationFailed"] }
   depends_on = [azapi_resource.top_group]
+
+  timeouts {
+    create = "10m"
+  }
 }
 
 # People who run Terraform by hand (this root, break-glass state work) need data plane rights, because

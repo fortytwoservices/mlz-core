@@ -231,8 +231,11 @@ class Azure:
                                      "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
 
     def request(self, method: str, url: str) -> dict:
+        # Without no-cache, getEntities answered from a cache for minutes after a move: three subscriptions just
+        # moved into the tree still showed in unmanaged_subscriptions (TCAF, 2026-11-11), so a second handover
+        # would have asked to move them again.
         req = urllib.request.Request(url if url.startswith("https://") else f"https://management.azure.com{url}", method=method,
-                                     headers={"Authorization": f"Bearer {self.token}", "Content-Length": "0"})
+                                     headers={"Authorization": f"Bearer {self.token}", "Content-Length": "0", "Cache-Control": "no-cache"})
         with urllib.request.urlopen(req) as response:
             body = response.read()
         return json.loads(body) if body else {}
