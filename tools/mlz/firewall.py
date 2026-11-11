@@ -113,7 +113,10 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             problems.append(f"{at}: {target!r} is not a name, an address or range, a landing zone or a tag.")
             continue
         if zones is None and LANDING_ZONE.fullmatch(target):
-            continue  # a landing zone, by key, before vending's first contract: resolved once it exists
+            # A landing zone, by key, before vending's first contract. It stays an address for the checks
+            # (an FQDN tag next to it, a UDP rule's name); build() then writes nothing until the contract exists.
+            addresses.append(f"<landing zone {target}>")
+            continue
         if zones is not None and target in zones:
             addresses.append(zones[target]["range"])
         elif target in FQDN_TAGS or target.startswith("Office365."):
@@ -210,8 +213,9 @@ def collections(rules: list[dict], sources: list[str], where: str, owner: str, z
     return out
 
 
-def build(repo: Path, platform: dict, vending: dict | None) -> dict:
-    """The rules root's config: per hub region, the rule collection groups and what is in them."""
+def build(repo: Path, platform: dict, vending: dict | None) -> dict | None:
+    """The rules root's config: per hub region, the rule collection groups and what is in them. None, once
+    every file is checked, while vending has published no contract yet."""
     folder = repo / "firewall"
     problems: list[str] = []
     # None until vending publishes its first contract: then landing zones are not known yet (see below).
@@ -238,10 +242,13 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         # 2026-11-11). They are checked like any other, with landing zones by key left unresolved, and go into
         # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
         # in Azure changes, not even when the contract has gone missing from a platform already deployed.
+        # The zone's hub is not known yet: Basic's limits apply when every hub is Basic, and wait otherwise.
+        tiers = {(hub.get("firewall") or {}).get("sku_tier", "Standard") for hub in hubs.values()}
+        tier = "Basic" if tiers == {"Basic"} else "Standard"
         for key in keys:
             where = f"firewall/landing-zones/{key}"
             rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
-            collections(rules, ["0.0.0.0/32"], where, key, None, 100, "Standard", problems)
+            collections(rules, [f"<landing zone {key}>"], where, key, None, 100, tier, problems)
         if keys and not problems:
             print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} are checked, and wait for it", file=sys.stderr)
         keys = []
@@ -268,6 +275,10 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         group["network"].update(found["network"])
     if problems:
         raise ConfigError("firewall rules are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
+    if zones is None:
+        # Checked, but not a config anyone may plan with: without the landing zones it would plan their rules
+        # away. The rules stack waits for vending's contract (check.sh).
+        return None
     return {
         "root_id": platform["root_id"],
         "connectivity_subscription_id": platform["connectivity_subscription_id"],
