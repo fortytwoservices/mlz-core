@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.11](https://github.com/fortytwoservices/mlz-core/compare/v0.1.10...v0.1.11) (2026-11-11)
+
+
+### Features
+
+* **contracts:** contract pull requests merge themselves once their run has checked and planned them ([#29](https://github.com/fortytwoservices/mlz-core/issues/29)) ([3b24c0c](https://github.com/fortytwoservices/mlz-core/commit/3b24c0cdaa57ccc7f4807debf848d9cbe6eff55d))
+
 ## [0.1.10](https://github.com/fortytwoservices/mlz-core/compare/v0.1.9...v0.1.10) (2026-11-11)
 
 
