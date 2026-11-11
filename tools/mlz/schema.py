@@ -30,7 +30,7 @@ ARCHETYPES = ("corp", "online", "sandbox", "local")
 # An IPv4 range in every form the loader reads (ipaddress.ip_network): 10.0.0.0/22, 10.0.0.0/255.255.252.0,
 # or one address, which is a /32. Whether host bits are set is the loader's check.
 IPV4 = r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
-CIDR = rf"^{IPV4}(/(([0-9]|[12][0-9]|3[0-2])|{IPV4}))?$"
+CIDR = rf"^{IPV4}(/(0*([0-9]|[12][0-9]|3[0-2])|{IPV4}))?$"  # a prefix may be zero-padded, as int() reads it
 
 
 def governance_rules():

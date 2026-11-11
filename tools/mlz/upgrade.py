@@ -153,13 +153,16 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     if current == target:
         out(f"{repo}: already on {target}")
         return None
-    # Each file mlz-core owns: the target's version, or None where the target has none and the repo does.
+    # Each file mlz-core owns: the target's version. Where the target has none, the repo's copy is removed
+    # only if the release it leaves put it there; a file no release of mlz-core gave is the customer's own.
     changes, before = {}, {}
     for path in OWNED:
         starter, _ = github.file(core, f"starter/mlz-{role}/{path}", target)
         if starter is None and path == WORKFLOW:
             raise ConfigError(f"{core} {target} has no starter for the {role} role.")
         before[path] = current_text if path == WORKFLOW else github.file(repo, path, base)[0]
+        if starter is None and github.file(core, f"starter/mlz-{role}/{path}", current)[0] is None:
+            continue
         after = None if starter is None else RELEASE_PLEASE_MARKER.sub("", starter)
         if after != before[path]:
             changes[path] = after

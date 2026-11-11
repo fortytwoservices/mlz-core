@@ -146,6 +146,12 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual({path: text for path, text in files.items() if path != WORKFLOW}, {".vscode/settings.json": None, ".vscode/extensions.json": None})
         self.assertIn("`.vscode/settings.json`, `.vscode/extensions.json`, which `v0.1.6` does not have, are removed.", github.writes[2][5])
 
+    def test_editor_settings_no_release_gave_are_the_customers_own_and_stay(self):
+        own = {".vscode/settings.json": '{"editor.tabSize": 2}\n'}
+        github = FakeGitHub(caller("governance", "v0.1.5"), {"v0.1.5": notes("v0.1.5"), "v0.1.6": notes("v0.1.6")}, repo_files=own)
+        self.run_upgrade(github)
+        self.assertEqual(set(github.writes[1][4]), {WORKFLOW})  # neither release has editor settings
+
     def test_defaults_to_the_latest_release(self):
         github = FakeGitHub(caller("governance", "v0.1.5"), {t: notes(t) for t in ("v0.1.5", "v0.1.10", "v0.1.9")})
         self.run_upgrade(github)
