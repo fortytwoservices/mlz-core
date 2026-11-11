@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -211,8 +217,74 @@ class FirewallTest(unittest.TestCase):
         after = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
         self.assertEqual(after, before)  # a zone in another hub, sorting first in the same partition, moves nothing here
 
+    def test_landing_zone_rules_wait_for_the_vending_contract(self):
+        # The platform's first deployment: rules files exist, vending has published nothing yet.
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.assertIsNone(build(self.repo, PLATFORM, None))  # checked, and no config anyone could plan with
+        self.assertIn("no vending contract yet (_generated/vending.yaml): the rules for payments-prod are checked, and wait for it", stderr.getvalue())
+        # Once the contract exists, a key it does not name stops the check again.
+        with self.assertRaisesRegex(ConfigError, "no landing zone payments-prod in the vending contract"):
+            build(self.repo, PLATFORM, {"landing_zones": {}})
+
+    def test_waiting_rules_are_still_checked(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [not a host]\n    ports: [ssh]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, PLATFORM, None)
+        message = str(caught.exception)
+        self.assertIn("firewall/landing-zones/payments-prod: outbound[0]: 'not a host' is not a name", message)
+        self.assertIn("port 'ssh' is https, http", message)
+
+    def test_a_shared_rule_to_a_landing_zone_waits_for_the_contract_too(self):
+        self.write("firewall/platform.yaml", "outbound:\n  - name: to-website\n    to: [website-prod, 10.0.0.5]\n    ports: [443]\n")
+        self.assertIsNone(build(self.repo, PLATFORM, None))
+        with self.assertRaisesRegex(ConfigError, "'website-prod' is not a name, an address or range, a landing zone or a tag"):
+            build(self.repo, PLATFORM, {"landing_zones": {}})
+        resolved = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]["platform"]["network"]["platform-network"]["rules"]["to-website"]
+        self.assertIn(VENDING["landing_zones"]["website-prod"]["range"], resolved["destination_addresses"])
+
+    def test_a_waiting_landing_zone_target_still_counts_as_an_address(self):
+        # An FQDN tag next to a landing zone is refused with or without the contract.
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: updates\n    to: [WindowsUpdate, website-prod]\n    ports: [https]\n")
+        with self.assertRaisesRegex(ConfigError, "an FQDN tag such as WindowsUpdate takes only https and http"):
+            build(self.repo, PLATFORM, None)
+
+    def test_waiting_rules_meet_basic_limits_when_every_hub_is_basic(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: sftp\n    to: [sftp.example.com]\n    ports: [22]\n")
+        basic = {**PLATFORM, "hubs": {"norwayeast": {**PLATFORM["hubs"]["norwayeast"], "firewall": {"sku_tier": "Basic"}}}}
+        with self.assertRaisesRegex(ConfigError, "a Basic firewall reaches names only on https and http"):
+            build(self.repo, basic, None)
+        mixed = {**PLATFORM, "hubs": {**basic["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"], "firewall": {"sku_tier": "Standard"}}}}
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertIsNone(build(self.repo, mixed, None))  # the zone's hub is not known yet: the tier check waits
+
+    def test_without_a_contract_the_command_writes_nothing(self):
+        out = self.repo / ".mlz" / "firewall.json"
+        out.parent.mkdir()
+        out.write_text("{}")  # an older config must not stay behind to be planned with
+        platform_config = self.repo / ".mlz" / "platform.json"
+        platform_config.write_text(json.dumps(PLATFORM))
+        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out)],
+                             capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertFalse(out.exists())
+        self.assertIn("checked; nothing written until vending's contract", run.stdout)
+
+    def test_without_a_contract_a_failed_check_leaves_no_config_behind(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [not a host]\n    ports: [443]\n")
+        out = self.repo / ".mlz" / "firewall.json"
+        out.parent.mkdir()
+        out.write_text("{}")
+        platform_config = self.repo / ".mlz" / "platform.json"
+        platform_config.write_text(json.dumps(PLATFORM))
+        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out)],
+                             capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
+        self.assertEqual(run.returncode, 1)
+        self.assertFalse(out.exists())
+
     def test_without_rule_files_only_the_required_rules(self):
-        groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
+        groups = build(self.repo, PLATFORM, {"landing_zones": {}})["policies"]["norwayeast"]  # vending published, no zones yet
         self.assertEqual(list(groups), ["platform"])
         self.assertEqual(groups["platform"]["application"], {})
         collection = groups["platform"]["network"]["required-network"]

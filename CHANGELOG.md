@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.9](https://github.com/fortytwoservices/mlz-core/compare/v0.1.8...v0.1.9) (2026-11-11)
+
+
+### Bug Fixes
+
+* **firewall:** landing zone rules wait for vending's first contract instead of stopping the hub ([#25](https://github.com/fortytwoservices/mlz-core/issues/25)) ([1124ce9](https://github.com/fortytwoservices/mlz-core/commit/1124ce9991330bd08ce19939df3db82d628dcb83))
+
 ## [0.1.8](https://github.com/fortytwoservices/mlz-core/compare/v0.1.7...v0.1.8) (2026-11-11)
 
 
