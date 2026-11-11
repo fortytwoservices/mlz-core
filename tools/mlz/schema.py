@@ -65,9 +65,11 @@ def text(description: str, **extra) -> dict:
     return {"type": "string", "description": description, **extra}
 
 
-def one_or_more(item: dict, description: str) -> dict:
-    """One value or a list of them, as the loader reads either."""
-    return {"description": description, "anyOf": [item, {"type": "array", "items": item, "minItems": 1}]}
+def one_or_more(item: dict, description: str, empty: bool = False) -> dict:
+    """One value or a list of them, as the loader reads either; the list may be empty where the loader reads
+    that as none."""
+    listed = {"type": "array", "items": item} if empty else {"type": "array", "items": item, "minItems": 1}
+    return {"description": description, "anyOf": [item, listed]}
 
 
 def landing_zone() -> dict:
@@ -115,7 +117,7 @@ def hub() -> dict:
     properties = {
         "address_space": text("The hub's own range, a /23 or larger (a /22 is usual). Its subnets are carved from it.", pattern=CIDR),
         "landing_zone_ranges": one_or_more(cidr, "Where landing zone networks get their address ranges."),
-        "reserved": one_or_more(cidr, "Ranges never given to a landing zone: existing networks, on-premises sites, partner links."),
+        "reserved": one_or_more(cidr, "Ranges never given to a landing zone: existing networks, on-premises sites, partner links.", empty=True),
         "firewall": text("The hub's Azure Firewall tier.", enum=list(platform.FIREWALL_TIERS), default="Standard"),
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
@@ -129,7 +131,9 @@ def hub() -> dict:
 
 
 def firewall_rules() -> dict:
-    port_word = "^([Hh][Tt][Tt][Pp][Ss]?|[0-9]+|[Uu][Dd][Pp]:[0-9]+)$"
+    # 1 to 65535, as the loader reads the digits (int(), so leading zeros pass), on TCP or after udp:.
+    number = "0*([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])"
+    port_word = f"^([Hh][Tt][Tt][Pp][Ss]?|{number}|[Uu][Dd][Pp]:{number})$"
     descriptions = {
         "name": text("The rule's name, lower-case letters, digits and hyphens; unique in this file.", pattern=pattern(firewall.NAME)),
         "to": {"description": "Where the traffic goes: names (api.example.com, *.example.com), addresses and ranges, other landing zones by key, FQDN tags (WindowsUpdate) or service tags (AzureMonitor, Storage.NorwayEast).", "type": "array", "items": {"type": "string"}, "minItems": 1},
@@ -184,7 +188,7 @@ def bootstrap() -> dict:
     }
     properties = {
         "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos and reviewers."),
-        "state_operators": {"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))},
+        "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
     }
     return {
         "$schema": DRAFT,

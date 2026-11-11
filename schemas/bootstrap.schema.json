@@ -45,7 +45,10 @@
     },
     "state_operators": {
       "description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.",
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": {
         "type": "string",
         "description": "An Entra object ID.",
