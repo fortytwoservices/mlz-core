@@ -15,7 +15,15 @@ case $role in
     # The rules stack runs with or without firewall/: every hub's platform group holds the rules mlz-core
     # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
     python3 -m mlz firewall --repo . --platform-config "$WORK/platform.json" --out "$WORK/firewall.json" >&2
-    echo '["platform","firewall"]'   # in this order: the rules need the hub's policy
+    # Until vending publishes its first contract, the landing zones' rules have no sources, so the rules
+    # stack stays out of the run: on a first deployment the hub goes first, and a contract gone missing from
+    # a platform already deployed never plans their rules away. The files are still checked above.
+    if [[ -f _generated/vending.yaml ]]; then
+      echo '["platform","firewall"]'   # in this order: the rules need the hub's policy
+    else
+      echo "::notice::No vending contract yet (_generated/vending.yaml): the firewall rules stack waits for it; nothing in it is planned or changed." >&2
+      echo '["platform"]'
+    fi
     ;;
   vending)
     python3 -m mlz allocate --repo . --check >&2

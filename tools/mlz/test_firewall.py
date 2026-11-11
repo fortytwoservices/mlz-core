@@ -220,10 +220,28 @@ class FirewallTest(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
         self.assertEqual(list(groups), ["platform"])
-        self.assertIn("no vending contract yet (_generated/vending.yaml): the rules for payments-prod wait for it", stderr.getvalue())
+        self.assertIn("no vending contract yet (_generated/vending.yaml): the rules for payments-prod are checked, and wait for it", stderr.getvalue())
         # Once the contract exists, a key it does not name stops the check again.
         with self.assertRaisesRegex(ConfigError, "no landing zone payments-prod in the vending contract"):
             build(self.repo, PLATFORM, {"landing_zones": {}})
+
+    def test_waiting_rules_are_still_checked(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [not a host]\n    ports: [ssh]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, PLATFORM, None)
+        message = str(caught.exception)
+        self.assertIn("firewall/landing-zones/payments-prod: outbound[0]: 'not a host' is not a name", message)
+        self.assertIn("port 'ssh' is https, http", message)
+
+    def test_a_shared_rule_to_a_landing_zone_waits_for_the_contract_too(self):
+        self.write("firewall/platform.yaml", "outbound:\n  - name: to-website\n    to: [website-prod, 10.0.0.5]\n    ports: [443]\n")
+        groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]
+        rule = groups["platform"]["network"]["platform-network"]["rules"]["to-website"]
+        self.assertEqual(rule["destination_addresses"], ["10.0.0.5/32"])  # the landing zone's range comes later
+        with self.assertRaisesRegex(ConfigError, "'website-prod' is not a name, an address or range, a landing zone or a tag"):
+            build(self.repo, PLATFORM, {"landing_zones": {}})
+        resolved = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]["platform"]["network"]["platform-network"]["rules"]["to-website"]
+        self.assertIn(VENDING["landing_zones"]["website-prod"]["range"], resolved["destination_addresses"])
 
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, None)["policies"]["norwayeast"]

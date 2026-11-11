@@ -35,6 +35,8 @@ PARTITIONS = 30
 PLATFORM_PRIORITY = 500
 FIRST_PARTITION_PRIORITY = 1000
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$")
+# A landing zone's key, <workload>-<env>: always a hyphen, never a dot, so never a name the FQDN pattern takes.
+LANDING_ZONE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?-[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 FQDN = re.compile(r"^(\*\.)?([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$", re.IGNORECASE)
 # Azure Firewall's FQDN tags, for application rules (learn.microsoft.com/azure/firewall/fqdn-tags), and
 # Office365.<product>.<category>. Any other capitalised name is a service tag, for network rules.
@@ -101,7 +103,7 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     return kept
 
 
-def shape(rule: dict, sources: list[str], at: str, zones: dict, tier: str, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
+def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
     """One rule as the firewall module takes it: an application rule for names and FQDN tags on https or
     http, and network rules for addresses, landing zones, service tags and other ports (one for TCP, one
     for UDP). Returns (application rule or None, {suffix: network rule})."""
@@ -110,7 +112,9 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, tier: str, probl
         if not isinstance(target, str):  # YAML true or null would otherwise read as the tags True and None
             problems.append(f"{at}: {target!r} is not a name, an address or range, a landing zone or a tag.")
             continue
-        if target in zones:
+        if zones is None and LANDING_ZONE.fullmatch(target):
+            continue  # a landing zone, by key, before vending's first contract: resolved once it exists
+        if zones is not None and target in zones:
             addresses.append(zones[target]["range"])
         elif target in FQDN_TAGS or target.startswith("Office365."):
             tags.append(target)
@@ -183,7 +187,7 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict, tier: str, probl
     return application, network
 
 
-def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict, priority: int, tier: str, problems: list[str]) -> dict:
+def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict | None, priority: int, tier: str, problems: list[str]) -> dict:
     """The owner's rules as at most two collections: <owner>-network and <owner>-application."""
     application, network, made_by = {}, {}, {}
     for index, rule in enumerate(rules):
@@ -210,7 +214,8 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
     """The rules root's config: per hub region, the rule collection groups and what is in them."""
     folder = repo / "firewall"
     problems: list[str] = []
-    zones = (vending or {}).get("landing_zones") or {}
+    # None until vending publishes its first contract: then landing zones are not known yet (see below).
+    zones = None if vending is None else (vending.get("landing_zones") or {})
     hubs = platform["hubs"]
     groups: dict[str, dict] = {region: {} for region in hubs}
 
@@ -227,12 +232,18 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict:
         }
 
     keys = setting_names(folder / "landing-zones")
-    if vending is None and keys:
-        # The platform's first deployment comes before any landing zone: vending needs the platform's contract
-        # first, so stopping here would stop the hub for good (met rebuilding the canary, 2026-11-11). The
-        # landing zones' rules wait for vending's contract instead. Once it exists, a key it does not name is
-        # a mistake again, and stops the check below.
-        print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} wait for it", file=sys.stderr)
+    if zones is None:
+        # The platform's first deployment comes before any landing zone, and vending needs the platform's
+        # contract first, so refusing these files would stop the hub for good (met rebuilding the canary,
+        # 2026-11-11). They are checked like any other, with landing zones by key left unresolved, and go into
+        # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
+        # in Azure changes, not even when the contract has gone missing from a platform already deployed.
+        for key in keys:
+            where = f"firewall/landing-zones/{key}"
+            rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
+            collections(rules, ["0.0.0.0/32"], where, key, None, 100, "Standard", problems)
+        if keys and not problems:
+            print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} are checked, and wait for it", file=sys.stderr)
         keys = []
     for key in keys:
         where = f"firewall/landing-zones/{key}"
