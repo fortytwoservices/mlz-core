@@ -180,7 +180,11 @@ class Terraform:
         """The root as this mlz-core has it: files from an earlier copy go first, and the checkout's override files
         (a git-ignored backend_override.tf from running the root by hand) are never copied, since either would
         change what the root does. The bootstrap step writes its own override while the state is local."""
-        for source, target in ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming")):
+        pairs = ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming"))
+        if any(target.resolve() == source.resolve() for source, target in pairs):
+            # The copy's old files go first: in the checkout itself, those are the sources.
+            raise ConfigError(f"the work folder {self.work} is mlz-core's own checkout; choose another with --work.")
+        for source, target in pairs:
             target.mkdir(parents=True, exist_ok=True)
             for old in target.glob("*.tf"):
                 old.unlink()

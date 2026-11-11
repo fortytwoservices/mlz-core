@@ -406,6 +406,18 @@ class PrepareTest(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in root.iterdir()), [".terraform.lock.hcl", "main.tf"])
             self.assertTrue((work / "modules/naming/main.tf").exists())
 
+    def test_the_checkout_itself_is_refused_as_the_work_folder_and_keeps_its_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            core = Path(tmp) / "core"
+            for folder in ("bootstrap/terraform", "modules/naming"):
+                (core / folder).mkdir(parents=True)
+                (core / folder / "main.tf").write_text("# main\n")
+            with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
+                with self.assertRaisesRegex(ConfigError, "own checkout"):
+                    install.Terraform(core / "bootstrap" / "..", "tenant").prepare()
+            self.assertTrue((core / "bootstrap/terraform/main.tf").exists())
+            self.assertTrue((core / "modules/naming/main.tf").exists())
+
 
 class PagedGitHub(GitHub):
     """GitHub with its API in memory: a listing answers per_page items a page."""
