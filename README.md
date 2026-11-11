@@ -22,7 +22,8 @@ vending/terraform/     the vending root: one landing zone per state
 tools/mlz/             the loader: customer YAML in, checked config out; the IP allocator; the contracts;
                        mlz upgrade, which opens the pull request moving a customer to another release;
                        mlz install, which sets a new customer up step by step; mlz schema (below);
-                       mlz explain, which shows where each of a landing zone's values comes from
+                       mlz explain, which shows where each of a landing zone's values comes from;
+                       mlz new landing-zone, which starts a landing zone's files
 tools/ci/              the pipeline steps, run by .github/workflows/role.yml in each customer repo
 modules/
   naming/              the names of everything mlz-core creates, shared by every root

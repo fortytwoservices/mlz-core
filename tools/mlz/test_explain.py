@@ -111,6 +111,13 @@ class ExplainTest(unittest.TestCase):
         self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
         self.assertIn("payments-prod's range 10.100.4.0/24 overlaps internal-web's 10.100.4.0/24", "\n".join(self.problems()))
 
+    def test_without_the_contracts_a_missing_required_setting_is_still_reported(self):
+        self.write("landing-zones/payments/_workload.yaml", "cost_center: '4711'\narchetype: corp\n")
+        lz = vending.landing_zones(self.repo)["payments-prod"]
+        found = explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None)
+        self.assertEqual(found, ["landing-zones/payments/prod: owner is required (set it here or in a layer above)."])
+        self.assertIn("the checks that need the contracts wait for them", explain.clean(False))
+
     def run_main(self, *argv) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sys, "argv", ["mlz", *argv]), redirect_stdout(out), redirect_stderr(err):
