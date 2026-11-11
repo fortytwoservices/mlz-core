@@ -1,0 +1,142 @@
+"""What a landing zone ends up with, and where each value comes from.
+
+    python3 -m mlz explain --repo <mlz-vending> <key>
+
+Three parts: every setting its four layers set, with the file that set it and any value it replaced there;
+what mlz-core fills in where nothing is set; and what is worked out: the management group (from
+governance's contract), the tags, the addresses (from the IP plan) and the hub, DNS servers and routes
+(from the platform's contract). Then the landing zone's own check. It covers what mlz-core's loader
+decides; what the vending root does the same for every landing zone, such as the NSGs, is in
+vending/terraform, not here.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from . import vending
+from .files import SUFFIXES
+
+ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags")
+REQUIRED = ("owner", "cost_center", "archetype", "subscription", "location")
+WIDTH = 44  # a value longer than this puts its source on the next line
+
+
+def leaves(data: dict, path: tuple = ()) -> dict[tuple, object]:
+    """Every value at the end of a path: a group's settings one by one, a list as one value."""
+    found = {}
+    for key, value in data.items():
+        here = (*path, key)
+        if isinstance(value, dict) and value:
+            found.update(leaves(value, here))
+        else:
+            found[here] = value
+    return found
+
+
+def file_of(repo: Path, name: str) -> str:
+    """A layer's name as the file it is (landing-zones/payments/prod.yaml), or its folder of chunks."""
+    for suffix in SUFFIXES:
+        if (repo / f"{name}{suffix}").is_file():
+            return f"{name}{suffix}"
+    return f"{name}/ (chunks)" if (repo / name).is_dir() else name
+
+
+def show(value) -> str:
+    """A value as it is written in YAML."""
+    if isinstance(value, list):
+        return "[" + ", ".join(show(v) for v in value) + "]"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "null" if value is None else str(value)
+
+
+def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None, platform: dict | None) -> dict[str, list[tuple[str, str, str]]]:
+    """The landing zone's values by part, each as (setting, value, where it comes from)."""
+    settings, final = lz["settings"], leaves(lz["settings"])
+    setters: dict[tuple, list] = {}
+    for name, data in lz["layers"]:
+        for path, value in leaves(data).items():
+            setters.setdefault(path, []).append((file_of(repo, name), value))
+
+    def order(path: tuple):
+        return (ORDER.index(path[0]) if path[0] in ORDER else len(ORDER), [str(p) for p in path])
+
+    layered = []
+    for path in sorted(final, key=order):
+        by = setters.get(path) or [(file_of(repo, vending.origin(lz, *map(str, path))), final[path])]
+        replaced = [f"{name}: {show(value)}" for name, value in by[:-1] if value != final[path]]
+        layered.append((".".join(map(str, path)), show(final[path]), by[-1][0] + (f", replacing {'; '.join(replaced)}" if replaced else "")))
+
+    filled = [(k, "not set", "required: set it in one of the layers") for k in REQUIRED if settings.get(k) in (None, "")]
+    budget, network = settings.get("budget"), settings.get("network")
+    budget, network = budget if isinstance(budget, dict) else {}, network if isinstance(network, dict) else {}
+    if budget.get("monthly") is None:
+        filled.append(("budget.monthly", "not set", "no budget"))
+    if budget.get("contacts") is None:
+        filled.append(("budget.contacts", show([settings.get("owner")]), "the owner, by default"))
+    size = network.get("size", vending.DEFAULT_SIZE)
+    if "size" not in network:
+        filled.append(("network.size", str(vending.DEFAULT_SIZE), "mlz-core's default"))
+    if network.get("subnets") is None:
+        default = max(26, size) if isinstance(size, int) else 26
+        filled.append(("network.subnets.default", str(default), "mlz-core's default: one subnet, a /26 or the whole of a smaller range"))
+    if not isinstance(settings.get("github"), dict) or not settings["github"].get("repo"):
+        filled.append(("github", "not set", "no repo of its own"))
+
+    worked = []
+    archetype, location = settings.get("archetype"), settings.get("location")
+    if governance is None:
+        worked.append(("management group", "not known yet", "waits for governance's contract (_generated/governance.yaml)"))
+    elif archetype in governance.get("archetypes", {}):
+        worked.append(("management group", governance["archetypes"][archetype], f"governance's contract, for archetype {archetype}"))
+    tags = {"Owner": (settings.get("owner"), "owner"), "CostCenter": (settings.get("cost_center"), "cost_center"),
+            "Environment": (lz["environment"], "the file name"), "Workload": (lz["workload"], "the folder name"),
+            "ManagedBy": ("mlz-core", "mlz-core")}
+    worked += [(f"tag {name}", show(value), f"from {source}") for name, (value, source) in tags.items()]
+    entry = plan.get(key)
+    if entry is None:
+        worked.append(("address range", "not given yet", "the IP allocator gives it on the pull request"))
+    else:
+        worked.append(("address range", str(entry["range"]), f"the IP plan ({vending.IP_PLAN})"))
+        worked += [(f"subnet {name}", str(block), "the IP plan") for name, block in entry["subnets"].items()]
+        worked += [(f"subnet {name}", str(block), "the IP plan: removed, held until released") for name, block in entry["removed_subnets"].items()]
+    region = (platform or {}).get("regions", {}).get(location) if isinstance(location, str) else None
+    if platform is None:
+        worked.append(("hub", "not known yet", "waits for the platform's contract (_generated/platform.yaml)"))
+    elif region:
+        source = f"the platform's contract, for {location}"
+        worked.append(("hub network", region["hub_network"], source))
+        worked.append(("DNS servers", show(region["dns_servers"]), source))
+        worked += [(f"route {r['name']}", f"{r['to']} via {r['via']}", source) for r in region.get("spoke_routes") or []]
+    return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
+
+
+def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: dict | None) -> list[str]:
+    """This landing zone's own problems, as the vending check finds them; the check also compares it with
+    the others."""
+    found: list[str] = []
+    if governance is not None and platform is not None:
+        vending.check(key, lz, governance, platform, found)
+    wanted = vending.wanted_network(lz, found)
+    if key in plan and wanted and set(plan[key]["subnets"]) != set(wanted[1]):
+        found.append(f"{key}: its subnets in {vending.IP_PLAN} are not the ones asked for; the IP allocator gives them on the pull request.")
+    return list(dict.fromkeys(found))
+
+
+def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str, str]]], found: list[str]) -> str:
+    rows = [row for part in parts.values() for row in part]
+    first = max(len(setting) for setting, _, _ in rows) + 2
+    lines = [f"{key} ({file_of(repo, lz['where'])})"]
+    for title, part in parts.items():
+        if not part:
+            continue
+        lines += ["", title]
+        for setting, value, source in part:
+            if len(value) > WIDTH:
+                lines += [f"  {setting:<{first}}{value}", f"  {'':<{first}}<- {source}"]
+            else:
+                lines.append(f"  {setting:<{first}}{value:<{WIDTH}}  <- {source}")
+    lines += ["", "Check"]
+    lines += [f"  {problem}" for problem in found] or ["  no problems in this landing zone (python3 -m mlz vending checks them all together)"]
+    return "\n".join(line.rstrip() for line in lines) + "\n"

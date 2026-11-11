@@ -71,10 +71,11 @@ def landing_zones(repo: Path) -> dict[str, dict]:
             if key in found:
                 raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
             merged, origins = {}, {}
-            for name, data in (setting("_defaults", "all"), setting("_defaults", env), setting(workload, "_workload"), setting(workload, env)):
+            layers = [setting("_defaults", "all"), setting("_defaults", env), setting(workload, "_workload"), setting(workload, env)]
+            for name, data in layers:
                 merged = layer(merged, data)
                 record(origins, data, name)
-            found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins}
+            found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins, "layers": layers}
     return found
 
 

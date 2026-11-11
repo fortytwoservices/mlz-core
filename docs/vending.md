@@ -97,6 +97,32 @@ and writes `<key>.json` per landing zone; the Terraform root reads one of them. 
 its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
 folder holding anything else is refused.
 
+## Where a value comes from
+
+With four layers, a value can come from any of them, from mlz-core, or from another repo's contract.
+`python3 -m mlz explain --repo . <key>` shows a landing zone's every value and where it comes from:
+
+```
+payments-prod (landing-zones/payments/prod.yaml)
+
+Set in its layers
+  owner                payments-team@demo.example     <- landing-zones/payments/_workload.yaml
+  budget.monthly       2000                           <- landing-zones/payments/prod.yaml, replacing landing-zones/_defaults/all.yaml: 500
+  ...
+Filled in by mlz-core
+  network.size         24                             <- mlz-core's default
+Worked out
+  management group     demo-lz-corp                   <- governance's contract, for archetype corp
+  address range        10.100.4.0/24                  <- the IP plan (_generated/ip-plan.yaml)
+  route default        0.0.0.0/0 via 10.100.0.4       <- the platform's contract, for norwayeast
+Check
+  no problems in this landing zone (python3 -m mlz vending checks them all together)
+```
+
+It reads the contracts in `_generated/` when they are there, and says what waits for them when they are
+not. It shows what mlz-core's loader decides; what the vending root does the same way for every landing
+zone, such as its NSGs, is in `vending/terraform`.
+
 ## Operating notes
 
 - **A new landing zone settles on its second run.** Sub-vending records whether the subscription is already
