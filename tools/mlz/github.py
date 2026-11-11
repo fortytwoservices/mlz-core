@@ -39,6 +39,10 @@ class GitHub:
     def repo(self, repo: str) -> dict | None:
         return self._api(f"repos/{repo}", missing_ok=True)
 
+    def is_empty(self, repo: str) -> bool:
+        """No commit yet, so no branch either: a repo made without GitHub's first commit."""
+        return not self._api(f"repos/{repo}/branches?per_page=1")
+
     def default_branch(self, repo: str) -> str:
         return self._api(f"repos/{repo}")["default_branch"]
 

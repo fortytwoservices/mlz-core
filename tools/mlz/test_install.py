@@ -41,13 +41,13 @@ WORKFLOW = ".github/workflows/mlz.yml"
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
-                 org_branch="main", existing_branch="main", half_made=(), rulesets=()):
+                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=()):
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
         self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
         self.files.update(files or {})
-        self.renamed = []
+        self.renamed, self.empty = [], set(empty)
         self.existing_rulesets = set(rulesets)
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
@@ -60,6 +60,9 @@ class FakeGitHub:
     def create_repo(self, owner, name):
         self.created.append(f"{owner}/{name}")
         self.repos[f"{owner}/{name}"] = {"private": True, "default_branch": self.org_branch}
+
+    def is_empty(self, repo):
+        return repo in self.empty
 
     def default_branch(self, repo):
         return self.repos.get(repo, {}).get("default_branch", "main")
@@ -90,7 +93,8 @@ class FakeGitHub:
         return self.prefixes[repo]
 
     def file(self, repo, path, ref):
-        return self.files.get((repo, path), (None, None))
+        # (repo, path, ref) for a file on one branch only; (repo, path) for one on every branch.
+        return self.files.get((repo, path, ref)) or self.files.get((repo, path), (None, None))
 
     def reset_branch(self, repo, branch, base):
         self.branches.append((repo, branch, base))
@@ -206,6 +210,12 @@ class InstallTest(unittest.TestCase):
         self.assertIn(WORKFLOW, files)
         self.assertEqual([(r, b, base) for r, b, base, *_ in github.pulls], [("acme/mlz-vending", "mlz/starter", "main")])
         self.assertIn("acme/mlz-vending: the vending starter's missing files are offered in https://github.com/acme/mlz-vending/pull/1", self.printed)
+
+    def test_an_empty_existing_repo_asks_for_a_first_commit(self):
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], empty=["acme/mlz-governance"])
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-governance exists but is empty; give it a first commit on main"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.commits, [])
 
     def test_an_existing_ruleset_named_main_is_left_alone(self):
         github = FakeGitHub(existing=REPOS.values(), rulesets=[("acme/mlz-platform", "main")])
@@ -381,6 +391,27 @@ class InstallTest(unittest.TestCase):
         install.step_publish(github, terraform, self.folder, self.out)
         self.assertEqual(github.closed[0][:2], ("acme/mlz-governance", "mlz/bootstrap-contract"))
         self.assertIn("publish: closed https://github.com/acme/mlz-governance/pull/3, which no longer matches the bootstrap", self.printed)
+
+    def test_publish_again_updates_its_open_offer_without_moving_the_branch_back(self):
+        (self.work).mkdir(parents=True, exist_ok=True)
+        (self.work / "backend.hcl").write_text("x")
+        offer = "https://github.com/acme/mlz-governance/pull/3"
+        github = FakeGitHub(open_pull=offer, files={("acme/mlz-governance", "_generated/bootstrap.yaml", "mlz/bootstrap-contract"): ("older\n", "sha")})
+        self.assertEqual(install.step_publish(github, FakeTerraform(self.work), self.folder, self.out), offer)
+        self.assertEqual(github.branches, [])  # moved back to main, the branch would close its pull request
+        self.assertEqual(github.commits[0][1:3], ("mlz/bootstrap-contract", "head-of-mlz/bootstrap-contract"))
+        self.assertEqual(github.pulls, [])
+
+    def test_publish_again_leaves_an_open_offer_of_the_same_contract_alone(self):
+        (self.work).mkdir(parents=True, exist_ok=True)
+        (self.work / "backend.hcl").write_text("x")
+        terraform = FakeTerraform(self.work)
+        text = install.contract.render("bootstrap", json.loads(terraform.output("contract")))
+        offer = "https://github.com/acme/mlz-governance/pull/3"
+        github = FakeGitHub(open_pull=offer, files={("acme/mlz-governance", "_generated/bootstrap.yaml", "mlz/bootstrap-contract"): (text, "sha")})
+        install.step_publish(github, terraform, self.folder, self.out)
+        self.assertEqual(github.commits, [])
+        self.assertIn(f"publish: {offer} already offers this _generated/bootstrap.yaml", self.printed)
 
     def test_publish_needs_the_state_in_its_account(self):
         with self.assertRaisesRegex(ConfigError, "run mlz install bootstrap first"):

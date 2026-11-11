@@ -113,6 +113,10 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             created = True
         else:
             created = False
+            if github.is_empty(repo):
+                # The commits here are made through the API GitHub signs, which adds to a branch: it cannot make
+                # a repo's first commit.
+                raise ConfigError(f"{repo} exists but is empty; give it a first commit on main (a README from its page will do), then run this step again.")
             if not found.get("private"):
                 out(f"{repo}: it is not private; change that in its settings if it should be")
             if found.get("default_branch", "main") != "main":
@@ -342,9 +346,14 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
         for url in github.close_pulls(repo, CONTRACT_BRANCH, f"Closed by mlz install publish: {CONTRACT_PATH} on {base} already matches the bootstrap's state."):
             out(f"publish: closed {url}, which no longer matches the bootstrap")
         return None
-    head = github.reset_branch(repo, CONTRACT_BRANCH, base)
+    url = github.open_pull(repo, CONTRACT_BRANCH)
+    if url and github.file(repo, CONTRACT_PATH, CONTRACT_BRANCH)[0] == text:
+        out(f"publish: {url} already offers this {CONTRACT_PATH}")
+        return url
+    # Onto an open pull request's branch: a branch moved back to main would close its pull request.
+    head = github.head(repo, CONTRACT_BRANCH) if url else github.reset_branch(repo, CONTRACT_BRANCH, base)
     github.commit_files(repo, CONTRACT_BRANCH, head, {CONTRACT_PATH: text}, "chore: bootstrap contract")
-    url = github.open_pull(repo, CONTRACT_BRANCH) or github.create_pull(
+    url = url or github.create_pull(
         repo, CONTRACT_BRANCH, base, "chore: bootstrap contract",
         "The pipeline identities and the state account from the bootstrap. Merging it runs governance's first "
         "deployment with them.\n\nThen, in order: merge the governance contract into platform and vending, platform's "
