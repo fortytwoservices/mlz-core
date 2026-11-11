@@ -3,12 +3,14 @@
 # checked and planned it. A person's merge would add no control: the run on main that the merge starts still
 # waits for this role's reviewer before it applies. A contract this run did not accept stays open, so main
 # only ever gets one its own run has checked. Needs GH_TOKEN for an app that may write to this repo,
-# GITHUB_REPOSITORY, PR_NUMBER, HEAD_REF, and HEAD_SHA (the commit this run checked).
+# GITHUB_REPOSITORY, PR_NUMBER, and HEAD_SHA (the commit this run checked). The branch stays: publish.sh
+# starts it again from main for the next contract, so deleting it here could take a newer one with it.
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-# Contracts only, and the IP plan that vending's run commits to them: anything else waits for a person.
-others=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[].filename | select(test("^_generated/[a-z-]+\\.yaml$") | not)')
+# Contracts only, and the IP plan that vending's run commits to them: anything else waits for a person. A
+# renamed file counts by both names, so a file moved into _generated/ is not taken from elsewhere unseen.
+others=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty) | select(test("^_generated/[a-z-]+\\.yaml$") | not)')
 if [[ -n $others ]]; then
   echo "::notice::This pull request changes more than _generated/, so a person merges it: $(tr '\n' ' ' <<< "$others")"
   exit 0
@@ -22,7 +24,6 @@ method=merge
 # contract merged a moment earlier moves the base, so a refusal is tried again before it is reported.
 for attempt in 1 2 3; do
   if refusal=$(gh api -X PUT "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/merge" -f merge_method="$method" -f sha="$HEAD_SHA" 2>&1 >/dev/null); then
-    gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$HEAD_REF" >/dev/null 2>&1 || true # gone already if the repo deletes merged branches
     echo "::notice::Merged #$PR_NUMBER. The run on main now plans with it, and applies once this role's reviewer approves."
     exit 0
   fi

@@ -42,6 +42,20 @@ if [[ $head != "$GITHUB_SHA" ]]; then
 fi
 path=_generated/$role.yaml
 branch=mlz/$role-contract
+
+# The open pull request from the contract branch, if any. Only an open one counts: the branch is reused.
+open_pull() {
+  gh pr list --repo "$1" --head "$branch" --base main --state open --json number --jq '.[0].number // empty'
+}
+
+# The contract as one commit on the branch, over whatever the branch holds at that path.
+put_contract() {
+  local sha
+  sha=$(gh api "repos/$1/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)
+  gh api -X PUT "repos/$1/contents/$path" -f message="chore: $role contract from $GITHUB_REPOSITORY" \
+    -f content="$(base64 -w0 < "$WORK/$role.yaml")" -f branch="$branch" ${sha:+-f sha="$sha"} >/dev/null
+}
+
 for reader in $readers; do
   repo=$(python3 -c 'import json, os, sys; print(json.loads(os.environ["MLZ_REPOSITORIES"])[sys.argv[1]])' "$reader")
   current=$(gh api "repos/$repo/contents/$path" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true)
@@ -56,23 +70,25 @@ for reader in $readers; do
     done
     continue
   fi
-  # An open pull request gets the new contract on its own branch. Moved back to main, the branch would
-  # close it, since a pull request with nothing to merge is closed. Otherwise the branch starts again from main.
-  open=$(gh pr list --repo "$repo" --head "$branch" --base main --state open --json number --jq '.[0].number // empty')
-  if [[ -z $open ]]; then
-    main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
-    gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$main" >/dev/null 2>&1 ||
-      gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$main" -F force=true >/dev/null
-  elif [[ $(gh api "repos/$repo/contents/$path?ref=$branch" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true) == "$(cat "$WORK/$role.yaml")" ]]; then
-    echo "$repo: #$open already offers this $path"
-    continue
+  # An open pull request gets the new contract on its own branch: moved back to main, the branch would close
+  # it, since a pull request with nothing to merge is closed. The reader's run may merge it meanwhile, and the
+  # repo may then delete the branch; the contract then starts again from main, in a new pull request.
+  open=$(open_pull "$repo")
+  if [[ -n $open ]]; then
+    if [[ $(gh api "repos/$repo/contents/$path?ref=$branch" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true) == "$(cat "$WORK/$role.yaml")" ]]; then
+      echo "$repo: #$open already offers this $path"
+      continue
+    fi
+    if put_contract "$repo" 2>/dev/null && [[ $(open_pull "$repo") == "$open" ]]; then
+      echo "$repo: offered the new $path in #$open"
+      continue
+    fi
   fi
-  sha=$(gh api "repos/$repo/contents/$path?ref=$branch" --jq .sha 2>/dev/null || true)
-  gh api -X PUT "repos/$repo/contents/$path" -f message="chore: $role contract from $GITHUB_REPOSITORY" \
-    -f content="$(base64 -w0 < "$WORK/$role.yaml")" -f branch="$branch" ${sha:+-f sha="$sha"} >/dev/null
-  if [[ -z $open ]]; then
-    gh pr create --repo "$repo" --head "$branch" --base main --title "chore: $role contract" \
-      --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This repo's run merges it once it has checked and planned it; the apply on main then waits for this repo's reviewer. If the run fails, or this repo's rules need a review first, it stays open for a person." >/dev/null
-  fi
-  echo "$repo: offered the new $path${open:+ in #$open}"
+  main=$(gh api "repos/$repo/git/ref/heads/main" --jq .object.sha)
+  gh api -X POST "repos/$repo/git/refs" -f ref="refs/heads/$branch" -f sha="$main" >/dev/null 2>&1 ||
+    gh api -X PATCH "repos/$repo/git/refs/heads/$branch" -f sha="$main" -F force=true >/dev/null
+  put_contract "$repo"
+  gh pr create --repo "$repo" --head "$branch" --base main --title "chore: $role contract" \
+    --body "The $role contract after the apply in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. This repo's run merges it once it has checked and planned it; the apply on main then waits for this repo's reviewer. If the run fails, or this repo's rules need a review first, it stays open for a person." >/dev/null
+  echo "$repo: offered the new $path"
 done

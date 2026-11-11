@@ -416,6 +416,5 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.merger.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: .mlz-core/tools/ci/merge.sh
