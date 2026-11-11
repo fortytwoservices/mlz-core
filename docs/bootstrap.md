@@ -92,32 +92,52 @@ create them itself, and then the handover step disappears for them.
 
 ## Running it
 
-Needs the Azure CLI signed in to the customer's tenant as someone who may create the top group (for
-example a Global Administrator with access elevated to the tenant root) and who is Owner on the platform
-subscriptions, and a GitHub token with admin rights on the three repos.
+`mlz install` does it step by step, from an mlz-core checkout. Every step can run again and changes only what
+is missing, so a step that stops on an error is simply run again.
+
+It needs:
+- the Azure CLI signed in to the customer's tenant as someone who may create the top group (for example a
+  Global Administrator with access elevated to the tenant root) and who is Owner on the platform
+  subscriptions;
+- `gh` signed in with admin rights on the three repos and the `workflow` scope.
+
+`--settings` is the folder with the customer's `customer.yaml` and `bootstrap.yaml`: a checkout of the
+governance repo, or, for a new customer, a folder with just the two files.
 
 ```sh
-cd bootstrap/terraform
-export GITHUB_TOKEN=$(gh auth token)
-GOV=<path to the customer's mlz-governance checkout>
+export PYTHONPATH=tools
+SET=<folder with customer.yaml and bootstrap.yaml>
+TENANT=<the customer's Entra tenant ID>
 
-# 1. The first run keeps its state locally: the account it goes into does not exist yet.
-printf 'terraform {\n  backend "local" {}\n}\n' > backend_override.tf   # gitignored
-terraform init
-terraform apply -var customer_file=$GOV/customer.yaml -var bootstrap_file=$GOV/bootstrap.yaml
-
-# 2. Move the state into the account it created.
-terraform output -raw backend_config > backend.hcl
-rm backend_override.tf
-terraform init -migrate-state -backend-config=backend.hcl
-
-# 3. Hand the platform subscriptions over (the first commands in: terraform output -raw handover).
-
-# 4. Check the subjects match what GitHub issues, then publish the contract to the governance repo.
-terraform output oidc_subjects
-gh api repos/<organization>/<repository>/actions/oidc/customization/sub   # sub_claim_prefix, per repo
-terraform output -json contract | PYTHONPATH=../../tools python3 -m mlz contract bootstrap --out $GOV/_generated/bootstrap.yaml
+python3 -m mlz install repos     --settings $SET                  # 1
+python3 -m mlz install check     --settings $SET                  # 2
+python3 -m mlz install bootstrap --settings $SET --tenant $TENANT  # 3
+python3 -m mlz install handover  --settings $SET --tenant $TENANT  # 4
+python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 ```
+
+1. **`repos`** creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
+   commit from its starter. The governance repo gets the customer's own `customer.yaml` and `bootstrap.yaml`.
+   - Each gets the ruleset `main`: changes only through pull requests, no force push, no deletion.
+   - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
+     request. A ruleset of its own named `main` is left as it is.
+2. **`check`** confirms the customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and
+   `MLZ_RELEASE_APP_PRIVATE_KEY`). Making the App needs a browser, so that step stays manual.
+3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
+   `--work`), so no customer's state or plan mixes with another's.
+   - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the
+     state into that account. Your new rights on the account can take minutes to apply, so the move is tried
+     again for up to five minutes.
+   - Without `--yes` it shows the plan and asks before applying. Only a terminal can answer: piped input or
+     a script counts as no, and `--yes` is the way to go ahead without a person.
+   - It ends by checking that every identity trusts a subject GitHub actually issues to its repo.
+4. **`handover`** moves the platform subscriptions into `<root>`, after asking. A subscription already anywhere
+   in the tree stays where it is, so a run after governance never pulls one back out.
+5. **`publish`** offers `_generated/bootstrap.yaml` to the governance repo as a pull request. Merging it runs
+   governance's first deployment; the first run's order is in `docs/pipelines.md`.
+
+Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
+command in `terraform output -raw handover`).
 
 A governance deployment applied before the bootstrap existed created the top group itself. Hand the
 group over before its next run, or governance plans to delete it (and Azure refuses, since it holds the

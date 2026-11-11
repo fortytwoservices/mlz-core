@@ -6,6 +6,7 @@
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
+    python3 -m mlz install  repos|check|bootstrap|handover|publish --settings <dir> [--tenant <id>] [--yes]
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -22,7 +23,8 @@ import json
 import sys
 from pathlib import Path
 
-from . import contract, firewall, platform, upgrade, vending
+from . import contract, firewall, install, platform, upgrade, vending
+from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
 
@@ -61,11 +63,42 @@ def main() -> int:
     u.add_argument("repositories", nargs="+", metavar="owner/repo", help="the customer's GitHub repos to move")
     u.add_argument("--to", metavar="vX.Y.Z", help="the release to move to (default: the latest)")
     u.add_argument("--dry-run", action="store_true", help="show the change and the pull request's text; open nothing")
+    i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
+    i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish"])
+    i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
+    i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish)")
+    i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
+    i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, or move the subscriptions, without asking")
     args = parser.parse_args()
+
+    if args.role == "install":
+        try:
+            if args.step == "repos":
+                install.step_repos(GitHub(), args.settings)
+            elif args.step == "check":
+                install.step_check(GitHub(), args.settings)
+            else:
+                if not args.tenant:
+                    raise ConfigError(f"install {args.step} needs --tenant <the customer's Entra tenant ID>.")
+                if args.step == "handover":
+                    install.step_handover(install.Azure(args.tenant), args.settings, args.yes)
+                else:
+                    customer, _ = install.settings(args.settings)
+                    # A root ID is unique only within its tenant: two customers may both be "mlz".
+                    work = args.work or Path.home() / ".mlz" / "install" / args.tenant / customer["root_id"]
+                    terraform = install.Terraform(work, args.tenant)
+                    if args.step == "bootstrap":
+                        install.step_bootstrap(GitHub(), terraform, args.settings, args.yes)
+                    else:
+                        install.step_publish(GitHub(), terraform, args.settings)
+        except ConfigError as error:
+            print(f"mlz install {args.step}: {error}", file=sys.stderr)
+            return 1
+        return 0
 
     if args.role == "upgrade":
         # Repos on GitHub, not a checkout: nothing to preload. One failing repo does not stop the others.
-        github, failed = upgrade.GitHub(), 0
+        github, failed = GitHub(), 0
         for repository in args.repositories:
             try:
                 upgrade.upgrade(github, repository, args.to, args.dry_run)
