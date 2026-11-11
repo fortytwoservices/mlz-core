@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/fortytwoservices/mlz-core/compare/v0.2.0...v0.2.1) (2026-11-11)
+
+
+### Features
+
+* **explain:** mlz explain shows where each of a landing zone's values comes from ([#33](https://github.com/fortytwoservices/mlz-core/issues/33)) ([4f5817e](https://github.com/fortytwoservices/mlz-core/commit/4f5817e1c2eb47b4f4fc534e8b37f810cd60def6))
+
 ## [0.2.0](https://github.com/fortytwoservices/mlz-core/compare/v0.1.11...v0.2.0) (2026-11-11)
 
 

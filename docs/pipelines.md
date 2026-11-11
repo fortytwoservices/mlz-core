@@ -6,7 +6,7 @@ Each customer repo runs its role from mlz-core with one short workflow, `.github
 ```yaml
 jobs:
   governance:
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.2.0 # x-release-please-version
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.2.1 # x-release-please-version
     with:
       role: governance
     secrets:
