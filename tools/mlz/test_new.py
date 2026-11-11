@@ -79,6 +79,13 @@ class NewLandingZoneTest(unittest.TestCase):
                 new.landing_zone(self.repo, "payments", "dev", NOTHING)
         self.assertEqual(self.read("landing-zones/payments/dev.yaml"), "subscription: theirs\n")
 
+    def test_a_cost_center_given_as_text_matches_the_same_number_above(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("cost_center: '4711'", "cost_center: 4711"))
+        new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "cost_center": "4711"})
+        self.assertNotIn("cost_center", self.read("landing-zones/payments/dev.yaml"))
+        new.landing_zone(self.repo, "payments", "test", {**NOTHING, "cost_center": "04711"})  # another tag: written
+        self.assertIn('cost_center: "04711"', self.read("landing-zones/payments/test.yaml"))
+
     def test_a_cost_center_of_digits_stays_text(self):
         new.landing_zone(self.repo, "billing", "prod", {**NOTHING, "cost_center": "0042"})
         self.assertEqual(vending.landing_zones(self.repo)["billing-prod"]["settings"]["cost_center"], "0042")

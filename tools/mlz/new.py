@@ -67,9 +67,14 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
     for base in (root / "_defaults" / "all", root / "_defaults" / env, folder / "_workload"):
         above = layer(above, read_setting(base) or {})
 
+    def same(k: str) -> bool:
+        # The loader makes one tag of cost_center: 4711 and "4711" (but not of 42 and "0042").
+        value = above.get(k)
+        return value == given[k] or isinstance(value, int) and not isinstance(value, bool) and str(value) == given[k]
+
     def needed(keys) -> list[tuple[str, object]]:
         # Given at a value no layer above has, or required and set nowhere above.
-        return [(k, given.get(k)) for k in keys if given.get(k) is not None and above.get(k) != given[k] or given.get(k) is None and above.get(k) in (None, "")]
+        return [(k, given.get(k)) for k in keys if given.get(k) is not None and not same(k) or given.get(k) is None and above.get(k) in (None, "")]
 
     def create(path: Path, text: str) -> None:
         # Exclusive: a file another run wrote since the checks above is never written over.
