@@ -54,19 +54,26 @@ def show(value) -> str:
 def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None, platform: dict | None) -> dict[str, list[tuple[str, str, str]]]:
     """The landing zone's values by part, each as (setting, value, where it comes from)."""
     settings, final = lz["settings"], leaves(lz["settings"])
-    setters: dict[tuple, list] = {}
-    for name, data in lz["layers"]:
-        for path, value in leaves(data).items():
-            setters.setdefault(path, []).append((file_of(repo, name), value))
+    # Every value each layer set, in layer order: (layer, file, path, value).
+    set_by = [(index, file_of(repo, name), path, value) for index, (name, data) in enumerate(lz["layers"]) for path, value in leaves(data).items()]
 
     def order(path: tuple):
         return (ORDER.index(path[0]) if path[0] in ORDER else len(ORDER), [str(p) for p in path])
 
+    def dotted(path: tuple) -> str:
+        return ".".join(map(str, path))
+
     layered = []
     for path in sorted(final, key=order):
-        by = setters.get(path) or [(file_of(repo, vending.origin(lz, *map(str, path))), final[path])]
-        replaced = [f"{name}: {show(value)}" for name, value in by[:-1] if value != final[path]]
-        layered.append((".".join(map(str, path)), show(final[path]), by[-1][0] + (f", replacing {'; '.join(replaced)}" if replaced else "")))
+        mine = [entry for entry in set_by if entry[2] == path]
+        last, source = (mine[-1][0], mine[-1][1]) if mine else (len(lz["layers"]), file_of(repo, vending.origin(lz, *map(str, path))))
+        # What an earlier layer set here, below it (a group a later layer replaced whole) or above it.
+        replaced = [
+            f"{file}: {show(value)}" if at == path else f"{file}: {dotted(at)} {show(value)}"
+            for index, file, at, value in set_by
+            if index < last and (at == path and value != final[path] or at[:len(path)] == path and at != path or path[:len(at)] == at and at != path)
+        ]
+        layered.append((dotted(path), show(final[path]), source + (f", replacing {'; '.join(replaced)}" if replaced else "")))
 
     filled = [(k, "not set", "required: set it in one of the layers") for k in REQUIRED if settings.get(k) in (None, "")]
     budget, network = settings.get("budget"), settings.get("network")
@@ -123,11 +130,14 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
         if set(plan[key]["subnets"]) != set(wanted[1]):
             found.append(f"{key}: its subnets in {vending.IP_PLAN} are not the ones asked for; the IP allocator gives them on the pull request.")
         found += vending.size_problems(key, plan[key], wanted)
-    if platform is not None:
-        # What no longer holds for what it was given: overlaps with the hubs, reserved ranges and other landing
-        # zones, and a range outside its region's pool. Only this landing zone's: the others are vending's check.
-        mine = (f"{key}'s ", f"{key}: ")
-        found += [p for p in vending.plan_problems(plan, {key: lz}, {key: wanted}, platform) if any(m in p for m in mine)]
+    if key in plan:
+        if platform is not None:
+            # What no longer holds for what it was given: overlaps with the hubs and reserved ranges, subnets
+            # outside its range, a range outside its region's pool. Its plan alone, so no other's problems show.
+            found += vending.plan_problems({key: plan[key]}, {key: lz}, {key: wanted}, platform)
+        given = plan[key]["range"]
+        found += [f"{vending.IP_PLAN}: {key}'s range {given} overlaps {other}'s {entry['range']}."
+                  for other, entry in sorted(plan.items()) if other != key and given.overlaps(entry["range"])]
     return list(dict.fromkeys(found))
 
 

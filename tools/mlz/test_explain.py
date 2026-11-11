@@ -86,6 +86,31 @@ class ExplainTest(unittest.TestCase):
         self.assertIn("network.size is 25, but its range 10.100.4.0/24 was given as a /24", found)
         self.assertIn("subnet default is a /27 here but was given as 10.100.4.0/26", found)
 
+    def test_a_group_a_later_layer_clears_names_what_it_had(self):
+        self.write("landing-zones/payments/prod.yaml", "subscription: 33333333-3333-3333-3333-333333333333\nbudget: null\n")
+        value, source = self.rows()["budget"]
+        self.assertEqual(value, "null")
+        # Both values the defaults had under budget are named, contacts and monthly.
+        self.assertIn("replacing landing-zones/_defaults/all.yaml: budget.contacts [platform@demo.example]", source)
+        self.assertIn("landing-zones/_defaults/all.yaml: budget.monthly 500", source)
+
+    def test_another_landing_zones_problems_stay_out(self):
+        # internal-payments-prod ends with payments-prod; its own overlap is not payments-prod's problem.
+        self.write("landing-zones/internal/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/internal/payments-prod.yaml", "subscription: 44444444-4444-4444-4444-444444444444\n")
+        plan, _, retired = vending.allocate(self.repo, PLATFORM)
+        plan["internal-payments-prod"]["range"] = vending.IPv4Network("10.100.0.0/24")  # inside the hub's range
+        self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
+        self.assertEqual(self.problems(), [])
+
+    def test_an_overlap_with_another_landing_zone_is_reported(self):
+        self.write("landing-zones/internal/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/internal/web.yaml", "subscription: 44444444-4444-4444-4444-444444444444\n")
+        plan, _, retired = vending.allocate(self.repo, PLATFORM)
+        plan["internal-web"]["range"] = plan["payments-prod"]["range"]
+        self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
+        self.assertIn("payments-prod's range 10.100.4.0/24 overlaps internal-web's 10.100.4.0/24", "\n".join(self.problems()))
+
     def run_main(self, *argv) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sys, "argv", ["mlz", *argv]), redirect_stdout(out), redirect_stderr(err):
