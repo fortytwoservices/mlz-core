@@ -106,13 +106,12 @@ class GitHub:
 
     # Settings
 
-    def upsert_ruleset(self, repo: str, ruleset: dict) -> None:
-        """The repo's own ruleset of that name, created or replaced."""
-        existing = [r for r in self._api(f"repos/{repo}/rulesets") or [] if r["name"] == ruleset["name"] and r.get("source_type") == "Repository"]
-        if existing:
-            self._api(f"repos/{repo}/rulesets/{existing[0]['id']}", "PUT", ruleset)
-        else:
-            self._api(f"repos/{repo}/rulesets", "POST", ruleset)
+    def add_ruleset(self, repo: str, ruleset: dict) -> bool:
+        """The repo's own ruleset, created unless one of that name exists (which is left as it is). True if made."""
+        if any(r["name"] == ruleset["name"] and r.get("source_type") == "Repository" for r in self._api(f"repos/{repo}/rulesets") or []):
+            return False
+        self._api(f"repos/{repo}/rulesets", "POST", ruleset)
+        return True
 
     def has_variable(self, repo: str, name: str) -> bool:
         return self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True) is not None

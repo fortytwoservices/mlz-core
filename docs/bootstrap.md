@@ -116,10 +116,11 @@ python3 -m mlz install handover  --settings $SET --tenant $TENANT  # 4
 python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 ```
 
-1. **`repos`** creates the three repos named in `bootstrap.yaml`, private, each with a signed first commit
-   from its starter. The governance repo gets the customer's own `customer.yaml` and `bootstrap.yaml`. A repo
-   that exists keeps its files. Every repo gets the ruleset `main`: changes only through pull requests, no
-   force push, no deletion.
+1. **`repos`** creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
+   commit from its starter. The governance repo gets the customer's own `customer.yaml` and `bootstrap.yaml`.
+   - Each gets the ruleset `main`: changes only through pull requests, no force push, no deletion.
+   - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
+     request. A ruleset of its own named `main` is left as it is.
 2. **`check`** confirms the customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and
    `MLZ_RELEASE_APP_PRIVATE_KEY`). Making the App needs a browser, so that step stays manual.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or

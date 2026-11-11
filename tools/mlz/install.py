@@ -53,6 +53,7 @@ MAIN_RULESET = {
     ],
 }
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
+STARTER_BRANCH = "mlz/starter"
 
 
 def settings(folder: Path) -> tuple[dict, dict]:
@@ -116,17 +117,28 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
                 out(f"{repo}: it is not private; change that in its settings if it should be")
             if found.get("default_branch", "main") != "main":
                 out(f"{repo}: its default branch is {found['default_branch']}, but the pipelines run on main; rename it")
-        # A repo made here whose starter commit failed (or any repo without the workflow) gets the starter's
-        # missing files; a file that is there already is never replaced.
+        # A repo made here gets the starter as its first commit, before its ruleset exists. A repo that exists
+        # without the workflow (made here once, its first commit failed; or adopted) gets the starter's missing
+        # files as a pull request: its main may take nothing else, and a file already there is never replaced.
         branch = github.default_branch(repo)
-        if created or github.file(repo, WORKFLOW, branch)[0] is None:
-            missing = {path: text for path, text in starter_files(role, folder).items() if created or github.file(repo, path, branch)[0] is None}
-            github.commit_files(repo, branch, github.head(repo, branch), missing, f"chore: mlz-{role} from mlz-core {release()}")
-            out(f"{repo}: {'created, private, with' if created else 'given the missing files of'} the {role} starter")
+        message = f"chore: mlz-{role} from mlz-core {release()}"
+        if created:
+            github.commit_files(repo, branch, github.head(repo, branch), starter_files(role, folder), message)
+            out(f"{repo}: created, private, with the {role} starter")
+        elif github.file(repo, WORKFLOW, branch)[0] is None:
+            missing = {path: text for path, text in starter_files(role, folder).items() if github.file(repo, path, branch)[0] is None}
+            url = github.open_pull(repo, STARTER_BRANCH)
+            if not url:
+                github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
+                url = github.create_pull(repo, STARTER_BRANCH, branch, message, f"The {role} starter's files this repo does not have yet, from `mlz install repos`. Files already here are left as they are.\n")
+            out(f"{repo}: the {role} starter's missing files are offered in {url}")
         else:
             out(f"{repo}: exists, files left as they are")
-        github.upsert_ruleset(repo, MAIN_RULESET)
-        out(f"{repo}: ruleset main (pull requests only, no force push or deletion)")
+        # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
+        if github.add_ruleset(repo, MAIN_RULESET):
+            out(f"{repo}: ruleset main (pull requests only, no force push or deletion)")
+        else:
+            out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:

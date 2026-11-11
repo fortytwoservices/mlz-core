@@ -40,13 +40,14 @@ WORKFLOW = ".github/workflows/mlz.yml"
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
-                 org_branch="main", existing_branch="main", half_made=()):
+                 org_branch="main", existing_branch="main", half_made=(), rulesets=()):
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
         self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
         self.files.update(files or {})
         self.renamed = []
+        self.existing_rulesets = set(rulesets)
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
@@ -72,8 +73,11 @@ class FakeGitHub:
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, head, files, message))
 
-    def upsert_ruleset(self, repo, ruleset):
+    def add_ruleset(self, repo, ruleset):
+        if (repo, ruleset["name"]) in self.existing_rulesets:
+            return False
         self.rulesets.append((repo, ruleset["name"]))
+        return True
 
     def has_variable(self, repo, name):
         return (repo, name) in self.variables
@@ -193,12 +197,20 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.renamed, [(repo, "master", "main") for repo in REPOS.values()])
         self.assertEqual({branch for _, branch, _, _, _ in github.commits}, {"main"})
 
-    def test_a_half_made_repo_gets_its_starter(self):
+    def test_a_half_made_repo_gets_its_starter_as_a_pull_request(self):
         github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-vending"])
         install.step_repos(github, self.folder, self.out)
-        self.assertEqual([repo for repo, *_ in github.commits], ["acme/mlz-vending"])
-        self.assertIn(WORKFLOW, github.commits[0][3])
-        self.assertIn("acme/mlz-vending: given the missing files of the vending starter", self.printed)
+        repo, branch, _, files, _ = github.commits[0]
+        self.assertEqual((repo, branch), ("acme/mlz-vending", "mlz/starter"))  # its main may take only pull requests
+        self.assertIn(WORKFLOW, files)
+        self.assertEqual([(r, b, base) for r, b, base, *_ in github.pulls], [("acme/mlz-vending", "mlz/starter", "main")])
+        self.assertIn("acme/mlz-vending: the vending starter's missing files are offered in https://github.com/acme/mlz-vending/pull/1", self.printed)
+
+    def test_an_existing_ruleset_named_main_is_left_alone(self):
+        github = FakeGitHub(existing=REPOS.values(), rulesets=[("acme/mlz-platform", "main")])
+        install.step_repos(github, self.folder, self.out)
+        self.assertNotIn(("acme/mlz-platform", "main"), github.rulesets)  # the customer's own may be stricter
+        self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
         own = ("acme/mlz-governance", "customer.yaml")
