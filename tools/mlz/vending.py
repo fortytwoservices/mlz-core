@@ -272,14 +272,20 @@ def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list
         pools = [IPv4Network(p) for p in region["landing_zone_ranges"]] if region else []
         if region and not any(given.subnet_of(p) for p in pools):
             problems.append(f"{key}: its range {given} is outside {location}'s landing zone ranges ({', '.join(map(str, pools))}); a range never moves.")
-        if wanted.get(key) is None:
-            continue
-        size, subnets = wanted[key]
-        if given.prefixlen != size:
-            problems.append(f"{key}: network.size is {size}, but its range {given} was given as a /{given.prefixlen}; a range never changes size.")
-        for name, block in plan[key]["subnets"].items():
-            if name in subnets and subnets[name] != block.prefixlen:
-                problems.append(f"{key}: subnet {name} is a /{subnets[name]} here but was given as {block}; a subnet never changes size, so give the new one another name.")
+        if wanted.get(key) is not None:
+            problems += size_problems(key, plan[key], wanted[key])
+    return problems
+
+
+def size_problems(key: str, entry: dict, wanted: tuple[int, dict[str, int]]) -> list[str]:
+    """A landing zone asking for another size than it was given: a range or a subnet never changes size."""
+    size, subnets = wanted
+    given, problems = entry["range"], []
+    if given.prefixlen != size:
+        problems.append(f"{key}: network.size is {size}, but its range {given} was given as a /{given.prefixlen}; a range never changes size.")
+    for name, block in entry["subnets"].items():
+        if name in subnets and subnets[name] != block.prefixlen:
+            problems.append(f"{key}: subnet {name} is a /{subnets[name]} here but was given as {block}; a subnet never changes size, so give the new one another name.")
     return problems
 
 

@@ -67,6 +67,25 @@ class ExplainTest(unittest.TestCase):
         self.assertIn("waits for the platform's contract", rows["hub"][1])
         self.assertEqual(rows["address range"][0], "10.100.4.0/24")  # the IP plan is the repo's own
 
+    def problems(self) -> list[str]:
+        lz = vending.landing_zones(self.repo)["payments-prod"]
+        return explain.problems("payments-prod", lz, vending.ip_plan(self.repo), GOVERNANCE, PLATFORM)
+
+    def test_an_empty_contacts_list_shows_the_owner_who_gets_the_alerts(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "  contacts: []\n")
+        self.assertEqual(self.rows()["budget.contacts"], ("[payments@demo.example]", "the owner, as no contacts are given"))
+
+    def test_an_archetype_that_is_not_one_value_is_reported_not_a_crash(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "archetype: [corp]\n")
+        self.assertNotIn("management group", self.rows())
+        self.assertIn("archetype is one value", "\n".join(self.problems()))
+
+    def test_a_size_given_cannot_change(self):
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 25\n  subnets:\n    default: 27\n")
+        found = "\n".join(self.problems())
+        self.assertIn("network.size is 25, but its range 10.100.4.0/24 was given as a /24", found)
+        self.assertIn("subnet default is a /27 here but was given as 10.100.4.0/26", found)
+
     def run_main(self, *argv) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(sys, "argv", ["mlz", *argv]), redirect_stdout(out), redirect_stderr(err):

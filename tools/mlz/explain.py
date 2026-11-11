@@ -73,8 +73,8 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
     budget, network = budget if isinstance(budget, dict) else {}, network if isinstance(network, dict) else {}
     if budget.get("monthly") is None:
         filled.append(("budget.monthly", "not set", "no budget"))
-    if budget.get("contacts") is None:
-        filled.append(("budget.contacts", show([settings.get("owner")]), "the owner, by default"))
+    if not budget.get("contacts"):  # none, or an empty list: the alerts go to the owner, as vending.build has it
+        filled.append(("budget.contacts", show([settings.get("owner")]), "the owner, as no contacts are given"))
     size = network.get("size", vending.DEFAULT_SIZE)
     if "size" not in network:
         filled.append(("network.size", str(vending.DEFAULT_SIZE), "mlz-core's default"))
@@ -88,7 +88,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
     archetype, location = settings.get("archetype"), settings.get("location")
     if governance is None:
         worked.append(("management group", "not known yet", "waits for governance's contract (_generated/governance.yaml)"))
-    elif archetype in governance.get("archetypes", {}):
+    elif isinstance(archetype, str) and archetype in governance.get("archetypes", {}):
         worked.append(("management group", governance["archetypes"][archetype], f"governance's contract, for archetype {archetype}"))
     tags = {"Owner": (settings.get("owner"), "owner"), "CostCenter": (settings.get("cost_center"), "cost_center"),
             "Environment": (lz["environment"], "the file name"), "Workload": (lz["workload"], "the folder name"),
@@ -119,8 +119,15 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
     if governance is not None and platform is not None:
         vending.check(key, lz, governance, platform, found)
     wanted = vending.wanted_network(lz, found)
-    if key in plan and wanted and set(plan[key]["subnets"]) != set(wanted[1]):
-        found.append(f"{key}: its subnets in {vending.IP_PLAN} are not the ones asked for; the IP allocator gives them on the pull request.")
+    if key in plan and wanted:
+        if set(plan[key]["subnets"]) != set(wanted[1]):
+            found.append(f"{key}: its subnets in {vending.IP_PLAN} are not the ones asked for; the IP allocator gives them on the pull request.")
+        found += vending.size_problems(key, plan[key], wanted)
+    if platform is not None:
+        # What no longer holds for what it was given: overlaps with the hubs, reserved ranges and other landing
+        # zones, and a range outside its region's pool. Only this landing zone's: the others are vending's check.
+        mine = (f"{key}'s ", f"{key}: ")
+        found += [p for p in vending.plan_problems(plan, {key: lz}, {key: wanted}, platform) if any(m in p for m in mine)]
     return list(dict.fromkeys(found))
 
 
