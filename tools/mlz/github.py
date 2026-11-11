@@ -79,6 +79,16 @@ class GitHub:
         pulls = self._api(f"repos/{repo}/pulls?state=open&head={owner}:{branch}")
         return pulls[0]["html_url"] if pulls else None
 
+    def close_pulls(self, repo: str, branch: str, comment: str) -> list[str]:
+        """Closes the open pull requests from the branch, each with the comment; returns their URLs."""
+        owner = repo.split("/")[0]
+        closed = []
+        for pull in self._api(f"repos/{repo}/pulls?state=open&head={owner}:{branch}") or []:
+            self._api(f"repos/{repo}/issues/{pull['number']}/comments", "POST", {"body": comment})
+            self._api(f"repos/{repo}/pulls/{pull['number']}", "PATCH", {"state": "closed"})
+            closed.append(pull["html_url"])
+        return closed
+
     def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
         return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]
 

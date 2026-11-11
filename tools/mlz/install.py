@@ -161,7 +161,8 @@ class Terraform:
         self.work = work.expanduser().resolve()
         self.root = self.work / "bootstrap" / "terraform"
         self.env = {**os.environ, "ARM_TENANT_ID": tenant}
-        self.env.setdefault("GITHUB_TOKEN", subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True).stdout.strip())
+        if not self.env.get("GITHUB_TOKEN"):  # only then: a supplied token needs no gh on the machine
+            self.env["GITHUB_TOKEN"] = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=True).stdout.strip()
 
     def prepare(self) -> None:
         for source, target in ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming")):
@@ -316,6 +317,10 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
     base = github.default_branch(repo)
     if github.file(repo, CONTRACT_PATH, base)[0] == text:
         out(f"publish: {repo} already has this {CONTRACT_PATH}")
+        # A pull request left open by an earlier publish offers a contract that is no longer the deployed one:
+        # merged, it would bring back old identities. Closed, as tools/ci/publish.sh does for the other contracts.
+        for url in github.close_pulls(repo, CONTRACT_BRANCH, f"Closed by mlz install publish: {CONTRACT_PATH} on {base} already matches the bootstrap's state."):
+            out(f"publish: closed {url}, which no longer matches the bootstrap")
         return None
     head = github.reset_branch(repo, CONTRACT_BRANCH, base)
     github.commit_files(repo, CONTRACT_BRANCH, head, {CONTRACT_PATH: text}, "chore: bootstrap contract")

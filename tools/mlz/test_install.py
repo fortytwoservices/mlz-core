@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from mlz import install
@@ -92,6 +93,12 @@ class FakeGitHub:
 
     def open_pull(self, repo, branch):
         return self._open_pull
+
+    def close_pulls(self, repo, branch, comment):
+        if not self._open_pull:
+            return []
+        self.closed = [(repo, branch, comment)]
+        return [self._open_pull]
 
     def create_pull(self, repo, branch, base, title, body):
         self.pulls.append((repo, branch, base, title, body))
@@ -210,7 +217,9 @@ class InstallTest(unittest.TestCase):
         previous = os.environ.get("GITHUB_TOKEN")
         os.environ["GITHUB_TOKEN"] = "not-used"
         try:
-            terraform = install.Terraform(Path("relative/work"), "tenant")
+            # A supplied token means gh is never run: a broken gh on the path would fail here otherwise.
+            with unittest.mock.patch("subprocess.run", side_effect=AssertionError("gh was run")):
+                terraform = install.Terraform(Path("relative/work"), "tenant")
         finally:
             if previous is None:
                 os.environ.pop("GITHUB_TOKEN")
@@ -349,6 +358,16 @@ class InstallTest(unittest.TestCase):
         github = FakeGitHub(files={("acme/mlz-governance", "_generated/bootstrap.yaml"): (text, "sha")})
         self.assertIsNone(install.step_publish(github, terraform, self.folder, self.out))
         self.assertEqual(github.commits, [])
+
+    def test_publish_closes_an_older_offer_once_main_matches(self):
+        (self.work).mkdir(parents=True, exist_ok=True)
+        (self.work / "backend.hcl").write_text("x")
+        terraform = FakeTerraform(self.work)
+        text = install.contract.render("bootstrap", json.loads(terraform.output("contract")))
+        github = FakeGitHub(files={("acme/mlz-governance", "_generated/bootstrap.yaml"): (text, "sha")}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        install.step_publish(github, terraform, self.folder, self.out)
+        self.assertEqual(github.closed[0][:2], ("acme/mlz-governance", "mlz/bootstrap-contract"))
+        self.assertIn("publish: closed https://github.com/acme/mlz-governance/pull/3, which no longer matches the bootstrap", self.printed)
 
     def test_publish_needs_the_state_in_its_account(self):
         with self.assertRaisesRegex(ConfigError, "run mlz install bootstrap first"):
