@@ -132,7 +132,8 @@ themselves; what a person does is approve each apply, and hand over landing zone
 
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
-2. **Platform** (needs governance's): the hubs. It offers its contract to governance and vending.
+2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
+   contract to governance and vending.
 3. **Governance again**, with platform's contract: the Private Link DNS policy now points at the real
    zones.
 4. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
