@@ -15,7 +15,7 @@ GOVERNANCE = {
     "platform_subscriptions": {"management": "m", "connectivity": "c"},
     "monitoring": {"workspace": "/subscriptions/m/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law"},
 }
-HUB = "address_space: 10.100.0.0/22\nlanding_zone_ranges: 10.100.0.0/16\n"
+HUB = "platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\n"
 
 
 class PlatformTest(unittest.TestCase):
@@ -46,6 +46,33 @@ class PlatformTest(unittest.TestCase):
         })
         self.assertIsNone(hub["bastion"])
         self.assertEqual(hub["landing_zone_ranges"], ["10.100.0.0/16"])
+        # The hub is the platform range's first /22; the landing zone range already holds the platform's.
+        self.assertEqual((hub["platform_address_space"], hub["address_space"]), ("10.100.0.0/21", ["10.100.0.0/22"]))
+        self.assertEqual(hub["routing_supernet"], ["10.100.0.0/16"])
+
+    def test_other_regions_route_a_platform_range_outside_the_landing_zone_ranges(self):
+        self.hub("norwayeast", "platform_address_space: 10.99.0.0/21\nlanding_zone_ranges: [10.100.0.0/16, 10.101.0.0/16]\n")
+        self.assertEqual(build(self.repo, GOVERNANCE)["hubs"]["norwayeast"]["routing_supernet"], ["10.99.0.0/21", "10.100.0.0/16", "10.101.0.0/16"])
+
+    def test_the_platform_range_is_a_21(self):
+        for size in ("22", "20"):
+            self.hub("norwayeast", f"platform_address_space: 10.100.0.0/{size}\nlanding_zone_ranges: 10.100.0.0/16\n")
+            with self.assertRaises(ConfigError) as caught:
+                build(self.repo, GOVERNANCE)
+            self.assertIn(f"platform_address_space 10.100.0.0/{size} must be a /21: the hub's /22, management's /24, identity's /24 and a spare /23", str(caught.exception))
+
+    def test_the_old_address_space_says_what_to_write(self):
+        for value, expected in (
+            ("10.100.0.0/22", "address_space is now platform_address_space, a /21 that holds the hub (its first /22), management and identity; platform_address_space: 10.100.0.0/21 keeps the hub at 10.100.0.0/22."),
+            ("10.100.4.0/22", "the hub at 10.100.4.0/22 is not the first /22 of a /21, so choose a free /21 for the platform."),
+        ):
+            self.hub("norwayeast", f"address_space: {value}\nlanding_zone_ranges: 10.100.0.0/16\n")
+            with self.assertRaises(ConfigError) as caught:
+                build(self.repo, GOVERNANCE)
+            message = str(caught.exception)
+            self.assertIn(expected, message)
+            self.assertNotIn("platform_address_space is required", message)  # one problem, saying what to write
+            self.assertNotIn("is not a hub setting", message)
 
     def test_basic_gets_the_management_subnet_and_bastion_its_own(self):
         self.hub("norwayeast", HUB + "firewall: Basic\nbastion: true\ndns_resolver: false\n")
@@ -64,22 +91,22 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(build(self.repo, GOVERNANCE), whole)
 
     def test_every_problem_is_reported_at_once(self):
-        self.hub("norwayeast", "address_space: 10.100.0.0/24\nfirewall: Gold\nbastion: 'yes'\nfirewal: Standard\n")
-        self.hub("swedencentral", "address_space: 10.100.0.0/22\nlanding_zone_ranges: [10.200.0.0/16]\n")
+        self.hub("norwayeast", "platform_address_space: 10.100.0.0/24\nfirewall: Gold\nbastion: 'yes'\nfirewal: Standard\n")
+        self.hub("swedencentral", "platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: [10.200.0.0/16]\n")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
         self.assertIn("'firewal' is not a hub setting", message)
-        self.assertIn("10.100.0.0/24 is too small", message)
+        self.assertIn("10.100.0.0/24 must be a /21", message)
 
     def test_overlapping_hubs_and_missing_ranges_are_refused(self):
         self.hub("norwayeast", HUB)
-        self.hub("swedencentral", "address_space: 10.100.0.0/22\n")
+        self.hub("swedencentral", "platform_address_space: 10.100.0.0/21\n")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
         self.assertIn("hubs/swedencentral: landing_zone_ranges is required", message)
-        self.assertIn("address spaces 10.100.0.0/22 and 10.100.0.0/22 overlap", message)
+        self.assertIn("platform address spaces 10.100.0.0/21 and 10.100.0.0/21 overlap", message)
 
     def test_the_primary_region_needs_a_hub(self):
         self.hub("swedencentral", HUB)
@@ -98,31 +125,31 @@ class PlatformTest(unittest.TestCase):
     def test_reserved_ranges_are_published_and_kept_clear_of_hubs(self):
         self.hub("norwayeast", HUB + "reserved: [10.100.200.0/22, 192.168.0.0/16]\n")
         self.assertEqual(build(self.repo, GOVERNANCE)["hubs"]["norwayeast"]["reserved"], ["10.100.200.0/22", "192.168.0.0/16"])
-        self.hub("norwayeast", HUB + "reserved: [10.100.0.0/24]\n")
+        self.hub("norwayeast", HUB + "reserved: [10.100.4.0/24]\n")  # management's /24
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
-        self.assertIn("hubs/norwayeast: address space 10.100.0.0/22 overlaps 10.100.0.0/24, which hubs/norwayeast reserves", str(caught.exception))
+        self.assertIn("hubs/norwayeast: platform address space 10.100.0.0/21 overlaps 10.100.4.0/24, which hubs/norwayeast reserves", str(caught.exception))
 
     def test_landing_zone_ranges_belong_to_one_region(self):
         self.hub("norwayeast", HUB)
-        self.hub("swedencentral", "address_space: 10.200.0.0/22\nlanding_zone_ranges: [10.100.0.0/24, 10.200.0.0/16]\n")
+        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: [10.100.0.0/24, 10.200.0.0/16]\n")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         self.assertIn("hubs/norwayeast and hubs/swedencentral: landing zone ranges 10.100.0.0/16 and 10.100.0.0/24 overlap", str(caught.exception))
 
     def test_every_hub_problem_is_reported_even_without_an_address_space(self):
-        self.hub("norwayeast", "address_space: []\nfirewall: Gold\n")
+        self.hub("norwayeast", "platform_address_space: []\nfirewall: Gold\n")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
-        self.assertIn("address_space is required", message)
+        self.assertIn("platform_address_space is required", message)
         self.assertIn("firewall 'Gold' must be one of", message)
         self.assertIn("landing_zone_ranges is required", message)
 
     def test_ranges_azure_reserves_are_refused(self):
         for text, expected in (
-            ("address_space: 127.0.0.0/22\nlanding_zone_ranges: 10.100.0.0/16\n", "127.0.0.0/22 overlaps 127.0.0.0/8, which Azure does not allow"),
-            ("address_space: 10.100.0.0/22\nlanding_zone_ranges: [10.100.0.0/16, 169.254.0.0/16]\n", "169.254.0.0/16 overlaps 169.254.0.0/16"),
+            ("platform_address_space: 127.0.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\n", "127.0.0.0/21 overlaps 127.0.0.0/8, which Azure does not allow"),
+            ("platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: [10.100.0.0/16, 169.254.0.0/16]\n", "169.254.0.0/16 overlaps 169.254.0.0/16"),
         ):
             self.hub("norwayeast", text)
             with self.assertRaises(ConfigError) as caught:

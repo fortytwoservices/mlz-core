@@ -1,12 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "MLZ hub",
-  "description": "The hub network in one region: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+  "description": "The platform's networks in one region, the hub first: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
   "type": "object",
   "properties": {
-    "address_space": {
+    "platform_address_space": {
       "type": "string",
-      "description": "The hub's own range, a /23 or larger (a /22 is usual). Its subnets are carved from it.",
+      "description": "The region's platform range, a /21: the hub (its first /22, its subnets carved from it), management's /24, identity's /24 and a spare /23. No landing zone gets an address in it.",
       "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
     },
     "landing_zone_ranges": {

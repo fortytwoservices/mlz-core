@@ -98,7 +98,7 @@ class StarterTest(unittest.TestCase):
     def test_the_platform_starters_hub_stops_the_check_until_it_is_filled_in(self):
         with self.assertRaises(ConfigError) as caught:
             platform.build(self.copy("platform"), PLATFORM_GOVERNANCE)
-        self.assertIn("hubs/norwayeast: address_space is required", str(caught.exception))
+        self.assertIn("hubs/norwayeast: platform_address_space is required", str(caught.exception))
         self.assertIn("hubs/norwayeast: landing_zone_ranges is required", str(caught.exception))
 
     def test_the_platform_starters_rules_file_holds_no_rules(self):

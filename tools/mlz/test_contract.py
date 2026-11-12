@@ -28,7 +28,7 @@ PLATFORM = {
     "regions": {
         "norwayeast": {
             "primary": True,
-            "hub_range": ["10.100.0.0/22"],
+            "platform_address_space": "10.100.0.0/21",
             "firewall": "10.100.0.4",
             "spoke_routes": [{"name": "default", "to": "0.0.0.0/0", "via": "10.100.0.4"}],
         }

@@ -1,14 +1,21 @@
 """The platform role: hubs/<region>.yaml (a file or a folder of chunks) into the platform root's config.
 
-A hub file says what the hub should have; everything else is worked out here. Its subnets are carved
-from address_space by one fixed layout, so every hub looks the same and nobody types a subnet:
+A hub file says what the region's platform should have; everything else is worked out here. Its
+platform_address_space, a /21, is laid out by fixed offsets, so every region looks the same, a network
+turned on later never moves another, and nobody types a subnet:
 
-  first /26             AzureFirewallSubnet
-  second /26            AzureFirewallManagementSubnet (Basic firewall only)
-  next /27              GatewaySubnet
-  second /24, /26       AzureBastionSubnet
-  then two /28s         DNS resolver inbound and outbound
-  the rest              free for later
+  first /22             the hub
+    first /26             AzureFirewallSubnet
+    second /26            AzureFirewallManagementSubnet (Basic firewall only)
+    next /27              GatewaySubnet
+    second /24, /26       AzureBastionSubnet
+    then two /28s         DNS resolver inbound and outbound
+    the rest              free for later
+  fifth /24             management's network
+  sixth /24             identity's network
+  last /23              spare, held for the platform
+
+No landing zone is given an address in it, and the other regions route all of it to this region's firewall.
 """
 
 from __future__ import annotations
@@ -20,14 +27,16 @@ from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError
 
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
-HUB_KEYS = {"address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion"}
+HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion"}
+# The size of a region's platform_address_space, and the hub's share of it: its first /22.
+PLATFORM_PREFIX, HUB_PREFIX = 21, 22
 REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
 # Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
 AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
 
 
 def subnets(space: ipaddress.IPv4Network) -> dict[str, str]:
-    """The fixed layout. Needs a /23 or larger."""
+    """The hub's fixed layout, in its /22."""
 
     def block(offset: int, prefix: int) -> str:
         return str(ipaddress.ip_network(f"{space.network_address + offset}/{prefix}"))
@@ -64,8 +73,10 @@ def cidrs(value, name: str, problems: list[str]) -> list[ipaddress.IPv4Network]:
 
 def hub(region: str, settings: dict, problems: list[str]) -> dict:
     where = f"hubs/{region}"
-    unknown = sorted(set(settings) - HUB_KEYS)
+    unknown = sorted(set(settings) - HUB_KEYS - {"address_space"})
     problems += [f"{where}: {key!r} is not a hub setting; use {', '.join(sorted(HUB_KEYS))}." for key in unknown]
+    if "address_space" in settings:
+        problems.append(moved(where, settings["address_space"]))
     if region not in REGIONS:
         problems.append(f"{where}: {region!r} is not a region mlz-core supports yet ({', '.join(REGIONS)}).")
 
@@ -81,26 +92,32 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
         if flag in settings and not isinstance(settings[flag], bool):
             problems.append(f"{where}: {flag} must be true or false, without quotes.")
 
-    value = settings.get("address_space")
+    value = settings.get("platform_address_space")
     if value in (None, "", []):
-        problems.append(f"{where}: address_space is required, for example 10.100.0.0/22.")
+        if "address_space" not in settings:  # else the problem above says what to write
+            problems.append(f"{where}: platform_address_space is required, a /21 such as 10.100.0.0/21.")
         return {}
     if isinstance(value, list):
-        problems.append(f"{where}: address_space is one range, not a list.")
+        problems.append(f"{where}: platform_address_space is one range, not a list.")
         return {}
-    space = cidrs(value, f"{where}: address_space", problems)
+    space = cidrs(value, f"{where}: platform_address_space", problems)
     if not space:
         return {}
     space = space[0]
-    if space.prefixlen > 23:
-        problems.append(f"{where}: address_space {space} is too small; a hub needs a /23 or larger, a /22 is usual.")
+    if space.prefixlen != PLATFORM_PREFIX:
+        problems.append(f"{where}: platform_address_space {space} must be a /21: the hub's /22, management's /24, identity's /24 and a spare /23.")
         return {}
 
-    layout = subnets(space)
+    hub_space = next(space.subnets(new_prefix=HUB_PREFIX))
+    layout = subnets(hub_space)
     return {
         "location": region,
-        "address_space": [str(space)],
+        "platform_address_space": str(space),
+        "address_space": [str(hub_space)],
         "landing_zone_ranges": [str(r) for r in ranges],
+        # What the other hubs send to this one's firewall: the platform's range, unless a landing zone
+        # range already holds it, and the landing zone ranges.
+        "routing_supernet": [str(r) for r in ([] if any(space.subnet_of(r) for r in ranges) else [space]) + ranges],
         "reserved": [str(r) for r in reserved],
         "firewall": {
             "sku_tier": tier,
@@ -116,6 +133,18 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     }
 
 
+def moved(where: str, value) -> str:
+    """What to write instead of address_space, the hub's own range before v0.3.0."""
+    text = f"{where}: address_space is now platform_address_space, a /21 that holds the hub (its first /22), management and identity"
+    try:
+        hub = ipaddress.ip_network(str(value), strict=True)
+    except ValueError:
+        return f"{text}."
+    if hub.version == 4 and hub.prefixlen == HUB_PREFIX and hub.network_address == hub.supernet(new_prefix=PLATFORM_PREFIX).network_address:
+        return f"{text}; platform_address_space: {hub.supernet(new_prefix=PLATFORM_PREFIX)} keeps the hub at {hub}."
+    return f"{text}; the hub at {value} is not the first /22 of a /21, so choose a free /21 for the platform."
+
+
 def build(repo: Path, governance: dict) -> dict:
     """The platform root's config from the platform repo and the governance contract."""
     problems: list[str] = []
@@ -128,14 +157,14 @@ def build(repo: Path, governance: dict) -> dict:
     primary = governance["primary_region"]
     if primary not in hubs:
         problems.append(f"hubs: no hub in the primary region {primary}; add hubs/{primary}.yaml.")
-    spaces = [(r, ipaddress.ip_network(h["address_space"][0])) for r, h in hubs.items() if h]
+    spaces = [(r, ipaddress.ip_network(h["platform_address_space"])) for r, h in hubs.items() if h]
     for i, (a, net_a) in enumerate(spaces):
         for b, net_b in spaces[i + 1:]:
             if net_a.overlaps(net_b):
-                problems.append(f"hubs/{a} and hubs/{b}: address spaces {net_a} and {net_b} overlap.")
+                problems.append(f"hubs/{a} and hubs/{b}: platform address spaces {net_a} and {net_b} overlap.")
     reserved = [(r, ipaddress.ip_network(n)) for r, h in hubs.items() if h for n in h["reserved"]]
     problems += [
-        f"hubs/{a}: address space {net} overlaps {n}, which hubs/{b} reserves."
+        f"hubs/{a}: platform address space {net} overlaps {n}, which hubs/{b} reserves."
         for a, net in spaces for b, n in reserved if net.overlaps(n)
     ]
     # Each landing zone range belongs to one region: its firewall routes it, and the allocator fills it.
