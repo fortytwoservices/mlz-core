@@ -289,10 +289,15 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict | None:
 
 
 def vending_contract(zones: dict, plan: dict) -> dict:
-    """What the platform needs from vending for firewall rules: each landing zone's region and range."""
-    return {
+    """What the platform needs from vending: each landing zone's region and range, for firewall rules, and
+    the ranges of landing zones removed but not yet released, which the platform must not build over."""
+    contract = {
         "landing_zones": {
             key: {"region": zone["settings"]["location"], "range": str(plan[key]["range"])}
             for key, zone in sorted(zones.items()) if key in plan
         }
     }
+    held = {key: str(plan[key]["range"]) for key in sorted(set(plan) - set(zones))}
+    if held:  # left out when empty, so a contract without removed landing zones reads as before
+        contract["held"] = held
+    return contract

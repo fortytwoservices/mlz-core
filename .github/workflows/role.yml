@@ -225,7 +225,8 @@ jobs:
           fi
 
   # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
-  # reviewer and apply; a stack with nothing to change asks for no approval.
+  # reviewer and apply; a stack with nothing to change asks for no approval. Its output is one apply job
+  # each, except for the platform: all its changed stacks in one job, applied in check's order (below).
   changed:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
     needs: [check, plan]
@@ -254,8 +255,9 @@ jobs:
               return not path.exists() or path.read_text().strip() != ""
           changed = [stack for stack in stacks if changes(stack)]
           unchanged = [stack for stack in stacks if stack not in changed]
+          jobs = [" ".join(changed)] if os.environ["ROLE"] == "platform" and changed else changed
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"stacks={json.dumps(changed)}\n")
+              out.write(f"stacks={json.dumps(jobs)}\n")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
               out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
           EOF
@@ -270,15 +272,16 @@ jobs:
       contents: read
       id-token: write # signs in as the apply identity, which only this environment may use
     strategy:
-      # The platform's stacks apply one after the other, hub first (jobs start in matrix order): management's
-      # and identity's networks peer with it, and its firewall policy holds the rules. If one fails, fail-fast
-      # cancels the queued ones. Landing zones apply independently, so one failing never stops another.
-      fail-fast: ${{ inputs.role == 'platform' }}
-      max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
+      # A job per stack, except the platform's: one job applies its changed stacks one after the other, hub
+      # first, and stops at the first that fails. Management's and identity's networks peer with the hub, and
+      # its firewall policy holds the rules. A matrix job each would not do: GitHub orders the creation of
+      # matrix jobs, not their runs. Landing zones apply independently, so one failing never stops another.
+      fail-fast: false
+      max-parallel: 8
       matrix:
         stack: ${{ fromJSON(needs.changed.outputs.stacks) }}
     concurrency:
-      group: mlz-apply-${{ inputs.role }}-${{ matrix.stack }}
+      group: mlz-apply-${{ inputs.role }}-${{ inputs.role == 'platform' && 'stacks' || matrix.stack }}
       cancel-in-progress: false
     env:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the apply identity, set on the environment
@@ -299,11 +302,12 @@ jobs:
           name: mlz-${{ inputs.role }}
           path: .mlz/
 
-      # The changes the reviewer saw; the apply makes exactly these or none.
+      # The changes the reviewer saw; the apply makes exactly these or none. The platform's job takes them all.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: mlz-${{ inputs.role }}-plan-${{ matrix.stack }}
+          pattern: mlz-${{ inputs.role }}-plan-${{ inputs.role == 'platform' && '*' || matrix.stack }}
           path: .mlz/reviewed/
+          merge-multiple: true
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -312,8 +316,11 @@ jobs:
 
       - name: Apply
         env:
-          STACK: ${{ matrix.stack }}
-        run: .mlz-core/tools/ci/apply.sh "$ROLE" "$STACK"
+          STACKS: ${{ matrix.stack }} # one stack, or the platform's changed stacks in order
+        run: |
+          for stack in $STACKS; do
+            .mlz-core/tools/ci/apply.sh "$ROLE" "$stack"
+          done
 
 
   # Offers the role's contract to the repos that read it, as a pull request each, after every run on main in

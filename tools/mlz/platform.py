@@ -226,13 +226,15 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
         "management": {primary: spoke(hubs[primary], "management")},
         "identity": {region: spoke(h, "identity") for region, h in hubs.items() if h["identity"]},
     }
-    # A landing zone given its range before v0.3.0 may lie where one of these is built now; never build over it.
-    zones = [(key, ipaddress.ip_network(zone["range"])) for key, zone in ((vending or {}).get("landing_zones") or {}).items()]
+    # A landing zone given its range before v0.3.0 may lie where one of these is built now, even one removed
+    # but not yet released, whose network may still exist; never build over either.
+    zones = [(f"{key}'s range {zone['range']}", ipaddress.ip_network(zone["range"])) for key, zone in ((vending or {}).get("landing_zones") or {}).items()]
+    zones += [(f"{key}'s range {held}, removed but not yet released", ipaddress.ip_network(held)) for key, held in ((vending or {}).get("held") or {}).items()]
     problems += [
-        f"hubs/{region}: {name}'s network {space} would overlap {key}'s range {taken} (_generated/vending.yaml), given before "
-        f"the platform's range held it; move that landing zone, or give the region a platform_address_space clear of it."
+        f"hubs/{region}: {name}'s network {space} would overlap {what} (_generated/vending.yaml), given before the "
+        f"platform's range held it; move that landing zone (or release it), or give the region a platform_address_space clear of it."
         for name, regions in networks.items() for region, net in regions.items()
-        for space in [ipaddress.ip_network(net["address_space"])] for key, taken in zones if space.overlaps(taken)
+        for space in [ipaddress.ip_network(net["address_space"])] for what, taken in zones if space.overlaps(taken)
     ]
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))

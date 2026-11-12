@@ -109,6 +109,10 @@ class PlatformTest(unittest.TestCase):
         self.assertIn("hubs/norwayeast: management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24 (_generated/vending.yaml)", message)
         self.assertNotIn("website-prod", message)  # identity's /24, not built here: vending reports it
         self.assertEqual(build(self.repo, GOVERNANCE, {"landing_zones": {"website-prod": vending["landing_zones"]["website-prod"]}})["networks"]["identity"], {})
+        # A landing zone removed but not yet released still holds its range, and its network may still exist.
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE, {"landing_zones": {}, "held": {"payments-prod": "10.100.4.0/24"}})
+        self.assertIn("management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24, removed but not yet released", str(caught.exception))
 
     def test_the_command_reads_the_vending_contract_in_the_repo(self):
         self.hub("norwayeast", HUB)

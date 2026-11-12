@@ -17,7 +17,8 @@ from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, main, own_folder
 from mlz import files
 from mlz.contract import render
-from mlz.vending import IP_PLAN, allocate, build, place, release, render_plan
+from mlz.firewall import vending_contract
+from mlz.vending import IP_PLAN, allocate, build, ip_plan, landing_zones, place, release, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -273,8 +274,13 @@ class VendingTest(unittest.TestCase):
         self.assertIn("# Removed from landing-zones/", (self.repo / IP_PLAN).read_text())
         self.assertEqual(sorted(build(self.repo, GOVERNANCE, PLATFORM)), ["payments-prod", "website-prod"])
         self.assertIn("payments-prod is still in landing-zones/payments/prod", self.problems(release, "payments-prod"))
+        # The contract names it apart from the landing zones' firewall sources, so the platform builds nothing over it.
+        contract = vending_contract(landing_zones(self.repo), ip_plan(self.repo))
+        self.assertEqual((sorted(contract["landing_zones"]), contract["held"]), (["payments-prod", "website-prod"], {"payments-dev": "10.100.8.0/24"}))
         plan, retired, freed = release(self.repo, "payments-dev")
         self.assertEqual((sorted(plan), retired, freed), (["payments-prod", "website-prod"], [], "payments-dev's range 10.100.8.0/24"))
+        self.write(IP_PLAN, render_plan(plan, retired))
+        self.assertNotIn("held", vending_contract(landing_zones(self.repo), ip_plan(self.repo)))  # none left: as before
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()

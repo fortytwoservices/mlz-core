@@ -45,7 +45,8 @@ Before v0.3.0, a hub file gave the hub's own range as `address_space`. The check
 what to write instead: for a hub at 10.100.0.0/22, `platform_address_space: 10.100.0.0/21` keeps the hub
 where it is. A landing zone already given an address in the new /21 is reported as a conflict on vending's
 next run, never moved, and the platform's check, which reads `_generated/vending.yaml`, refuses to build
-management's or identity's network over it. Upgrade vending first: it reads the platform's contract from either release, while
+management's or identity's network over it, or over one removed but not yet released (the contract's
+`held`), whose network may still exist. Upgrade vending first: it reads the platform's contract from either release, while
 vending on v0.2 fails its check on the new one.
 
 ## What is worked out
