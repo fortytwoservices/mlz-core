@@ -97,6 +97,26 @@ and writes `<key>.json` per landing zone; the Terraform root reads one of them. 
 its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
 folder holding anything else is refused.
 
+## Starting a landing zone
+
+`python3 -m mlz new landing-zone --repo . <workload> <env>` writes `landing-zones/<workload>/<env>.yaml`,
+and `_workload.yaml` for a new workload, with only what no layer above sets:
+
+```sh
+python3 -m mlz new landing-zone --repo . billing prod --subscription <id> --owner billing@demo.example
+```
+
+- **Given or not:** a required setting given on the command line (`--subscription`, `--owner`,
+  `--cost-center`, `--archetype`, `--location`) is written as given. One not given is written commented
+  out, and the check names it until someone fills it in.
+- **Not repeated:** a setting given at the value a layer above already has is left out.
+- **Where it goes:** owner, cost center and archetype go in the new workload's `_workload.yaml`; the
+  subscription goes in the landing zone's own file.
+
+It writes nothing over a file that is there, and refuses a key another landing zone already has. Then it
+runs the landing zone's check. The files go into a pull request: hand the subscription over to vending
+first (`docs/bootstrap.md`), and the pull request's run gives the landing zone its addresses.
+
 ## Where a value comes from
 
 With four layers, a value can come from any of them, from mlz-core, or from another repo's contract.

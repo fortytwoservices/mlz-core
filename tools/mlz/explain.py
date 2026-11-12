@@ -125,6 +125,9 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
     found: list[str] = []
     if governance is not None and platform is not None:
         vending.check(key, lz, governance, platform, found)
+    else:
+        # The rest of check() needs the contracts; a required setting set nowhere needs nothing but the layers.
+        found += [f"{lz['where']}: {k} is required (set it here or in a layer above)." for k in REQUIRED if lz["settings"].get(k) in (None, "")]
     wanted = vending.wanted_network(lz, found)
     if key in plan and wanted:
         if set(plan[key]["subnets"]) != set(wanted[1]):
@@ -141,7 +144,13 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
     return list(dict.fromkeys(found))
 
 
-def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str, str]]], found: list[str]) -> str:
+def clean(complete: bool) -> str:
+    """What the check says when it finds nothing: all of it, or what it could check before the contracts came."""
+    return ("no problems in this landing zone" + ("" if complete else "; the checks that need the contracts wait for them")
+            + " (python3 -m mlz vending checks them all together)")
+
+
+def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str, str]]], found: list[str], complete: bool = True) -> str:
     rows = [row for part in parts.values() for row in part]
     first = max(len(setting) for setting, _, _ in rows) + 2
     lines = [f"{key} ({file_of(repo, lz['where'])})"]
@@ -155,5 +164,5 @@ def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str,
             else:
                 lines.append(f"  {setting:<{first}}{value:<{WIDTH}}  <- {source}")
     lines += ["", "Check"]
-    lines += [f"  {problem}" for problem in found] or ["  no problems in this landing zone (python3 -m mlz vending checks them all together)"]
+    lines += [f"  {problem}" for problem in found] or [f"  {clean(complete)}"]
     return "\n".join(line.rstrip() for line in lines) + "\n"
