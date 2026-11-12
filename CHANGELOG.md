@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/fortytwoservices/mlz-core/compare/v0.3.0...v0.3.1) (2026-11-12)
+
+
+### Features
+
+* **platform:** firewall rules for management, identity and the private runners ([#41](https://github.com/fortytwoservices/mlz-core/issues/41)) ([651eb09](https://github.com/fortytwoservices/mlz-core/commit/651eb097601d83ad4556e52b22dc5da6f778135e))
+
 ## [0.3.0](https://github.com/fortytwoservices/mlz-core/compare/v0.2.2...v0.3.0) (2026-11-12)
 
 

@@ -4,7 +4,7 @@
 // user settings.
 {
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.0/schemas/customer.schema.json": "customer.yaml", // x-release-please-version
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.0/schemas/bootstrap.schema.json": "bootstrap.yaml" // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.1/schemas/customer.schema.json": "customer.yaml", // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.1/schemas/bootstrap.schema.json": "bootstrap.yaml" // x-release-please-version
   }
 }
