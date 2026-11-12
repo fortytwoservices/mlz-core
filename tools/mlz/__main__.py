@@ -136,7 +136,7 @@ def main() -> int:
 
     # Every file the command reads, parsed in one terraform run before anything is read.
     inputs = {
-        "platform": ["hubs"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
+        "platform": ["hubs", "_generated"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
         "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
         "explain": ["landing-zones", "_generated"], "new": ["landing-zones", "_generated"],
     }
@@ -187,7 +187,8 @@ def main() -> int:
             args.out.write_text(contract.render("vending", data))
             print(f"mlz vending-contract: wrote {args.out}")
         elif args.role == "platform":
-            config = platform.build(args.repo, published("governance"))
+            path = args.repo / "_generated" / "vending.yaml"
+            config = platform.build(args.repo, published("governance"), read_yaml(path) if path.exists() else None)
             args.out.parent.mkdir(parents=True, exist_ok=True)
             args.out.write_text(json.dumps(config, indent=2) + "\n")
             print(f"mlz platform: wrote {args.out}")

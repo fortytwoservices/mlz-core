@@ -18,11 +18,13 @@ case $role in
     # Until vending publishes its first contract, the landing zones' rules have no sources, so the rules
     # stack stays out of the run: on a first deployment the hub goes first, and a contract gone missing from
     # a platform already deployed never plans their rules away. The files are still checked above.
+    # Management's and identity's networks run every time, built or not, so turning one off takes it out
+    # of Azure. They apply after the hub, which they peer with, and before the rules.
     if [[ -f _generated/vending.yaml ]]; then
-      echo '["platform","firewall"]'   # in this order: the rules need the hub's policy
+      echo '["platform","management","identity","firewall"]'   # in this order: the rules need the hub's policy
     else
       echo "::notice::No vending contract yet (_generated/vending.yaml): the firewall rules stack waits for it; nothing in it is planned or changed." >&2
-      echo '["platform"]'
+      echo '["platform","management","identity"]'
     fi
     ;;
   vending)

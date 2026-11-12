@@ -40,5 +40,24 @@ output "connectivity" {
   description = "Names in the connectivity subscription that other roles refer to before it is applied."
   value = {
     dns_resource_group = format("rg-${local.suffix}", "dns")
+    # The hub's, as the platform root has az-tf-mlz-connectivity-hub name them.
+    hub_resource_group  = format("rg-${local.suffix}", "hub")
+    hub_virtual_network = format("vnet-${local.suffix}", "hub")
+  }
+}
+
+output "platform_networks" {
+  description = "Names of management's and identity's networks in the region, by network. Their resource groups take the primary region's code: the bootstrap makes one for each network, which holds it in every region."
+  value = {
+    for network in ["management", "identity"] : network => {
+      resource_group   = format("rg-${local.suffix}", "${network}-network")
+      virtual_network  = format("vnet-${local.suffix}", network)
+      route_table      = format("rt-${local.suffix}", network)
+      peering_to_hub   = "peer-${network}-to-hub"
+      peering_from_hub = "peer-hub-to-${network}" # never a landing zone's: a landing zone key has a hyphen
+      # Per subnet: format(subnet, "<subnet name>"), format(network_security_group, "<subnet name>").
+      subnet                 = "snet-%s"
+      network_security_group = "nsg-${var.root_id}-${network}-%s-${local.region}"
+    }
   }
 }

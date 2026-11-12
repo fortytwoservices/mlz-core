@@ -8,9 +8,14 @@ WORK=$PWD/.mlz                       # everything a run works out; never committ
 mkdir -p "$WORK/plans"
 export PYTHONPATH=$CORE/tools
 
-# The Terraform root of a role's stack: the platform's firewall rules have a root of their own.
+# The Terraform root of a role's stack: the platform's firewall rules have a root of their own, and
+# management's and identity's networks share one.
 root_of() {
-  if [[ $1 == platform && ${2:-} == firewall ]]; then echo "$CORE/platform/rules/terraform"; else echo "$CORE/$1/terraform"; fi
+  case $1/${2:-} in
+    platform/firewall) echo "$CORE/platform/rules/terraform" ;;
+    platform/management | platform/identity) echo "$CORE/platform/networks/terraform" ;;
+    *) echo "$CORE/$1/terraform" ;;
+  esac
 }
 
 # The -var flags a role's root takes, for one stack: a landing zone key for vending, the role otherwise.
@@ -23,7 +28,11 @@ vars_for() {
       [[ -f _generated/bootstrap.yaml ]] && echo "-var bootstrap_contract_file=$PWD/_generated/bootstrap.yaml"
       ;;
     platform)
-      if [[ $stack == firewall ]]; then echo "-var config_file=$WORK/firewall.json"; else echo "-var config_file=$WORK/platform.json"; fi
+      case $stack in
+        firewall) echo "-var config_file=$WORK/firewall.json" ;;
+        management | identity) echo "-var config_file=$WORK/platform.json -var network=$stack" ;;
+        *) echo "-var config_file=$WORK/platform.json" ;;
+      esac
       ;;
     vending) echo "-var config_file=$WORK/vending/$stack.json" ;;
     *) echo "unknown role $role" >&2; return 1 ;;

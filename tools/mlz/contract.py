@@ -14,7 +14,10 @@ CONTRACTS = {
             "Each landing zone's region and address range, for the platform's firewall rules.\n"
             "Written by CI from mlz-vending after every apply: do not edit here."
         ),
-        "comments": {"landing_zones": "A firewall rule names a landing zone by its key; this is where its traffic comes from."},
+        "comments": {
+            "landing_zones": "A firewall rule names a landing zone by its key; this is where its traffic comes from.",
+            "held": "Landing zones removed but not yet released: their networks may still exist, so nothing is built over them.",
+        },
     },
     "bootstrap": {
         "header": (

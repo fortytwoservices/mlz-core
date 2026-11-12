@@ -124,6 +124,7 @@ def hub() -> dict:
         "firewall": text("The hub's Azure Firewall tier.", enum=list(platform.FIREWALL_TIERS), default="Standard"),
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
+        "identity": {"description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.", "type": "boolean", "default": False},
     }
     return {
         "$schema": DRAFT,

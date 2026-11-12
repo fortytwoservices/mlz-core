@@ -63,7 +63,7 @@ engineer's own GitHub login, which needs write access to the repos and the `work
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan up to date: when a new landing zone or subnet needs addresses, it commits the new plan to the pull request and stops, and the run of that commit plans with them. On `main` a plan that is not up to date fails the check (`mlz allocate --check`). |
 | `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
-| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. |
+| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. A job per landing zone; the platform's changed stacks in one job, one after the other (hub, management, identity, rules), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 | `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
 
@@ -132,7 +132,8 @@ themselves; what a person does is approve each apply, and hand over landing zone
 
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
-2. **Platform** (needs governance's): the hubs. It offers its contract to governance and vending.
+2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
+   contract to governance and vending.
 3. **Governance again**, with platform's contract: the Private Link DNS policy now points at the real
    zones.
 4. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending

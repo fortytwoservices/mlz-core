@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import io
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
+from mlz.__main__ import main
+from mlz.contract import render
 from mlz.merge import ConfigError
 from mlz.platform import build
 
@@ -73,6 +79,68 @@ class PlatformTest(unittest.TestCase):
             self.assertIn(expected, message)
             self.assertNotIn("platform_address_space is required", message)  # one problem, saying what to write
             self.assertNotIn("is not a hub setting", message)
+
+    def test_management_is_built_in_the_primary_region_and_identity_where_asked(self):
+        self.hub("norwayeast", HUB)
+        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        config = build(self.repo, {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}})
+        self.assertEqual(config["networks"]["management"], {"norwayeast": {
+            "address_space": "10.100.4.0/24",
+            "subnets": {"github-runners": "10.100.4.0/25", "runners": "10.100.4.128/26", "private-endpoints": "10.100.4.192/27"},
+            "dns_servers": ["10.100.0.4"],  # the firewall's DNS proxy
+            "firewall": "10.100.0.4",
+        }})
+        self.assertEqual(config["networks"]["identity"], {"swedencentral": {
+            "address_space": "10.200.5.0/24",
+            "subnets": {"domain-controllers": "10.200.5.0/26"},
+            "dns_servers": ["10.200.0.4"],
+            "firewall": "10.200.0.4",
+        }})
+        self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
+
+    def test_a_network_is_never_built_over_a_landing_zone_given_before_v0_3(self):
+        self.hub("norwayeast", HUB)
+        # Under v0.2 the allocator stepped over the hub's /22 only, so the first landing zone got management's /24.
+        vending = {"landing_zones": {"payments-prod": {"region": "norwayeast", "range": "10.100.4.0/24"},
+                                     "website-prod": {"region": "norwayeast", "range": "10.100.5.0/24"}}}
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE, vending)
+        message = str(caught.exception)
+        self.assertIn("hubs/norwayeast: management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24 (_generated/vending.yaml)", message)
+        self.assertNotIn("website-prod", message)  # identity's /24, not built here: vending reports it
+        self.assertEqual(build(self.repo, GOVERNANCE, {"landing_zones": {"website-prod": vending["landing_zones"]["website-prod"]}})["networks"]["identity"], {})
+        # A landing zone removed but not yet released still holds its range, and its network may still exist.
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE, {"landing_zones": {}, "held": {"payments-prod": "10.100.4.0/24"}})
+        self.assertIn("management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24, removed but not yet released", str(caught.exception))
+
+    def test_the_command_reads_the_vending_contract_in_the_repo(self):
+        self.hub("norwayeast", HUB)
+        (self.repo / "_generated").mkdir()
+        (self.repo / "_generated/governance.yaml").write_text(render("governance", GOVERNANCE))
+        (self.repo / "_generated/vending.yaml").write_text(render("vending", {"landing_zones": {"payments-prod": {"region": "norwayeast", "range": "10.100.4.0/24"}}}))
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "platform", "--repo", str(self.repo), "--out", str(self.repo / "platform.json")]), redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(main(), 1)
+        self.assertIn("management's network 10.100.4.0/24 would overlap payments-prod's range", err.getvalue())
+
+    def test_behind_a_basic_firewall_the_networks_resolve_through_the_resolver(self):
+        self.hub("norwayeast", HUB + "firewall: Basic\n")
+        self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["management"]["norwayeast"]["dns_servers"], ["10.100.1.68"])
+        self.hub("norwayeast", HUB + "firewall: Basic\ndns_resolver: false\n")
+        self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["management"]["norwayeast"]["dns_servers"], [])  # Azure's
+
+    def test_identity_needs_an_identity_subscription_and_a_yes_or_no(self):
+        self.hub("norwayeast", HUB + "identity: true\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        self.assertIn("hubs/norwayeast: identity: true builds identity's network in the identity subscription, and customer.yaml names none", str(caught.exception))
+        self.hub("norwayeast", HUB + "identity: 'yes'\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        self.assertIn("identity must be true or false", str(caught.exception))
+        self.hub("norwayeast", HUB)
+        self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["identity"], {})
 
     def test_basic_gets_the_management_subnet_and_bastion_its_own(self):
         self.hub("norwayeast", HUB + "firewall: Basic\nbastion: true\ndns_resolver: false\n")

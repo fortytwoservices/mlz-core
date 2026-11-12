@@ -41,3 +41,19 @@ output "contract" {
     }
   }
 }
+
+# Management's and identity's stacks work out the firewall's address and the DNS servers before the hub
+# exists (tools/mlz/platform.py), as the hub module does; this warns if the hub's own ever differ.
+check "platform_networks_match_their_hubs" {
+  assert {
+    condition = alltrue(flatten([
+      for network, regions in local.config.networks : [
+        for region, spoke in regions : (
+          spoke.firewall == local.connectivity.regions[region].firewall_private_ip &&
+          jsonencode(spoke.dns_servers) == jsonencode(local.connectivity.regions[region].dns_servers)
+        )
+      ]
+    ]))
+    error_message = "The firewall address or DNS servers worked out for management's or identity's network differ from the hub's: fix tools/mlz/platform.py to match the hub module."
+  }
+}
