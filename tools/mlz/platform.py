@@ -173,6 +173,12 @@ def build(repo: Path, governance: dict) -> dict:
         for b, net_b in pools[i + 1:]:
             if net_a.overlaps(net_b):
                 problems.append(f"hubs/{a}{'' if a == b else f' and hubs/{b}'}: landing zone ranges {net_a} and {net_b} overlap.")
+    # So does each platform range: it may lie in its own region's landing zone ranges, never in another's,
+    # whose firewall the other hubs route that range to.
+    problems += [
+        f"hubs/{a}: platform address space {net} overlaps {pool}, a landing zone range of hubs/{b}."
+        for a, net in spaces for b, pool in pools if a != b and net.overlaps(pool)
+    ]
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
 

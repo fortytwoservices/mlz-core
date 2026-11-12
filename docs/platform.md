@@ -36,7 +36,8 @@ the same commit again, while the run of that merge checks the pull request with 
 
 `reserved` lists ranges the IP allocator must never hand out: existing virtual networks, on-premises
 sites, partner links, anything inside `landing_zone_ranges` that mlz-core does not manage. A region's
-platform address space may not overlap any hub's reserved ranges. Reserving a range a landing zone already holds
+platform address space may not overlap any hub's reserved ranges, nor another region's landing zone ranges
+(its own may hold it). Reserving a range a landing zone already holds
 is reported as a conflict on the next run, never solved by moving the landing zone.
 
 Before v0.3.0, a hub file gave the hub's own range as `address_space`. The check now refuses it and says

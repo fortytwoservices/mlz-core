@@ -137,6 +137,15 @@ class PlatformTest(unittest.TestCase):
             build(self.repo, GOVERNANCE)
         self.assertIn("hubs/norwayeast and hubs/swedencentral: landing zone ranges 10.100.0.0/16 and 10.100.0.0/24 overlap", str(caught.exception))
 
+    def test_a_platform_range_lies_only_in_its_own_regions_landing_zone_ranges(self):
+        self.hub("norwayeast", HUB)  # its /21 inside its own 10.100.0.0/16: fine
+        self.hub("swedencentral", "platform_address_space: 10.100.8.0/21\nlanding_zone_ranges: [10.200.0.0/16]\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertIn("hubs/swedencentral: platform address space 10.100.8.0/21 overlaps 10.100.0.0/16, a landing zone range of hubs/norwayeast", message)
+        self.assertNotIn("hubs/norwayeast: platform address space", message)
+
     def test_every_hub_problem_is_reported_even_without_an_address_space(self):
         self.hub("norwayeast", "platform_address_space: []\nfirewall: Gold\n")
         with self.assertRaises(ConfigError) as caught:
