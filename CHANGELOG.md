@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0](https://github.com/fortytwoservices/mlz-core/compare/v0.2.2...v0.3.0) (2026-11-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **platform:** hubs/<region>.yaml takes platform_address_space, a /21, in place of address_space. The check refuses address_space and says what to write: a hub at 10.100.0.0/22 becomes platform_address_space: 10.100.0.0/21, which keeps the hub where it is. Upgrade vending before the platform.
+
+### Features
+
+* **platform:** build management's and identity's networks ([#39](https://github.com/fortytwoservices/mlz-core/issues/39)) ([56ca0d3](https://github.com/fortytwoservices/mlz-core/commit/56ca0d351b10a03774004ae32838abc458266f47))
+* **platform:** platform_address_space holds the hub, management and identity ([#37](https://github.com/fortytwoservices/mlz-core/issues/37)) ([8d365ec](https://github.com/fortytwoservices/mlz-core/commit/8d365ec2a4e56dc091a4b2bc32ce5789592efba1))
+
 ## [0.2.2](https://github.com/fortytwoservices/mlz-core/compare/v0.2.1...v0.2.2) (2026-11-12)
 
 
