@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/fortytwoservices/mlz-core/compare/v0.2.1...v0.2.2) (2026-11-12)
+
+
+### Features
+
+* **new:** mlz new landing-zone starts a landing zone's files ([#35](https://github.com/fortytwoservices/mlz-core/issues/35)) ([f4704df](https://github.com/fortytwoservices/mlz-core/commit/f4704df5560c5196aa3ca2421ef3c879ccf1067f))
+
 ## [0.2.1](https://github.com/fortytwoservices/mlz-core/compare/v0.2.0...v0.2.1) (2026-11-11)
 
 
