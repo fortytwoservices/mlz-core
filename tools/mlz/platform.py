@@ -178,8 +178,9 @@ def moved(where: str, value) -> str:
     return f"{text}; the hub at {value} is not the first /22 of a /21, so choose a free /21 for the platform."
 
 
-def build(repo: Path, governance: dict) -> dict:
-    """The platform root's config from the platform repo and the governance contract."""
+def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
+    """The platform root's config from the platform repo, the governance contract and, once there, the
+    vending contract."""
     problems: list[str] = []
     regions = setting_names(repo / "hubs")
     if not regions:
@@ -220,6 +221,22 @@ def build(repo: Path, governance: dict) -> dict:
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
 
+    # Built by the management and identity stacks: management in the primary region, identity where asked.
+    networks = {
+        "management": {primary: spoke(hubs[primary], "management")},
+        "identity": {region: spoke(h, "identity") for region, h in hubs.items() if h["identity"]},
+    }
+    # A landing zone given its range before v0.3.0 may lie where one of these is built now; never build over it.
+    zones = [(key, ipaddress.ip_network(zone["range"])) for key, zone in ((vending or {}).get("landing_zones") or {}).items()]
+    problems += [
+        f"hubs/{region}: {name}'s network {space} would overlap {key}'s range {taken} (_generated/vending.yaml), given before "
+        f"the platform's range held it; move that landing zone, or give the region a platform_address_space clear of it."
+        for name, regions in networks.items() for region, net in regions.items()
+        for space in [ipaddress.ip_network(net["address_space"])] for key, taken in zones if space.overlaps(taken)
+    ]
+    if problems:
+        raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
+
     for region, settings in hubs.items():
         settings["is_primary"] = region == primary
     return {
@@ -230,9 +247,5 @@ def build(repo: Path, governance: dict) -> dict:
         "identity_subscription_id": subscriptions.get("identity"),
         "workspace_resource_id": governance["monitoring"]["workspace"],
         "hubs": hubs,
-        # Built by the management and identity stacks: management in the primary region, identity where asked.
-        "networks": {
-            "management": {primary: spoke(hubs[primary], "management")},
-            "identity": {region: spoke(h, "identity") for region, h in hubs.items() if h["identity"]},
-        },
+        "networks": networks,
     }

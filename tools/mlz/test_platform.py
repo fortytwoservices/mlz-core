@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import io
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
+from mlz.__main__ import main
+from mlz.contract import render
 from mlz.merge import ConfigError
 from mlz.platform import build
 
@@ -91,6 +97,28 @@ class PlatformTest(unittest.TestCase):
             "firewall": "10.200.0.4",
         }})
         self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
+
+    def test_a_network_is_never_built_over_a_landing_zone_given_before_v0_3(self):
+        self.hub("norwayeast", HUB)
+        # Under v0.2 the allocator stepped over the hub's /22 only, so the first landing zone got management's /24.
+        vending = {"landing_zones": {"payments-prod": {"region": "norwayeast", "range": "10.100.4.0/24"},
+                                     "website-prod": {"region": "norwayeast", "range": "10.100.5.0/24"}}}
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE, vending)
+        message = str(caught.exception)
+        self.assertIn("hubs/norwayeast: management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24 (_generated/vending.yaml)", message)
+        self.assertNotIn("website-prod", message)  # identity's /24, not built here: vending reports it
+        self.assertEqual(build(self.repo, GOVERNANCE, {"landing_zones": {"website-prod": vending["landing_zones"]["website-prod"]}})["networks"]["identity"], {})
+
+    def test_the_command_reads_the_vending_contract_in_the_repo(self):
+        self.hub("norwayeast", HUB)
+        (self.repo / "_generated").mkdir()
+        (self.repo / "_generated/governance.yaml").write_text(render("governance", GOVERNANCE))
+        (self.repo / "_generated/vending.yaml").write_text(render("vending", {"landing_zones": {"payments-prod": {"region": "norwayeast", "range": "10.100.4.0/24"}}}))
+        err = io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "platform", "--repo", str(self.repo), "--out", str(self.repo / "platform.json")]), redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(main(), 1)
+        self.assertIn("management's network 10.100.4.0/24 would overlap payments-prod's range", err.getvalue())
 
     def test_behind_a_basic_firewall_the_networks_resolve_through_the_resolver(self):
         self.hub("norwayeast", HUB + "firewall: Basic\n")
