@@ -1,7 +1,7 @@
 # Platform
 
-The `mlz-platform` role: the hub network in each region, its firewall, DNS resolver and Bastion, and the
-Private Link DNS zones, with the address space of management's and identity's networks held beside each hub. Built on `az-tf-mlz-connectivity-hub` (hub-and-spoke; Virtual WAN is the
+The `mlz-platform` role: the hub network in each region, its firewall, DNS resolver and Bastion, the
+Private Link DNS zones, and management's and identity's networks beside the hubs. Built on `az-tf-mlz-connectivity-hub` (hub-and-spoke; Virtual WAN is the
 alternative, through `az-tf-mlz-connectivity-vwan`).
 
 ## What the customer writes
@@ -19,12 +19,13 @@ reserved: [10.100.200.0/22]              # networks mlz-core does not manage: ne
 firewall: Standard                       # Standard, Premium or Basic
 dns_resolver: true                       # resolves Private Link names for landing zones and on-premises
 bastion: false                           # Bastion for VMs in any landing zone
+identity: false                          # identity's network here, for domain controllers
 ```
 
 A hub can also be a folder of chunks, `hubs/<region>/*.yaml`, read as one file; a value set in two
 chunks is an error that names both files.
 
-Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, no `reserved` ranges. The primary
+Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, `identity: false`, no `reserved` ranges. The primary
 region (from governance) must have a hub.
 
 The platform starter comes with `hubs/norwayeast.yaml` and `firewall/platform.yaml`, every setting in them
@@ -52,7 +53,7 @@ vending on v0.2 fails its check on the new one.
   first, management's /24 at the fifth /24, identity's /24 at the sixth, and a spare /23 last. Every region
   looks the same, and a network turned on later never moves another. The IP allocator gives no landing
   zone an address in it, and the other regions route all of it to this region's firewall. Management's
-  and identity's networks are held from the start; mlz-core builds them in a later release.
+  and identity's networks keep their /24s whether they are built or not.
 - **The hub's subnets**, by one fixed layout inside its /22: firewall /26 first, firewall management /26
   second (Basic only), gateway /27, Bastion /26 at the start of the second /24, then the DNS resolver's
   inbound and outbound /28s. Every hub looks the same.
@@ -60,7 +61,30 @@ vending on v0.2 fails its check on the new one.
   group `rg-<root>-dns-<region code>`, the one governance's DNS policy points at.
 
 `python3 -m mlz platform` reads `hubs/` and `_generated/governance.yaml`, checks both, and writes the
-root's config (JSON, for one run, never committed); the Terraform root only reads that file.
+root's config (JSON, for one run, never committed); the Terraform roots only read that file.
+
+## Management and identity networks
+
+The platform builds two more networks, each a spoke of its region's hub as a landing zone is: two
+peerings, made from both sides by the platform, which owns both ends; a route table sending everything
+(`0.0.0.0/0`) to the hub's firewall; the hub's firewall as DNS server (its resolver behind a Basic
+firewall); and a network security group on every subnet.
+
+| Network | Where | Subnets |
+|---|---|---|
+| Management, `vnet-<root>-management-<region code>` | the management subscription, in the primary region | `snet-github-runners` /25, for GitHub-hosted runners (a subnet delegated to GitHub holds nothing else); `snet-runners` /26, for self-hosted runners; `snet-private-endpoints` /27, the state account's first; a /27 free |
+| Identity, `vnet-<root>-identity-<region code>` | the identity subscription, in each region whose hub file says `identity: true` | `snet-domain-controllers` /26: the domain controllers will have its .4 and .5 |
+
+Each is a stack of its own in the platform pipeline, `management` and `identity`, with its own state, so
+a change to one never plans the hub or the other. They apply after the hub, which they peer with. Both run
+every time, so turning `identity` off takes identity's network out of Azure. Identity needs an identity
+subscription in `customer.yaml`.
+
+They are built in a resource group the bootstrap makes in each subscription,
+`rg-<root>-<management|identity>-network-<primary region code>`, which holds the network in every region.
+The platform's pipeline identities have rights on that group only, not on the rest of the subscription:
+governance's monitoring and the state account are in management too. Runners, the state account's private
+endpoint and the domain controllers come in later releases.
 
 ## Firewall rules
 

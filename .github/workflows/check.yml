@@ -60,7 +60,7 @@ jobs:
       # in the sandbox is run by hand until mlz-core has a CI identity.
       - name: Validate the roots
         run: |
-          for root in bootstrap governance platform vending; do
+          for root in bootstrap governance platform platform/rules platform/networks vending; do
             echo "::group::$root"
             terraform -chdir=$root/terraform init -backend=false -input=false -lockfile=readonly
             terraform -chdir=$root/terraform validate

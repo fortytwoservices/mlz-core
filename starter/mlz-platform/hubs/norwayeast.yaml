@@ -10,3 +10,4 @@
 # firewall: Standard                       # Standard (the default), Premium or Basic
 # dns_resolver: true                       # resolves Private Link names for landing zones and on-premises (default)
 # bastion: false                           # Bastion for VMs in any landing zone (off by default)
+# identity: false                          # identity's network here, for domain controllers (off by default)

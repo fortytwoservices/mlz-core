@@ -11,11 +11,18 @@ turned on later never moves another, and nobody types a subnet:
     second /24, /26       AzureBastionSubnet
     then two /28s         DNS resolver inbound and outbound
     the rest              free for later
-  fifth /24             management's network
-  sixth /24             identity's network
+  fifth /24             management's network, in the primary region
+    first /25             GitHub-hosted runners (a subnet delegated to GitHub holds nothing else)
+    next /26              self-hosted runners
+    next /27              private endpoints
+    last /27              free for later
+  sixth /24             identity's network, where the hub file says identity: true
+    first /26             domain controllers
   last /23              spare, held for the platform
 
 No landing zone is given an address in it, and the other regions route all of it to this region's firewall.
+Management's and identity's networks are spokes of the hub, as landing zones are: everything leaves through
+the hub's firewall, and they resolve names through the hub.
 """
 
 from __future__ import annotations
@@ -27,9 +34,14 @@ from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError
 
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
-HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion"}
+HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion", "identity"}
 # The size of a region's platform_address_space, and the hub's share of it: its first /22.
 PLATFORM_PREFIX, HUB_PREFIX = 21, 22
+# Management's and identity's /24 in it, by offset, and each one's subnets, by offset and size.
+NETWORKS = {
+    "management": (1024, {"github-runners": (0, 25), "runners": (128, 26), "private-endpoints": (192, 27)}),
+    "identity": (1280, {"domain-controllers": (0, 26)}),
+}
 REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
 # Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
 AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
@@ -88,7 +100,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     tier = settings.get("firewall", "Standard")
     if tier not in FIREWALL_TIERS:
         problems.append(f"{where}: firewall {tier!r} must be one of {', '.join(FIREWALL_TIERS)}.")
-    for flag in ("dns_resolver", "bastion"):
+    for flag in ("dns_resolver", "bastion", "identity"):
         if flag in settings and not isinstance(settings[flag], bool):
             problems.append(f"{where}: {flag} must be true or false, without quotes.")
 
@@ -130,6 +142,27 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
         },
         "bastion": {"subnet_address_prefix": layout["bastion"]} if settings.get("bastion", False) else None,
         "gateway_subnet_address_prefix": layout["gateway"],
+        "identity": settings.get("identity", False) is True,
+    }
+
+
+def spoke(hub: dict, network: str) -> dict:
+    """Management's or identity's network in a hub's region. As the hub module has it: the firewall takes
+    its subnet's fifth address, and spokes resolve through its DNS proxy, or with a Basic firewall (no
+    proxy) through the resolver's inbound endpoint, which also takes its subnet's fifth address."""
+    offset, carve = NETWORKS[network]
+    base = ipaddress.ip_network(hub["platform_address_space"]).network_address + offset
+    firewall = str(ipaddress.ip_network(hub["firewall"]["subnet_address_prefix"])[4])
+    resolver = hub["dns_resolver"]
+    if hub["firewall"]["sku_tier"] != "Basic":
+        dns_servers = [firewall]
+    else:
+        dns_servers = [str(ipaddress.ip_network(resolver["inbound_subnet_address_prefix"])[4])] if resolver else []
+    return {
+        "address_space": f"{base}/24",
+        "subnets": {name: f"{base + at}/{size}" for name, (at, size) in carve.items()},
+        "dns_servers": dns_servers,
+        "firewall": firewall,
     }
 
 
@@ -179,6 +212,11 @@ def build(repo: Path, governance: dict) -> dict:
         f"hubs/{a}: platform address space {net} overlaps {pool}, a landing zone range of hubs/{b}."
         for a, net in spaces for b, pool in pools if a != b and net.overlaps(pool)
     ]
+    subscriptions = governance["platform_subscriptions"]
+    problems += [
+        f"hubs/{region}: identity: true builds identity's network in the identity subscription, and customer.yaml names none; add subscriptions.identity in the governance repo."
+        for region, h in hubs.items() if h and h["identity"] and not subscriptions.get("identity")
+    ]
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
 
@@ -187,7 +225,14 @@ def build(repo: Path, governance: dict) -> dict:
     return {
         "root_id": governance["root"],
         "primary_region": primary,
-        "connectivity_subscription_id": governance["platform_subscriptions"]["connectivity"],
+        "connectivity_subscription_id": subscriptions["connectivity"],
+        "management_subscription_id": subscriptions["management"],
+        "identity_subscription_id": subscriptions.get("identity"),
         "workspace_resource_id": governance["monitoring"]["workspace"],
         "hubs": hubs,
+        # Built by the management and identity stacks: management in the primary region, identity where asked.
+        "networks": {
+            "management": {primary: spoke(hubs[primary], "management")},
+            "identity": {region: spoke(h, "identity") for region, h in hubs.items() if h["identity"]},
+        },
     }

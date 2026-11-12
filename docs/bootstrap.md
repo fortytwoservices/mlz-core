@@ -24,7 +24,8 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Where | What |
 |---|---|
 | Tenant | The top management group, `<root>`, below the tenant root or `parent_management_group_id`. Governance builds everything below it, so its pipeline never needs rights at the tenant root. |
-| Management subscription | `rg-<root>-bootstrap-<region>`, holding the state account and the six pipeline identities. |
+| Management subscription | `rg-<root>-bootstrap-<region>`, holding the state account and the six pipeline identities. `rg-<root>-management-network-<region>`, empty, for management's network, which the platform builds. |
+| Identity subscription | `rg-<root>-identity-network-<region>`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
 | State account | `st<root>state<4 hex>`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners exist. |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
 | GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
@@ -40,8 +41,8 @@ never change Azure.
 |---|---|---|
 | `governance-plan` | Reader on `<root>`; reads the `governance` container | |
 | `governance-apply` | Owner on `<root>`; writes the `governance` container | |
-| `platform-plan` | Reader on the connectivity subscription; reads the `platform` container | |
-| `platform-apply` | Contributor on the connectivity subscription; writes the `platform` container | |
+| `platform-plan` | Reader on the connectivity subscription and the network resource groups in management and identity; reads the `platform` container | |
+| `platform-apply` | Contributor on the connectivity subscription and the network resource groups in management and identity; writes the `platform` container | |
 | `vending-plan` | Reader on the connectivity subscription; reads the `vending` container | Reader on Landing Zones and Sandboxes |
 | `vending-apply` | Hub peering on the connectivity subscription; writes the `vending` container | Owner on Landing Zones and Sandboxes |
 
@@ -139,6 +140,14 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 
 Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
 command in `terraform output -raw handover`).
+
+Run `bootstrap` again before the platform's next run when:
+- the customer was bootstrapped before mlz-core built management's and identity's networks;
+- or an identity subscription was added to `customer.yaml`.
+
+It makes the networks' resource groups, registers `Microsoft.Network` in their subscriptions, and gives the
+platform's identities their rights there. Without it, the platform's `management` or `identity` apply fails
+for lack of rights.
 
 A governance deployment applied before the bootstrap existed created the top group itself. Hand the
 group over before its next run, or governance plans to delete it (and Azure refuses, since it holds the

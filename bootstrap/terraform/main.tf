@@ -14,6 +14,11 @@ locals {
   parent_group = "/providers/Microsoft.Management/managementGroups/${coalesce(try(local.customer.parent_management_group_id, null), local.tenant_id)}"
   tags         = { ManagedBy = "mlz-core" }
 
+  # Management's and identity's networks, which the platform pipeline builds in resource groups made here,
+  # with rights on those groups only: governance's monitoring and the state account are in management too.
+  # Identity's only when customer.yaml names an identity subscription.
+  network_subscriptions = { for network in ["management", "identity"] : network => local.subscriptions[network] if contains(keys(local.subscriptions), network) }
+
   # One read-only identity per role for pull request plans, and one for approved applies.
   roles      = toset(["governance", "platform", "vending"])
   identities = { for pair in setproduct(local.roles, ["plan", "apply"]) : "${pair[0]}-${pair[1]}" => { role = pair[0], kind = pair[1] } }
@@ -48,6 +53,10 @@ locals {
       "vending-apply/hub-peering"   = { identity = "vending-apply", role = azapi_resource.hub_peering.id, scope = local.connectivity }
       "vending-plan/connectivity"   = { identity = "vending-plan", role = local.builtin.reader, scope = local.connectivity }
     },
+    merge([for network, _ in local.network_subscriptions : {
+      "platform-apply/${network}-network" = { identity = "platform-apply", role = local.builtin.contributor, scope = azapi_resource.network_resource_group[network].id }
+      "platform-plan/${network}-network"  = { identity = "platform-plan", role = local.builtin.reader, scope = azapi_resource.network_resource_group[network].id }
+    }]...),
     # State: each role's plan identity reads its own container, and its apply identity writes it.
     merge([for role in local.roles : {
       "${role}-apply/state" = { identity = "${role}-apply", role = local.builtin.storage_blob_contributor, scope = azapi_resource.container[role].id }
@@ -98,6 +107,27 @@ resource "azapi_resource" "resource_group" {
   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
   name      = local.names.resource_group
   parent_id = local.management
+  location  = local.region
+  tags      = local.tags
+}
+
+# The networks' subscriptions may be new too, and the platform's identities may not register providers.
+resource "azapi_resource_action" "register_network" {
+  for_each = local.network_subscriptions
+
+  type        = "Microsoft.Resources/providers@2021-04-01"
+  resource_id = "${each.value}/providers/Microsoft.Network"
+  action      = "register"
+  method      = "POST"
+}
+
+# One for each network, in the primary region, holding that network in every region it is built in.
+resource "azapi_resource" "network_resource_group" {
+  for_each = local.network_subscriptions
+
+  type      = "Microsoft.Resources/resourceGroups@2024-11-01"
+  name      = module.naming.platform_networks[each.key].resource_group
+  parent_id = each.value
   location  = local.region
   tags      = local.tags
 }

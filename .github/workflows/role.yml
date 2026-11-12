@@ -270,9 +270,9 @@ jobs:
       contents: read
       id-token: write # signs in as the apply identity, which only this environment may use
     strategy:
-      # The platform's stacks apply one after the other, hub first (jobs start in matrix order): its firewall
-      # policy holds the rules. If the hub fails, fail-fast cancels the queued rules job. Landing zones
-      # apply independently, so one failing never stops another.
+      # The platform's stacks apply one after the other, hub first (jobs start in matrix order): management's
+      # and identity's networks peer with it, and its firewall policy holds the rules. If one fails, fail-fast
+      # cancels the queued ones. Landing zones apply independently, so one failing never stops another.
       fail-fast: ${{ inputs.role == 'platform' }}
       max-parallel: ${{ inputs.role == 'platform' && 1 || 8 }}
       matrix:
