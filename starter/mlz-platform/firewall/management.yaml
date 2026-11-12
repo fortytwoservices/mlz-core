@@ -1,0 +1,9 @@
+# Outbound rules for management's network, from its own range: the private runners, and anything else the
+# platform runs there. What the pipelines themselves need is always allowed. A rule names only where traffic
+# goes, as in platform.yaml. Identity's network, where a hub builds it, has its own: firewall/identity.yaml.
+
+# outbound:
+#   - name: on-premises-git
+#     description: The on-premises Git server some modules come from.
+#     to: [git.example.com]
+#     ports: [https]

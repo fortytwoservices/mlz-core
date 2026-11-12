@@ -148,7 +148,7 @@ def firewall_rules() -> dict:
     return {
         "$schema": DRAFT,
         "title": "MLZ firewall rules",
-        "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one. A rule names only where traffic goes; the source is worked out.",
+        "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one, firewall/management.yaml and firewall/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
         **mapping({"outbound": or_empty({"description": "The rules, each with name, to and ports.", "type": "array", "items": rule})}),
     }
 

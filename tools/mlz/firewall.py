@@ -2,9 +2,12 @@
 
     firewall/platform.yaml                  rules for every landing zone (from all landing zone ranges)
     firewall/landing-zones/<key>.yaml       one landing zone's rules (from its own range)
+    firewall/management.yaml                management's network, the runners' among them (from its range)
+    firewall/identity.yaml                  identity's network in every region that builds it (from its range)
 
 A rule names what it reaches, never where it starts: the source is the landing zone's range, from the
-vending contract (_generated/vending.yaml), or every landing zone range of the hub for platform rules.
+vending contract (_generated/vending.yaml), every landing zone range of the hub for platform rules, or the
+network's own range, from the platform's config, for management's and identity's.
 
     outbound:
       - name: card-processor
@@ -13,8 +16,9 @@ vending contract (_generated/vending.yaml), or every landing zone range of the h
         ports: [https]              # https, http, a TCP port, or udp:<port>
 
 The firewall policy holds a fixed set of rule collection groups, whatever the number of landing zones:
-`platform` for the shared rules, and PARTITIONS groups for the landing zones. The `platform` group always
-holds REQUIRED too: what governance's own policies install on every machine needs to reach. A landing zone's rules are
+`platform` for the shared rules, management's and identity's, and PARTITIONS groups for the landing zones. The
+`platform` group always holds REQUIRED too: what governance's own policies install on every machine needs to
+reach, and RUNNERS, what the pipelines need from the runners' subnets. A landing zone's rules are
 collections in group `lz-<nn>`, nn = sha256(key) mod PARTITIONS: the same group for ever, so adding one
 landing zone never moves another's rules. Azure caps a policy's rule collection groups, so PARTITIONS
 must never change once rules exist.
@@ -23,8 +27,11 @@ must never change once rules exist.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import sys
+import time
+import urllib.request
 from ipaddress import IPv4Network
 from pathlib import Path
 
@@ -62,6 +69,56 @@ REQUIRED = [
         "ports": ["https"],
     },
 ]
+
+# In the primary hub's platform group, from management's two runner subnets: what the three pipelines reach
+# once they run there. GitHub's own names come first, from its meta endpoint (github_actions_domains).
+RUNNERS = [
+    {
+        "name": "azure",
+        "description": "mlz-core: Entra ID and Azure Resource Manager, for the pipelines' sign-in, plans and applies.",
+        "to": ["AzureActiveDirectory", "AzureResourceManager"],
+        "ports": ["https"],
+    },
+    {
+        "name": "terraform",
+        "description": "mlz-core: Terraform, its providers and modules.",
+        "to": ["registry.terraform.io", "releases.hashicorp.com"],
+        "ports": ["https"],
+    },
+]
+RUNNER_SUBNETS = ("github-runners", "runners")
+# Management's and identity's own rules, after the required ones and firewall/platform.yaml's.
+NETWORK_PRIORITIES = {"management": 300, "identity": 400}
+GITHUB_META = "https://api.github.com/meta"
+
+
+def github_actions_domains(saved: Path | None = None) -> list[str]:
+    """The names GitHub's runners reach, from GitHub's meta endpoint (or a saved copy of it): domains.actions,
+    the list GitHub keeps between the exact names and the wildcards. GitHub lists a name there at least a week
+    before using it, and lists no date, so it is read on every run: a change then plans the runners' rule anew,
+    and the daily drift check fails until it is applied. A name one label below a wildcard in the same list
+    is left out, so a host GitHub adds under one changes nothing here."""
+    try:
+        if saved is not None:
+            meta = json.loads(saved.read_text())
+        else:
+            request = urllib.request.Request(GITHUB_META, headers={"Accept": "application/vnd.github+json", "User-Agent": "mlz-core"})
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        meta = json.load(response)
+                    break
+                except OSError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+        domains = meta["domains"]["actions"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ConfigError(f"GitHub's Actions domains could not be read from {saved or GITHUB_META}: {error}. The runners' rule is never planned without them.") from error
+    if not isinstance(domains, list) or not domains or not all(isinstance(d, str) and FQDN.fullmatch(d) for d in domains):
+        raise ConfigError(f"{saved or GITHUB_META}: domains.actions is not a list of names; the runners' rule is never planned from it.")
+    wildcards = {d[2:].lower() for d in domains if d.startswith("*.")}
+    return sorted({d.lower() for d in domains if d.startswith("*.") or d.lower().split(".", 1)[1] not in wildcards})
 
 
 def partition(key: str) -> int:
@@ -215,26 +272,39 @@ def collections(rules: list[dict], sources: list[str], where: str, owner: str, z
     return out
 
 
-def build(repo: Path, platform: dict, vending: dict | None) -> dict | None:
+def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -> dict | None:
     """The rules root's config: per hub region, the rule collection groups and what is in them. None, once
-    every file is checked, while vending has published no contract yet."""
+    every file is checked, while vending has published no contract yet. github is GitHub's Actions domains
+    (github_actions_domains)."""
     folder = repo / "firewall"
     problems: list[str] = []
     # None until vending publishes its first contract: then landing zones are not known yet (see below).
     zones = None if vending is None else (vending.get("landing_zones") or {})
     hubs = platform["hubs"]
+    networks = platform["networks"]  # management's and identity's, by region, as the platform builds them
     groups: dict[str, dict] = {region: {} for region in hubs}
 
     shared = read_setting(folder / "platform") or {}
     shared_rules = read_rules("firewall/platform", shared, problems)
+    own = {name: read_rules(f"firewall/{name}", read_setting(folder / name) or {}, problems) for name in NETWORK_PRIORITIES}
+    if own["identity"] and not networks["identity"]:  # management's is always built, in the primary region
+        problems.append("firewall/identity: no hub builds identity's network (identity: true in hubs/<region>.yaml), so its rules would have no source.")
+    runners = [{"name": "github-actions", "description": "mlz-core: GitHub Actions, as GitHub's meta endpoint lists it (domains.actions).", "to": github, "ports": ["https"]}, *RUNNERS]
     for region, hub in hubs.items():
         tier = (hub.get("firewall") or {}).get("sku_tier", "Standard")
-        required = collections(REQUIRED, hub["landing_zone_ranges"], "mlz-core", "required", zones, 100, tier, problems)
-        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems)
+        built = {name: networks[name][region] for name in NETWORK_PRIORITIES if region in networks[name]}
+        # Governance's agent runs on the platform's own machines too: domain controllers, self-hosted runners.
+        required = collections(REQUIRED, hub["landing_zone_ranges"] + [net["address_space"] for net in built.values()], "mlz-core", "required", zones, 100, tier, problems)
+        parts = [required]
+        if "management" in built:
+            subnets = [built["management"]["subnets"][subnet] for subnet in RUNNER_SUBNETS]
+            parts.append(collections(runners, subnets, "mlz-core", "runners", zones, 110, tier, problems))
+        parts.append(collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems))
+        parts += [collections(own[name], [net["address_space"]], f"firewall/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems) for name, net in built.items()]
         groups[region]["platform"] = {
             "priority": PLATFORM_PRIORITY,
-            "application": {**required["application"], **found["application"]},
-            "network": {**required["network"], **found["network"]},
+            "application": {k: v for part in parts for k, v in part["application"].items()},
+            "network": {k: v for part in parts for k, v in part["network"].items()},
         }
 
     keys = setting_names(folder / "landing-zones")

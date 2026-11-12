@@ -12,14 +12,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mlz.firewall import PARTITIONS, build, partition
+from mlz.firewall import PARTITIONS, build, github_actions_domains, partition
 from mlz.merge import ConfigError
 
 PLATFORM = {
     "root_id": "mlz",
     "connectivity_subscription_id": "00000000-0000-0000-0000-000000000002",
     "hubs": {"norwayeast": {"landing_zone_ranges": ["10.100.0.0/16"]}},
+    # As tools/mlz/platform.py lays them out, here from a platform address space of 10.99.0.0/21.
+    "networks": {
+        "management": {"norwayeast": {"address_space": "10.99.4.0/24", "subnets": {
+            "github-runners": "10.99.4.0/25", "runners": "10.99.4.128/26", "private-endpoints": "10.99.4.192/27"}}},
+        "identity": {},
+    },
 }
+IDENTITY = {"address_space": "10.99.5.0/24", "subnets": {"domain-controllers": "10.99.5.0/26"}}
+# GitHub's Actions domains, as github_actions_domains returns them.
+GITHUB = ["*.actions.githubusercontent.com", "*.github.com", "github.com", "productionresultssa0.blob.core.windows.net"]
 VENDING = {"landing_zones": {
     "payments-prod": {"region": "norwayeast", "range": "10.100.4.0/24"},
     "website-prod": {"region": "norwayeast", "range": "10.100.5.0/24"},
@@ -41,12 +50,18 @@ class FirewallTest(unittest.TestCase):
 
     def problems(self, vending=VENDING) -> str:
         with self.assertRaises(ConfigError) as caught:
-            build(self.repo, PLATFORM, vending)
+            build(self.repo, PLATFORM, vending, GITHUB)
         return str(caught.exception)
+
+    def meta(self, actions=GITHUB) -> Path:
+        """A saved copy of api.github.com/meta, with only what github_actions_domains reads."""
+        path = Path(self.tmp.name) / "meta.json"
+        path.write_text(json.dumps({"domains": {"actions": actions}}))
+        return path
 
     def test_a_landing_zone_s_rules_come_from_its_range_in_its_partition(self):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: card-processor\n    to: [api.stripe.com, '*.stripe.com']\n    ports: [https]\n")
-        groups = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]
+        groups = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]
         name = f"lz-{partition('payments-prod'):02d}"
         self.assertEqual(set(groups), {"platform", name})
         self.assertEqual(groups[name]["priority"], 1000 + 100 * partition("payments-prod"))
@@ -62,7 +77,7 @@ class FirewallTest(unittest.TestCase):
             "  - name: to-website\n    to: [website-prod]\n    ports: [443, 8443]\n"
             "  - name: dns-partner\n    to: [203.0.113.10]\n    ports: ['udp:53', 53]\n"
         ))
-        group = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
+        group = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
         rules = group["network"]["payments-prod-network"]["rules"]
         self.assertEqual(rules["to-website"]["destination_addresses"], ["10.100.5.0/24"])
         self.assertEqual(rules["to-website"]["destination_ports"], ["443", "8443"])
@@ -71,7 +86,7 @@ class FirewallTest(unittest.TestCase):
 
     def test_platform_rules_cover_every_landing_zone_range_of_the_hub(self):
         self.write("firewall/platform.yaml", "outbound:\n  - name: windows-update\n    to: [WindowsUpdate]\n    ports: [https, http]\n")
-        groups = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]
+        groups = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]
         rule = groups["platform"]["application"]["platform-application"]["rules"]["windows-update"]
         self.assertEqual(groups["platform"]["priority"], 500)
         self.assertEqual(rule["source_addresses"], ["10.100.0.0/16"])
@@ -105,7 +120,7 @@ class FirewallTest(unittest.TestCase):
             "  - name: partner\n    to: [Partner.example.com]\n    ports: [https]\n"
             "  - name: short\n    to: [Partner.com]\n    ports: [https]\n"
         ))
-        group = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
+        group = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
         storage = group["network"]["payments-prod-network"]["rules"]["storage"]
         self.assertEqual(storage["destination_addresses"], ["AzureKeyVault", "Storage.NorwayEast"])
         self.assertEqual((storage["protocols"], storage["destination_ports"]), (["TCP"], ["443"]))
@@ -115,7 +130,7 @@ class FirewallTest(unittest.TestCase):
         self.assertEqual(short["destination_fqdns"], ["partner.com"])
 
     def lz_group(self) -> dict:
-        return build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
+        return build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"][f"lz-{partition('payments-prod'):02d}"]
 
     def test_a_name_never_gets_https_as_plain_tcp_from_an_address_beside_it(self):
         self.write("firewall/landing-zones/payments-prod.yaml",
@@ -164,7 +179,7 @@ class FirewallTest(unittest.TestCase):
                 self.write("firewall/landing-zones/payments-prod.yaml", f"outbound: {value}\n")
                 self.assertIn("outbound is a list of rules", self.problems())
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n")
-        self.assertEqual(list(build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]), ["platform"])
+        self.assertEqual(list(build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]), ["platform"])
 
     def test_bad_names_are_problems_not_crashes(self):
         self.write("firewall/landing-zones/payments-prod.yaml", (
@@ -191,13 +206,13 @@ class FirewallTest(unittest.TestCase):
         basic = {**PLATFORM, "hubs": {"norwayeast": {**PLATFORM["hubs"]["norwayeast"], "firewall": {"sku_tier": "Basic"}}}}
         self.write("firewall/platform.yaml", "outbound:\n  - name: sftp\n    to: [sftp.example.com]\n    ports: [22]\n")
         with self.assertRaises(ConfigError) as caught:
-            build(self.repo, basic, VENDING)
+            build(self.repo, basic, VENDING, GITHUB)
         self.assertIn("firewall/platform: outbound[0]: a Basic firewall reaches names only on https and http", str(caught.exception))
         self.write("firewall/platform.yaml", "outbound:\n  - name: web\n    to: [api.example.com, 203.0.113.10]\n    ports: [https, 22]\n")
         with self.assertRaises(ConfigError):
-            build(self.repo, basic, VENDING)
+            build(self.repo, basic, VENDING, GITHUB)
         self.write("firewall/platform.yaml", "outbound:\n  - name: web\n    to: [api.example.com, 203.0.113.10]\n    ports: [https]\n")
-        self.assertIn("web", build(self.repo, basic, VENDING)["policies"]["norwayeast"]["platform"]["application"]["platform-application"]["rules"])
+        self.assertIn("web", build(self.repo, basic, VENDING, GITHUB)["policies"]["norwayeast"]["platform"]["application"]["platform-application"]["rules"])
 
     def test_targets_that_are_not_strings_are_problems(self):
         self.write("firewall/landing-zones/payments-prod.yaml",
@@ -212,9 +227,9 @@ class FirewallTest(unittest.TestCase):
         platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}}}
         vending = {"landing_zones": {**VENDING["landing_zones"], other: {"region": "swedencentral", "range": "10.200.4.0/24"}}}
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
-        before = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
+        before = build(self.repo, platform, vending, GITHUB)["policies"]["norwayeast"][f"lz-{number:02d}"]
         self.write(f"firewall/landing-zones/{other}.yaml", "outbound:\n  - name: api\n    to: [203.0.113.11]\n    ports: [443]\n")
-        after = build(self.repo, platform, vending)["policies"]["norwayeast"][f"lz-{number:02d}"]
+        after = build(self.repo, platform, vending, GITHUB)["policies"]["norwayeast"][f"lz-{number:02d}"]
         self.assertEqual(after, before)  # a zone in another hub, sorting first in the same partition, moves nothing here
 
     def test_landing_zone_rules_wait_for_the_vending_contract(self):
@@ -222,42 +237,42 @@ class FirewallTest(unittest.TestCase):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr):
-            self.assertIsNone(build(self.repo, PLATFORM, None))  # checked, and no config anyone could plan with
+            self.assertIsNone(build(self.repo, PLATFORM, None, GITHUB))  # checked, and no config anyone could plan with
         self.assertIn("no vending contract yet (_generated/vending.yaml): the rules for payments-prod are checked, and wait for it", stderr.getvalue())
         # Once the contract exists, a key it does not name stops the check again.
         with self.assertRaisesRegex(ConfigError, "no landing zone payments-prod in the vending contract"):
-            build(self.repo, PLATFORM, {"landing_zones": {}})
+            build(self.repo, PLATFORM, {"landing_zones": {}}, GITHUB)
 
     def test_waiting_rules_are_still_checked(self):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [not a host]\n    ports: [ssh]\n")
         with self.assertRaises(ConfigError) as caught:
-            build(self.repo, PLATFORM, None)
+            build(self.repo, PLATFORM, None, GITHUB)
         message = str(caught.exception)
         self.assertIn("firewall/landing-zones/payments-prod: outbound[0]: 'not a host' is not a name", message)
         self.assertIn("port 'ssh' is https, http", message)
 
     def test_a_shared_rule_to_a_landing_zone_waits_for_the_contract_too(self):
         self.write("firewall/platform.yaml", "outbound:\n  - name: to-website\n    to: [website-prod, 10.0.0.5]\n    ports: [443]\n")
-        self.assertIsNone(build(self.repo, PLATFORM, None))
+        self.assertIsNone(build(self.repo, PLATFORM, None, GITHUB))
         with self.assertRaisesRegex(ConfigError, "'website-prod' is not a name, an address or range, a landing zone or a tag"):
-            build(self.repo, PLATFORM, {"landing_zones": {}})
-        resolved = build(self.repo, PLATFORM, VENDING)["policies"]["norwayeast"]["platform"]["network"]["platform-network"]["rules"]["to-website"]
+            build(self.repo, PLATFORM, {"landing_zones": {}}, GITHUB)
+        resolved = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]["platform"]["network"]["platform-network"]["rules"]["to-website"]
         self.assertIn(VENDING["landing_zones"]["website-prod"]["range"], resolved["destination_addresses"])
 
     def test_a_waiting_landing_zone_target_still_counts_as_an_address(self):
         # An FQDN tag next to a landing zone is refused with or without the contract.
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: updates\n    to: [WindowsUpdate, website-prod]\n    ports: [https]\n")
         with self.assertRaisesRegex(ConfigError, "an FQDN tag such as WindowsUpdate takes only https and http"):
-            build(self.repo, PLATFORM, None)
+            build(self.repo, PLATFORM, None, GITHUB)
 
     def test_waiting_rules_meet_basic_limits_when_every_hub_is_basic(self):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: sftp\n    to: [sftp.example.com]\n    ports: [22]\n")
         basic = {**PLATFORM, "hubs": {"norwayeast": {**PLATFORM["hubs"]["norwayeast"], "firewall": {"sku_tier": "Basic"}}}}
         with self.assertRaisesRegex(ConfigError, "a Basic firewall reaches names only on https and http"):
-            build(self.repo, basic, None)
+            build(self.repo, basic, None, GITHUB)
         mixed = {**PLATFORM, "hubs": {**basic["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"], "firewall": {"sku_tier": "Standard"}}}}
         with contextlib.redirect_stderr(io.StringIO()):
-            self.assertIsNone(build(self.repo, mixed, None))  # the zone's hub is not known yet: the tier check waits
+            self.assertIsNone(build(self.repo, mixed, None, GITHUB))  # the zone's hub is not known yet: the tier check waits
 
     def test_without_a_contract_the_command_writes_nothing(self):
         out = self.repo / ".mlz" / "firewall.json"
@@ -265,7 +280,7 @@ class FirewallTest(unittest.TestCase):
         out.write_text("{}")  # an older config must not stay behind to be planned with
         platform_config = self.repo / ".mlz" / "platform.json"
         platform_config.write_text(json.dumps(PLATFORM))
-        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out)],
+        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out), "--github-meta", str(self.meta())],
                              capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertFalse(out.exists())
@@ -278,21 +293,99 @@ class FirewallTest(unittest.TestCase):
         out.write_text("{}")
         platform_config = self.repo / ".mlz" / "platform.json"
         platform_config.write_text(json.dumps(PLATFORM))
-        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out)],
+        run = subprocess.run([sys.executable, "-m", "mlz", "firewall", "--repo", str(self.repo), "--platform-config", str(platform_config), "--out", str(out), "--github-meta", str(self.meta())],
                              capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])})
         self.assertEqual(run.returncode, 1)
         self.assertFalse(out.exists())
 
     def test_without_rule_files_only_the_required_rules(self):
-        groups = build(self.repo, PLATFORM, {"landing_zones": {}})["policies"]["norwayeast"]  # vending published, no zones yet
+        groups = build(self.repo, PLATFORM, {"landing_zones": {}}, GITHUB)["policies"]["norwayeast"]  # vending published, no zones yet
         self.assertEqual(list(groups), ["platform"])
-        self.assertEqual(groups["platform"]["application"], {})
+        self.assertEqual(set(groups["platform"]["application"]), {"runners-application"})
+        self.assertEqual(set(groups["platform"]["network"]), {"required-network", "runners-network"})
         collection = groups["platform"]["network"]["required-network"]
         rule = collection["rules"]["azure-monitor-agent"]
         self.assertEqual(collection["priority"], 100)  # before the customer's platform collections, at 200
-        self.assertEqual(rule["source_addresses"], ["10.100.0.0/16"])
+        # Every landing zone, and the platform's own networks in this region: management's here.
+        self.assertEqual(rule["source_addresses"], ["10.100.0.0/16", "10.99.4.0/24"])
         self.assertEqual(rule["destination_addresses"], ["AzureMonitor", "AzureResourceManager"])
         self.assertEqual((rule["protocols"], rule["destination_ports"]), (["TCP"], ["443"]))
+
+    def test_the_runners_reach_github_azure_and_terraform_from_their_subnets(self):
+        group = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]["platform"]
+        application = group["application"]["runners-application"]
+        self.assertEqual(application["priority"], 115)  # after the required collections, before the customer's
+        github = application["rules"]["github-actions"]
+        self.assertEqual(github["source_addresses"], ["10.99.4.0/25", "10.99.4.128/26"])  # GitHub-hosted and self-hosted
+        self.assertEqual(github["destination_fqdns"], sorted(GITHUB))
+        self.assertEqual(github["protocols"], [{"type": "Https", "port": 443}])
+        self.assertEqual(application["rules"]["terraform"]["destination_fqdns"], ["registry.terraform.io", "releases.hashicorp.com"])
+        azure = group["network"]["runners-network"]["rules"]["azure"]
+        self.assertEqual(azure["destination_addresses"], ["AzureActiveDirectory", "AzureResourceManager"])
+        self.assertEqual((azure["source_addresses"], azure["destination_ports"]), (["10.99.4.0/25", "10.99.4.128/26"], ["443"]))
+
+    def test_the_runners_rules_are_only_where_management_is(self):
+        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}}}
+        policies = build(self.repo, platform, VENDING, GITHUB)["policies"]
+        self.assertIn("runners-application", policies["norwayeast"]["platform"]["application"])
+        self.assertEqual(policies["swedencentral"]["platform"]["application"], {})
+        rule = policies["swedencentral"]["platform"]["network"]["required-network"]["rules"]["azure-monitor-agent"]
+        self.assertEqual(rule["source_addresses"], ["10.200.0.0/16"])  # no platform network there
+
+    def test_management_s_rules_come_from_its_range(self):
+        self.write("firewall/management.yaml", (
+            "outbound:\n"
+            "  - name: payments-db\n    to: [payments-prod]\n    ports: [1433]\n"
+            "  - name: packages\n    to: [pypi.org]\n    ports: [https]\n"
+        ))
+        group = build(self.repo, PLATFORM, VENDING, GITHUB)["policies"]["norwayeast"]["platform"]
+        network = group["network"]["management-network"]
+        self.assertEqual(network["priority"], 300)
+        self.assertEqual(network["rules"]["payments-db"]["source_addresses"], ["10.99.4.0/24"])
+        self.assertEqual(network["rules"]["payments-db"]["destination_addresses"], ["10.100.4.0/24"])
+        self.assertEqual(group["application"]["management-application"]["rules"]["packages"]["source_addresses"], ["10.99.4.0/24"])
+
+    def test_identity_s_rules_go_to_every_region_that_builds_it(self):
+        platform = {
+            **PLATFORM,
+            "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}},
+            "networks": {**PLATFORM["networks"], "identity": {"norwayeast": IDENTITY, "swedencentral": {"address_space": "10.199.5.0/24"}}},
+        }
+        self.write("firewall/identity.yaml", "outbound:\n  - name: ntp\n    to: [time.windows.com]\n    ports: ['udp:123']\n")
+        policies = build(self.repo, platform, VENDING, GITHUB)["policies"]
+        for region, space in (("norwayeast", "10.99.5.0/24"), ("swedencentral", "10.199.5.0/24")):
+            group = policies[region]["platform"]
+            self.assertEqual(group["network"]["identity-network"]["priority"], 400)
+            self.assertEqual(group["network"]["identity-network"]["rules"]["ntp-udp"]["source_addresses"], [space])
+            self.assertIn(space, group["network"]["required-network"]["rules"]["azure-monitor-agent"]["source_addresses"])
+
+    def test_identity_s_rules_need_identity_s_network(self):
+        self.write("firewall/identity.yaml", "outbound:\n  - name: ntp\n    to: [time.windows.com]\n    ports: ['udp:123']\n")
+        self.assertIn("firewall/identity: no hub builds identity's network (identity: true in hubs/<region>.yaml)", self.problems())
+        self.write("firewall/identity.yaml", "# outbound: commented out until identity is built\n")
+        build(self.repo, PLATFORM, VENDING, GITHUB)  # no rules, no source needed
+
+    def test_management_s_rules_are_checked_like_any_other(self):
+        self.write("firewall/management.yaml", "outbound:\n  - name: odd\n    to: [not a host]\n    ports: [https]\n")
+        self.assertIn("firewall/management: outbound[0]: 'not a host' is not a name", self.problems())
+
+    def test_github_s_names_under_a_listed_wildcard_are_left_out(self):
+        listed = ["*.actions.githubusercontent.com", "pipelinesghubeus1.actions.githubusercontent.com",
+                  "results-receiver.actions.githubusercontent.com", "a.b.actions.githubusercontent.com",
+                  "github.com", "*.github.com", "productionresultssa0.blob.core.windows.net", "Ghcr.io"]
+        self.assertEqual(github_actions_domains(self.meta(listed)), [
+            "*.actions.githubusercontent.com", "*.github.com", "a.b.actions.githubusercontent.com",
+            "ghcr.io", "github.com", "productionresultssa0.blob.core.windows.net",
+        ])
+
+    def test_github_s_list_is_never_empty_or_odd(self):
+        for actions in ([], ["github.com", "not a host"], "github.com", [None]):
+            with self.assertRaisesRegex(ConfigError, "domains.actions is not a list of names"):
+                github_actions_domains(self.meta(actions))
+        broken = Path(self.tmp.name) / "broken.json"
+        broken.write_text("{}")
+        with self.assertRaisesRegex(ConfigError, "GitHub's Actions domains could not be read from .*broken.json: 'domains'"):
+            github_actions_domains(broken)
 
 
 if __name__ == "__main__":

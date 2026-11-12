@@ -28,7 +28,7 @@ chunks is an error that names both files.
 Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, `identity: false`, no `reserved` ranges. The primary
 region (from governance) must have a hub.
 
-The platform starter comes with `hubs/norwayeast.yaml` and `firewall/platform.yaml`, every setting in them
+The platform starter comes with `hubs/norwayeast.yaml`, `firewall/platform.yaml` and `firewall/management.yaml`, every setting in them
 commented out. Until the hub file has its platform address space and landing zone ranges, the platform's check
 stops, so nothing is built from the starter as it comes; rename the file if the primary region is another.
 If governance's contract pull request has already failed its run for that reason, bring its branch up to
@@ -85,8 +85,10 @@ subscription in `customer.yaml`.
 They are built in a resource group the bootstrap makes in each subscription,
 `rg-<root>-<management|identity>-network-<primary region code>`, which holds the network in every region.
 The platform's pipeline identities have rights on that group only, not on the rest of the subscription:
-governance's monitoring and the state account are in management too. Runners, the state account's private
-endpoint and the domain controllers come in later releases.
+governance's monitoring and the state account are in management too. Their outbound traffic is allowed by
+the firewall's rules like a landing zone's ([below](#firewall-rules)): `firewall/management.yaml` and
+`firewall/identity.yaml`. Runners, the state account's private endpoint and the domain controllers come in
+later releases.
 
 ## Firewall rules
 
@@ -103,10 +105,13 @@ outbound:
     ports: [https]
 ```
 
-`firewall/platform.yaml` holds rules for every landing zone of a hub, from all its landing zone ranges. A
-rule names only where traffic goes; the source is worked out from the vending contract
-(`_generated/vending.yaml`). A file in `firewall/landing-zones/` for a key that contract does not name
-stops the check, since it is usually a typo. Before vending has published anything, on the platform's
+`firewall/platform.yaml` holds rules for every landing zone of a hub, from all its landing zone ranges; a
+platform address space inside those ranges gets them too. `firewall/management.yaml` holds management's,
+from its network's range, and `firewall/identity.yaml` identity's, from its range in every region that
+builds it (a rule there with no such region stops the check). A rule names only where traffic goes; the
+source is worked out from the vending contract (`_generated/vending.yaml`) and the platform's own layout.
+A file in `firewall/landing-zones/` for a key that contract does not name stops the check, since it is
+usually a typo. Before vending has published anything, on the platform's
 first deployment, those files wait instead, with a notice, so the hub can be built first. `to` takes:
 
 - names in lower case (`api.example.com`) and wildcards (`*.example.com`)
@@ -131,8 +136,24 @@ requires, and deleting a rules file takes its rules out of Azure.
 
 | Group | Priority | Holds |
 |---|---|---|
-| `platform` | 500 | `required-network` (100): what governance's own policies need, whatever the customer writes. Today, the Azure Monitor Agent, which reaches the `AzureMonitor` and `AzureResourceManager` service tags on 443. Then `firewall/platform.yaml` (200 and 205). |
+| `platform` | 500 | `required-network` (100): what governance's own policies need, whatever the customer writes. Today, the Azure Monitor Agent, which reaches the `AzureMonitor` and `AzureResourceManager` service tags on 443, from the landing zones and the platform's own networks. `runners-network` and `runners-application` (110 and 115): what the three pipelines need from management's two runner subnets ([below](#what-the-runners-reach)). Then `firewall/platform.yaml` (200 and 205), `firewall/management.yaml` (300 and 305) and `firewall/identity.yaml` (400 and 405). |
 | `lz-00` to `lz-29` | 1000 to 3900 | Each landing zone's rules, in the group its key hashes to, for ever. Adding a landing zone never moves another's rules, and the 31 groups in all stay under Azure's limit per policy, however many landing zones there are. |
+
+### What the runners reach
+
+From `snet-github-runners` and `snet-runners`, in the primary hub's `platform` group, on 443:
+
+- **GitHub**: the names GitHub's runners need, as GitHub's meta endpoint lists them
+  (`api.github.com/meta`, `domains.actions`): its own wildcards, a few fixed names and its result storage
+  accounts, named one by one. A name one label below a wildcard in the same list is left out.
+- **Entra ID and Azure Resource Manager**: the `AzureActiveDirectory` and `AzureResourceManager` service tags.
+- **Terraform**: `registry.terraform.io` and `releases.hashicorp.com`, for Terraform, its providers and modules.
+
+The platform's check reads GitHub's list on every run, and stops if it cannot: the rule is never planned
+without it. GitHub lists a name at least a week before using it. When the list changes, the next plan
+changes the `platform` group, and the daily drift check fails until it is applied: run the workflow on
+`main` and approve the apply, as for any other change. Anything else the runners reach, such as systems in
+landing zones or on-premises, goes in `firewall/management.yaml`.
 
 ## Contract
 

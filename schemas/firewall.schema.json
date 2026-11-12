@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "MLZ firewall rules",
-  "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one. A rule names only where traffic goes; the source is worked out.",
+  "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one, firewall/management.yaml and firewall/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
   "type": "object",
   "properties": {
     "outbound": {

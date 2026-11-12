@@ -70,6 +70,7 @@ def main() -> int:
     f.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     f.add_argument("--platform-config", type=Path, required=True, help="the platform root's config, from mlz platform")
     f.add_argument("--out", type=Path, required=True, help="where to write the rules root's config (JSON)")
+    f.add_argument("--github-meta", type=Path, help="a saved copy of api.github.com/meta, read instead of fetching it")
     w = roles.add_parser("vending-contract", help="each landing zone's region and range, for the platform's firewall rules")
     w.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     w.add_argument("--out", type=Path, required=True, help="the YAML file to write")
@@ -155,7 +156,8 @@ def main() -> int:
                 # landing zones would plan their rules away. An older one at --out goes first, before the checks,
                 # so that not even a failed check leaves one behind to plan with.
                 args.out.unlink(missing_ok=True)
-            config = firewall.build(args.repo, json.loads(args.platform_config.read_text()), read_yaml(path) if path.exists() else None)
+            github = firewall.github_actions_domains(args.github_meta)
+            config = firewall.build(args.repo, json.loads(args.platform_config.read_text()), read_yaml(path) if path.exists() else None, github)
             if config is None:
                 print(f"mlz firewall: checked; nothing written until vending's contract ({path}) exists")
             else:
