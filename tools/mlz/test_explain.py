@@ -57,15 +57,15 @@ class ExplainTest(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(rows["management group"], ("demo-lz-corp", "governance's contract, for archetype corp"))
         self.assertEqual(rows["tag Environment"], ("prod", "from the file name"))
-        self.assertEqual(rows["address range"], ("10.100.4.0/24", "the IP plan (_generated/ip-plan.yaml)"))
-        self.assertEqual(rows["subnet default"], ("10.100.4.0/26", "the IP plan"))
+        self.assertEqual(rows["address range"], ("10.100.8.0/24", "the IP plan (_generated/ip-plan.yaml)"))
+        self.assertEqual(rows["subnet default"], ("10.100.8.0/26", "the IP plan"))
         self.assertEqual(rows["route default"], ("0.0.0.0/0 via 10.100.0.4", "the platform's contract, for norwayeast"))
 
     def test_without_the_contracts_it_says_what_waits_for_them(self):
         rows = self.rows(governance=None, platform=None)
         self.assertEqual(rows["management group"][0], "not known yet")
         self.assertIn("waits for the platform's contract", rows["hub"][1])
-        self.assertEqual(rows["address range"][0], "10.100.4.0/24")  # the IP plan is the repo's own
+        self.assertEqual(rows["address range"][0], "10.100.8.0/24")  # the IP plan is the repo's own
 
     def problems(self) -> list[str]:
         lz = vending.landing_zones(self.repo)["payments-prod"]
@@ -83,8 +83,8 @@ class ExplainTest(unittest.TestCase):
     def test_a_size_given_cannot_change(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 25\n  subnets:\n    default: 27\n")
         found = "\n".join(self.problems())
-        self.assertIn("network.size is 25, but its range 10.100.4.0/24 was given as a /24", found)
-        self.assertIn("subnet default is a /27 here but was given as 10.100.4.0/26", found)
+        self.assertIn("network.size is 25, but its range 10.100.8.0/24 was given as a /24", found)
+        self.assertIn("subnet default is a /27 here but was given as 10.100.8.0/26", found)
 
     def test_a_group_a_later_layer_clears_names_what_it_had(self):
         self.write("landing-zones/payments/prod.yaml", "subscription: 33333333-3333-3333-3333-333333333333\nbudget: null\n")
@@ -109,7 +109,7 @@ class ExplainTest(unittest.TestCase):
         plan, _, retired = vending.allocate(self.repo, PLATFORM)
         plan["internal-web"]["range"] = plan["payments-prod"]["range"]
         self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
-        self.assertIn("payments-prod's range 10.100.4.0/24 overlaps internal-web's 10.100.4.0/24", "\n".join(self.problems()))
+        self.assertIn("payments-prod's range 10.100.8.0/24 overlaps internal-web's 10.100.8.0/24", "\n".join(self.problems()))
 
     def test_without_the_contracts_a_missing_required_setting_is_still_reported(self):
         self.write("landing-zones/payments/_workload.yaml", "cost_center: '4711'\narchetype: corp\n")

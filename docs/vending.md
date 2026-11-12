@@ -51,8 +51,8 @@ Any layer can be a folder of chunks.
 ## What is worked out
 
 - **Address ranges and subnets**, by the IP allocator (`python3 -m mlz allocate`). A new landing zone gets
-  the first free block of its size in its region's `landing_zone_ranges`, never a hub's own range or a
-  range the platform reserves; a new subnet gets the first free block in its landing zone's range,
+  the first free block of its size in its region's `landing_zone_ranges`, never in a region's
+  `platform_address_space` (the hub, management and identity) or a range the platform reserves; a new subnet gets the first free block in its landing zone's range,
   largest first. It writes one file, the
   network plan, and nobody types an address:
 

@@ -29,7 +29,7 @@ module "connectivity" {
       location         = hub.location
       address_space    = hub.address_space
       is_primary       = hub.is_primary
-      routing_supernet = hub.landing_zone_ranges
+      routing_supernet = hub.routing_supernet # the platform's range and the landing zone ranges
       firewall = {
         sku_tier                         = hub.firewall.sku_tier
         subnet_address_prefix            = hub.firewall.subnet_address_prefix

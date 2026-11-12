@@ -1,11 +1,12 @@
-# The hub network in one region, named after the region: rename the file if governance's primary region
-# is another. Every setting is commented out, so the platform's check stops here, and nothing is built,
-# until address_space and landing_zone_ranges are set. What each setting does: docs/platform.md in mlz-core.
+# The platform's networks in one region, named after the region: rename the file if governance's primary
+# region is another. Every setting is commented out, so the platform's check stops here, and nothing is
+# built, until platform_address_space and landing_zone_ranges are set. What each setting does:
+# docs/platform.md in mlz-core.
 
-# address_space: 10.100.0.0/22          # the hub itself, a /23 or larger; its subnets are carved from it
-# landing_zone_ranges: 10.100.0.0/16    # where landing zone networks get their address ranges
-# reserved: [10.100.200.0/22]           # networks mlz-core does not manage: never given to a landing zone
+# platform_address_space: 10.100.0.0/21    # the hub, management and identity, a /21; mlz-core lays it out
+# landing_zone_ranges: 10.100.0.0/16       # where landing zone networks get their address ranges
+# reserved: [10.100.200.0/22]              # networks mlz-core does not manage: never given to a landing zone
 
-# firewall: Standard                    # Standard (the default), Premium or Basic
-# dns_resolver: true                    # resolves Private Link names for landing zones and on-premises (default)
-# bastion: false                        # Bastion for VMs in any landing zone (off by default)
+# firewall: Standard                       # Standard (the default), Premium or Basic
+# dns_resolver: true                       # resolves Private Link names for landing zones and on-premises (default)
+# bastion: false                           # Bastion for VMs in any landing zone (off by default)

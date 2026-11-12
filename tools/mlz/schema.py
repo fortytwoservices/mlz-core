@@ -118,7 +118,7 @@ def landing_zone() -> dict:
 def hub() -> dict:
     cidr = {"type": "string", "pattern": CIDR}
     properties = {
-        "address_space": text("The hub's own range, a /23 or larger (a /22 is usual). Its subnets are carved from it.", pattern=CIDR),
+        "platform_address_space": text("The region's platform range, a /21: the hub (its first /22, its subnets carved from it), management's /24, identity's /24 and a spare /23. No landing zone gets an address in it.", pattern=CIDR),
         "landing_zone_ranges": one_or_more(cidr, "Where landing zone networks get their address ranges."),
         "reserved": one_or_more(cidr, "Ranges never given to a landing zone: existing networks, on-premises sites, partner links.", empty=True),
         "firewall": text("The hub's Azure Firewall tier.", enum=list(platform.FIREWALL_TIERS), default="Standard"),
@@ -128,7 +128,7 @@ def hub() -> dict:
     return {
         "$schema": DRAFT,
         "title": "MLZ hub",
-        "description": "The hub network in one region: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+        "description": "The platform's networks in one region, the hub first: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
         **mapping(properties),
     }
 
