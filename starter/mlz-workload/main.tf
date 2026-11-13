@@ -2,7 +2,7 @@
 # naming helper, so it reads like the landing zone's own (rg-acme-pay-app-pd-nwe-01):
 #
 # module "app_group_name" {
-#   source  = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=v0.6.0" # x-release-please-version
+#   source  = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=v0.6.1" # x-release-please-version
 #   mlz     = var.mlz
 #   type    = "resource_group"
 #   purpose = "app"

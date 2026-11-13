@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/fortytwoservices/mlz-core/compare/v0.6.0...v0.6.1) (2026-11-13)
+
+
+### Features
+
+* **naming:** a Terraform naming helper for workload repos ([#69](https://github.com/fortytwoservices/mlz-core/issues/69)) ([a593c6b](https://github.com/fortytwoservices/mlz-core/commit/a593c6b9834fe783af76b6684e388ed9e20499cb))
+* **vending:** workload repos get mlz-core's pipeline and starter ([#71](https://github.com/fortytwoservices/mlz-core/issues/71)) ([707a70d](https://github.com/fortytwoservices/mlz-core/commit/707a70dbd53d4dcb982f3290a97d1a6e9e9ec46c))
+
 ## [0.6.0](https://github.com/fortytwoservices/mlz-core/compare/v0.5.0...v0.6.0) (2026-11-13)
 
 
