@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/fortytwoservices/mlz-core/compare/v0.3.8...v0.4.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **vending:** landing zones already deployed get new names, which their next plan shows as replacements; set names: in a landing zone file to keep a resource's current name. A workload whose folder name is not 2 to 5 lower-case letters and digits needs short_name in its _workload.yaml, and a root ID over four characters or with a hyphen needs naming.org in customer.yaml (docs/naming.md).
+
+### Features
+
+* **vending:** landing zones named from the customer's template ([#59](https://github.com/fortytwoservices/mlz-core/issues/59)) ([ba0422d](https://github.com/fortytwoservices/mlz-core/commit/ba0422dc774472edf1904ccfd5b9a01806a06b24))
+* **vending:** names recorded once given, and mlz names --renew ([#60](https://github.com/fortytwoservices/mlz-core/issues/60)) ([ad10acb](https://github.com/fortytwoservices/mlz-core/commit/ad10acb603697d5c51812d353c09c1071648e0a0))
+
 ## [0.3.8](https://github.com/fortytwoservices/mlz-core/compare/v0.3.7...v0.3.8) (2026-11-13)
 
 
