@@ -153,6 +153,10 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     for name, data in lz["layers"][:-1]:
         if "names" in data:
             problems.append(f"{name}: names are one landing zone's own, so they go in that landing zone's file, {where}.")
+    # One short name per workload: a landing zone's file, or a default, setting one would name it apart from the rest.
+    for name, data in lz["layers"]:
+        if "short_name" in data and name != f"landing-zones/{lz['workload']}/_workload":
+            problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/_workload.yaml.")
     if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
         problems.append(f"{at('short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits.")
     elif "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):

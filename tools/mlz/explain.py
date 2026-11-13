@@ -131,7 +131,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 continue
             label = f"name NSG of {item.split('.', 1)[1]}" if item.startswith("network_security_groups.") else f"name {item}"
             if item not in vending.flat(given):  # the record holds all but what the landing zone names itself
-                source = f"names: in {lz['where']}.yaml"
+                source = f"names: in {file_of(repo, lz['where'])}"
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
                 if fresh.get(item) not in (None, value):
