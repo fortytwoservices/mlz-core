@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/fortytwoservices/mlz-core/compare/v0.3.2...v0.3.3) (2026-11-13)
+
+
+### Features
+
+* **install:** mlz install runners moves the pipelines onto a private GitHub-hosted runner ([#45](https://github.com/fortytwoservices/mlz-core/issues/45)) ([ff9eb7a](https://github.com/fortytwoservices/mlz-core/commit/ff9eb7ad468eff2c337f4ed002f43d1a7387cd15))
+* **pipelines:** the daily check keeps one drift issue in the repo ([#46](https://github.com/fortytwoservices/mlz-core/issues/46)) ([1197856](https://github.com/fortytwoservices/mlz-core/commit/1197856a2d51a2e253765c260b8e834532e81228))
+
 ## [0.3.2](https://github.com/fortytwoservices/mlz-core/compare/v0.3.1...v0.3.2) (2026-11-13)
 
 
