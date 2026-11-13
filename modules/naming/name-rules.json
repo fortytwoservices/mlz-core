@@ -1,0 +1,177 @@
+{
+  "source": "Azure/avm-utl-naming v0.2.0, data/resource-name-rules.json",
+  "types": {
+    "resource_group": {
+      "slug": "rg",
+      "min_length": 1,
+      "max_length": 90,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^[\\w_\\-\\.()]+$"
+    },
+    "virtual_network": {
+      "slug": "vnet",
+      "min_length": 2,
+      "max_length": 64,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "network_security_group": {
+      "slug": "nsg",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "route_table": {
+      "slug": "rt",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "user_assigned_identity": {
+      "slug": "id",
+      "min_length": 3,
+      "max_length": 128,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9\\-_])$"
+    },
+    "budget": {
+      "slug": "budget",
+      "min_length": 1,
+      "max_length": 63,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9\\-_]|[a-zA-Z0-9\\-_][a-zA-Z0-9\\-_]*[a-zA-Z0-9\\-_])$"
+    },
+    "private_endpoint": {
+      "slug": "pep",
+      "min_length": 2,
+      "max_length": 64,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "network_interface": {
+      "slug": "nic",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "storage_account": {
+      "slug": "st",
+      "min_length": 3,
+      "max_length": 24,
+      "dashes": false,
+      "lowercase": true,
+      "global": true,
+      "pattern": "^(?:[a-z0-9]|[a-z0-9][a-z0-9]*[a-z0-9])$"
+    },
+    "key_vault": {
+      "slug": "kv",
+      "min_length": 3,
+      "max_length": 24,
+      "dashes": true,
+      "lowercase": false,
+      "global": true,
+      "pattern": "^(?:[a-zA-Z]|[a-zA-Z][a-zA-Z0-9\\-]*[a-zA-Z0-9])$",
+      "no_double_hyphen": true
+    },
+    "log_analytics_workspace": {
+      "slug": "log",
+      "min_length": 4,
+      "max_length": 63,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])$"
+    },
+    "application_gateway": {
+      "slug": "agw",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "azure_firewall": {
+      "slug": "afw",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "firewall_policy": {
+      "slug": "afwp",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "bastion_host": {
+      "slug": "bas",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "public_ip_address": {
+      "slug": "pip",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_.]*[a-zA-Z0-9_])$"
+    },
+    "dns_resolver": {
+      "slug": "dnspr",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9])$"
+    },
+    "dns_resolver_inbound_endpoint": {
+      "slug": "in",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9])$"
+    },
+    "dns_resolver_outbound_endpoint": {
+      "slug": "out",
+      "min_length": 1,
+      "max_length": 80,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9])$"
+    }
+  }
+}
