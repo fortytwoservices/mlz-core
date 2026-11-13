@@ -68,6 +68,13 @@ class GitHub:
             return None, None
         return base64.b64decode(found["content"]).decode(), found["sha"]
 
+    def folder(self, repo: str, path: str, ref: str) -> list[str]:
+        """The paths of the files in a folder and below it; [] when there is no such folder."""
+        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        if not isinstance(found, list):
+            return []
+        return sorted(p for item in found for p in ([item["path"]] if item["type"] == "file" else self.folder(repo, item["path"], ref)))
+
     def head(self, repo: str, branch: str) -> str:
         return self._api(f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
