@@ -174,6 +174,26 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 Each new landing zone's subscription is handed over by hand, before its YAML is merged (the second command in
 `terraform output -raw handover`), unless vending makes it where `billing_scope` says (`docs/vending.md`).
 
+### Letting vending make subscriptions
+
+For a customer whose landing zones get subscriptions made by vending, vending's apply identity needs a billing role
+on the billing scope ([vending](vending.md#the-subscription)). After the bootstrap:
+
+```sh
+python3 -m mlz install subscriptions --settings $SET --tenant $TENANT --billing-scope <billing_scope>
+```
+
+- **It looks first:** if the identity has the role already, it says so and does nothing.
+- **Then it offers to give it**, signed in as you (`--yes` without asking): the EA role SubscriptionCreator on the
+  enrollment account, or the MCA role Azure subscription creator on the invoice section.
+- **Usually only the customer's billing owner may**, so when your sign-in may not, it prints what to send them: the
+  role they must hold (the enrollment account's owner; for MCA, an owner of the invoice section, its billing
+  profile or the billing account), the `az login` and `az rest` commands filled in with the identity, the tenant
+  and the scope, the portal route where there is one (MCA), and a command to check afterwards. Running the step
+  again checks too.
+
+The EA assignment is named after the scope and the identity, so sending the command twice gives the role once.
+
 ### Private runners
 
 Once the platform's first apply has built management's network, and the bootstrap has run again for the

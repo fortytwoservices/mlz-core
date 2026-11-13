@@ -10,6 +10,10 @@
     python3 -m mlz install runners   --settings <dir> --tenant <id>   GitHub's side of the private runners, then
                                                                       the repos moved onto them (an owner of the
                                                                       organization; others get the commands to send)
+    python3 -m mlz install subscriptions --settings <dir> --tenant <id> --billing-scope <scope>
+                                                                      vending's apply identity may make subscriptions
+                                                                      there (a billing owner; others get the command
+                                                                      and the role to send)
 
 <dir> holds the customer's customer.yaml and bootstrap.yaml: a checkout of the governance repo, or for a new
 customer a folder of the two files before the repos exist (repos then commits them to the governance repo).
@@ -30,10 +34,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, names, naming, platform
+from . import contract, names, naming, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -326,12 +331,15 @@ class Azure:
         self.token = subprocess.run(["az", "account", "get-access-token", "--tenant", tenant, "--resource", "https://management.azure.com",
                                      "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
 
-    def request(self, method: str, url: str) -> dict:
+    def request(self, method: str, url: str, body: dict | None = None) -> dict:
         # Without no-cache, getEntities answered from a cache for minutes after a move: three subscriptions just
         # moved into the tree still showed in unmanaged_subscriptions (TCAF, 2026-11-11), so a second handover
         # would have asked to move them again.
-        req = urllib.request.Request(url if url.startswith("https://") else f"https://management.azure.com{url}", method=method,
-                                     headers={"Authorization": f"Bearer {self.token}", "Content-Length": "0", "Cache-Control": "no-cache"})
+        headers = {"Authorization": f"Bearer {self.token}", "Cache-Control": "no-cache"}
+        data = None if body is None else json.dumps(body).encode()
+        headers.update({"Content-Length": "0"} if data is None else {"Content-Type": "application/json"})
+        req = urllib.request.Request(url if url.startswith("https://") else f"https://management.azure.com{url}", data=data, method=method,
+                                     headers=headers)
         with urllib.request.urlopen(req) as response:
             body = response.read()
         return json.loads(body) if body else {}
@@ -500,17 +508,22 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
 
 # publish
 
-def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = print) -> str | None:
-    """The bootstrap's contract, offered to the governance repo as a pull request like every other contract."""
-    _, bootstrap = settings(folder)
-    repo = repositories(bootstrap)["governance"]
+def bootstrap_contract(terraform) -> dict:
+    """The bootstrap's contract, read from its state in its account."""
     terraform.prepare()
     backend = terraform.work / "backend.hcl"
     if not backend.exists():
         raise ConfigError("the bootstrap's state is not in its account yet; run mlz install bootstrap first.")
     if terraform.run("init", "-input=false", "-reconfigure", f"-backend-config={backend}").returncode:
         raise ConfigError("terraform init failed; see above.")
-    text = contract.render("bootstrap", json.loads(terraform.output("contract")))
+    return json.loads(terraform.output("contract"))
+
+
+def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = print) -> str | None:
+    """The bootstrap's contract, offered to the governance repo as a pull request like every other contract."""
+    _, bootstrap = settings(folder)
+    repo = repositories(bootstrap)["governance"]
+    text = contract.render("bootstrap", bootstrap_contract(terraform))
     base = github.default_branch(repo)
     if github.file(repo, CONTRACT_PATH, base)[0] == text:
         out(f"publish: {repo} already has this {CONTRACT_PATH}")
@@ -532,6 +545,114 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
         "checked and planned it, and the run on main that starts is governance's first deployment, which waits for "
         "its reviewer.\n\nFrom there the contracts go between the repos by themselves, each run on main waiting for "
         "its reviewer: platform, then vending. "
-        "Hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
+        "Hand each landing zone's subscription over before its YAML is merged, unless vending makes it where billing_scope "
+        "says (docs/pipelines.md, The first run).\n")
     out(f"publish: {url} merges itself once governance's run has checked and planned it; its apply then waits for the reviewer")
     return url
+
+
+# subscriptions
+
+# What lets vending's apply identity make subscriptions billed to a scope (docs/vending.md, The subscription): a
+# billing role, which neither Azure's role assignments nor Entra ID's roles give or show, by agreement. Checked on
+# Microsoft Learn on 13 November 2026: "Assign Enterprise Agreement roles to service principals" (EA) and
+# "Programmatically create Azure subscriptions for a Microsoft Customer Agreement" (MCA).
+BILLING_ROLES = {
+    "EA": {
+        "role": "SubscriptionCreator", "id": "a0bcee42-bf30-4d1b-926a-48d21664ef71", "api": "2019-10-01-preview",
+        "on": "the enrollment account",
+        "granter": "the enrollment account's owner, its Account Owner (\"enrollment account owner (EA admin)\" in Microsoft's role table)",
+        "portal": None,
+    },
+    "MCA": {
+        "role": "Azure subscription creator", "id": "30000000-aaaa-bbbb-cccc-100000000006", "api": "2024-04-01",
+        "on": "the invoice section",
+        "granter": "an owner of the invoice section, of its billing profile or of the billing account",
+        "portal": "Cost Management + Billing, the invoice section, Access control (IAM): Add, role Azure subscription creator, for the identity",
+    },
+}
+
+
+def grant_request(kind: str, scope: str, principal: str, tenant: str) -> tuple[str, str, dict]:
+    """The billing API call that gives principal the role on scope: (method, path, body). An EA assignment is named by
+    whoever makes it: here after the scope and the identity, so making it again changes nothing."""
+    role = BILLING_ROLES[kind]
+    assignment = {"principalId": principal, "principalTenantId": tenant, "roleDefinitionId": f"{scope}/billingRoleDefinitions/{role['id']}"}
+    if kind == "EA":
+        name = uuid.uuid5(uuid.NAMESPACE_URL, f"mlz-core/{scope}/{principal}")
+        return "PUT", f"{scope}/billingRoleAssignments/{name}?api-version={role['api']}", {"properties": assignment}
+    return "POST", f"{scope}/createBillingRoleAssignment?api-version={role['api']}", assignment
+
+
+def az_rest(method: str, path: str, body: dict | None = None, query: str | None = None) -> str:
+    """The same call as an Azure CLI command, for someone else to run."""
+    command = ["az", "rest", "--method", method.lower(), "--url", f"https://management.azure.com{path}"]
+    command += ["--body", json.dumps(body)] if body is not None else []
+    command += ["--query", query] if query is not None else []
+    return shlex.join(command)
+
+
+def holds_role(azure, kind: str, scope: str, principal: str) -> bool | None:
+    """Whether principal has the role on scope; None when the sign-in may not read the scope's role assignments."""
+    role = BILLING_ROLES[kind]
+    url = f"{scope}/billingRoleAssignments?api-version={role['api']}"
+    try:
+        while url:
+            page = azure.request("GET", url)
+            if any((a.get("properties") or {}).get("principalId") == principal
+                   and str((a.get("properties") or {}).get("roleDefinitionId", "")).lower().endswith(role["id"])
+                   for a in page.get("value", [])):
+                return True
+            url = page.get("nextLink")
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403, 404):
+            return None
+        raise
+    return False
+
+
+def step_subscriptions(azure, terraform, folder: Path, scope: str, tenant: str, yes: bool = False,
+                       out: Callable[[str], None] = print, ask: Callable[[str], str] = answer) -> bool:
+    """Lets vending's apply identity make the landing zones' subscriptions billed to scope: gives it the billing role
+    when this sign-in may, after asking; otherwise prints the role the person who may give it holds, and the command
+    they run. Returns whether the identity has the role."""
+    settings(folder)
+    kind = vending.agreement(scope)
+    if kind not in BILLING_ROLES:
+        raise ConfigError(f"--billing-scope {scope!r} is an EA enrollment account (/providers/Microsoft.Billing/billingAccounts/<id>/"
+                          "enrollmentAccounts/<id>) or an MCA invoice section (.../billingAccounts/<id>/billingProfiles/<id>/"
+                          "invoiceSections/<id>), as billing_scope is in the vending repo; a CSP customer's subscriptions are "
+                          "made in Fortytwo's Partner Center.")
+    identity = (((bootstrap_contract(terraform).get("identities") or {}).get("vending") or {}).get("apply") or {})
+    if not identity.get("principal_id"):
+        raise ConfigError("the bootstrap's contract has no vending apply identity; run mlz install bootstrap first.")
+    principal, role = identity["principal_id"], BILLING_ROLES[kind]
+    who = f"vending's apply identity {identity.get('name', '')} (object ID {principal})".replace("  ", " ")
+    out(f"subscriptions: {who} makes the subscriptions billed to {scope} once it has the {kind} role {role['role']} on {role['on']}.")
+    held = holds_role(azure, kind, scope, principal)
+    if held:
+        out("subscriptions: it has it; vending can make them.")
+        return True
+    out("subscriptions: it does not have it yet." if held is False else "subscriptions: your sign-in may not read who has billing roles there, or there is no such scope.")
+    method, path, body = grant_request(kind, scope, principal, tenant)
+    if yes or ask("Give it the role now, signed in as you? [y/N] ").strip().lower() in ("y", "yes"):
+        try:
+            azure.request(method, path, body)
+            out(f"subscriptions: done; {who} has the role {role['role']} on {role['on']}.")
+            return True
+        except urllib.error.HTTPError as error:
+            if error.code not in (400, 401, 403):
+                raise
+            out(f"subscriptions: Azure refused it (HTTP {error.code}): your sign-in may not give billing roles there.")
+    # The person who may: what they must hold, and what they run.
+    check = az_rest("GET", f"{scope}/billingRoleAssignments?api-version={role['api']}",
+                    query=f'value[?properties.principalId==`"{principal}"`].properties.roleDefinitionId')
+    lines = [f"subscriptions: {role['granter']} gives it. Send them this, to run in a bash shell (Azure Cloud Shell will do):", "",
+             f"  az login --tenant {tenant}", f"  {az_rest(method, path, body)}", ""]
+    if role["portal"]:
+        lines += [f"  or in the Azure portal: {role['portal']} {identity.get('name', principal)}.", ""]
+    lines += ["subscriptions: then, to check, by them or anyone who may read the billing roles there (it ends in "
+              f"{role['id']}):", "", f"  {check}"]
+    for line in lines:
+        out(line)
+    return False

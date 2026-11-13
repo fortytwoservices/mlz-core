@@ -211,8 +211,9 @@ billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAc
 | Microsoft Partner Agreement (CSP) | `.../customers/<customer>` | Refused: a CSP customer's subscription is made from Fortytwo's Partner Center, then handed over. |
 
 These are billing roles, not Azure roles: Azure's role assignments and Entra ID's directory roles neither give nor
-show them. Until vending's apply identity has the role, the apply that would make the subscription fails, and
-nothing else in that landing zone is made.
+show them. `mlz install subscriptions` gives the role, or prints the command and the role to send to the person who
+may ([bootstrap](bootstrap.md#letting-vending-make-subscriptions)). Until vending's apply identity has it, the apply
+that would make the subscription fails, and nothing else in that landing zone is made.
 
 **Azure makes vending's apply identity the new subscription's Owner**, besides the rights it has from the tree.
 

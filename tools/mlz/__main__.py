@@ -9,7 +9,8 @@
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>] [--owner <email>] ...
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
-    python3 -m mlz install  repos|check|bootstrap|handover|publish --settings <dir> [--tenant <id>] [--yes]
+    python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
+                            [--billing-scope <scope>] [--yes]
     python3 -m mlz schema   --out schemas
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
@@ -97,11 +98,12 @@ def main() -> int:
     sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
-    i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners"])
+    i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
-    i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish, runners)")
+    i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish, runners, subscriptions)")
+    i.add_argument("--billing-scope", help="subscriptions: the billing scope vending makes subscriptions in, as billing_scope says")
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
-    i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, or move the subscriptions, without asking")
+    i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, move the subscriptions, or give the billing role, without asking")
     args = parser.parse_args()
 
     if args.role == "schema":
@@ -128,6 +130,10 @@ def main() -> int:
                     terraform = install.Terraform(work, args.tenant)
                     if args.step == "bootstrap":
                         install.step_bootstrap(GitHub(), terraform, args.settings, args.yes)
+                    elif args.step == "subscriptions":
+                        if not args.billing_scope:
+                            raise ConfigError("install subscriptions needs --billing-scope <the billing scope, as billing_scope in the vending repo>.")
+                        install.step_subscriptions(install.Azure(args.tenant), terraform, args.settings, args.billing_scope, args.tenant, args.yes)
                     else:
                         install.step_publish(GitHub(), terraform, args.settings)
         except ConfigError as error:
