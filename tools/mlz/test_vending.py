@@ -301,6 +301,11 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "decommission: true\n")
         problems = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("landing-zones/payments/_workload: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        # Also when the landing zone's own file sets it too, which hides the layer above.
+        self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/_workload: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD)
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
         self.write("landing-zones/payments/dev.yaml", "decommission: false\n" + DEV)
         self.assertIn("landing-zones/payments/dev: decommission is true or not there at all, not False.", self.problems(build, GOVERNANCE, PLATFORM))

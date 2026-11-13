@@ -165,10 +165,12 @@ owner: payments@demo.example
 - **Its range stays held:** the IP allocator gives it to no one, and vending's contract lists the landing zone
   as held. The platform drops its firewall rules from Azure on its next run, before the range can go to
   another landing zone, and its rules file only warns that it can be deleted (`docs/platform.md`).
-- **Then the files go.** Once the destroy is applied: delete `firewall/landing-zones/<key>.yaml` in the
-  platform repo, then delete the landing zone's file here and release its range,
-  `python3 -m mlz release --repo . <key>`, in one pull request. In that order: released, the landing zone
-  leaves vending's contract, and a rules file still there would stop the platform's check.
+- **Then the files go.** Once the destroy is applied, and the platform's next apply has taken the landing
+  zone's rules out of Azure (its firewall plan shows them removed; deleting the rules file alone does not):
+  delete `firewall/landing-zones/<key>.yaml` in the platform repo, then delete the landing zone's file here
+  and release its range, `python3 -m mlz release --repo . <key>`, in one pull request. In that order:
+  released, the range may go to a new landing zone, which must not inherit the old one's rules, and the
+  landing zone leaves vending's contract, so a rules file still there would stop the platform's check.
 
 ## Operating notes
 
