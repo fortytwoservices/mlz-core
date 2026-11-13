@@ -737,7 +737,7 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         # Made: no ID until vending's apply makes it, named from the template and recorded like the other names.
         self.assertIsNone(configs["payments-dev"]["subscription_id"])
-        self.assertEqual(configs["payments-dev"]["subscription"], {"billing_scope": ea, "name": "sub-demo-pay-dv-nwe-01"})
+        self.assertEqual(configs["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": ea, "name": "sub-demo-pay-dv-nwe-01"})
         self.assertIn("payments-dev:\n  network_resource_group: rg-demo-pay-net-dv-nwe-01\n", (self.repo / NAMES).read_text())
         self.assertIn("  subscription: sub-demo-pay-dv-nwe-01\n", (self.repo / NAMES).read_text())
         # Handed over: the billing scope above is not used, and nothing is made.
@@ -750,13 +750,14 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/payments/dev: subscription name Payments Dev has characters Azure does not allow there", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/dev.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
         self.allocate()
-        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["subscription"], {"billing_scope": mca, "name": "payments_dev"})
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": mca, "name": "payments_dev"})
         self.assertNotIn("  subscription: ", (self.repo / NAMES).read_text())
-        # Two landing zones making one under the same name would get one subscription between them.
-        self.write("landing-zones/payments/prod.yaml", f"billing_scope: {mca}\nnames:\n  subscription: PAYMENTS_DEV\n")
+        # Two landing zones with one display name still get a subscription each: each has its own alias.
+        self.write("landing-zones/payments/prod.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
         self.allocate()
-        self.assertIn("landing-zones: payments-dev, payments-prod would all make the subscription payments_dev, and an alias names one "
-                      "subscription in the tenant; set names.subscription apart in their files.", self.problems(build, GOVERNANCE, PLATFORM))
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual((configs["payments-dev"]["subscription"]["alias"], configs["payments-prod"]["subscription"]["alias"]),
+                         ("demo-payments-dev", "demo-payments-prod"))
 
     def test_a_billing_scope_is_an_enrollment_account_or_an_invoice_section(self):
         self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"), "EA")
@@ -768,6 +769,12 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/payments/dev: subscription is required, or billing_scope for vending to make one", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a/billingProfiles/P\n")
         self.assertIn("billing_scope", self.problems(build, GOVERNANCE, PLATFORM))
+        # An alias longer than Azure takes, from the longest root and names there are: refused, not cut.
+        workload, env = "w" * 24, "e" * 24
+        self.write(f"landing-zones/{workload}/{env}.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/1/enrollmentAccounts/2\n")
+        alias = f"{'r' * 16}-{workload}-{env}"
+        self.assertIn(f"landing-zones/{workload}/{env}: the alias vending makes its subscription by, {alias}, is more than Azure's 63 characters",
+                      self.problems(build, {**GOVERNANCE, "root": "r" * 16}, PLATFORM))
         # A CSP customer's subscription is made in Fortytwo's Partner Center, then handed over.
         self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c\n")
         self.assertIn("a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center", self.problems(build, GOVERNANCE, PLATFORM))

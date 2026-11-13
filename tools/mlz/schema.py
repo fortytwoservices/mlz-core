@@ -106,7 +106,7 @@ def landing_zone() -> dict:
         "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.", pattern="^[a-z0-9]{2,5}$"),
         "names": or_empty(mapping({
             **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
-            vending.SUBSCRIPTION: text("An explicit name for the subscription vending makes (its alias and display name), instead of the template's. Changed once it is made, only its display name follows."),
+            vending.SUBSCRIPTION: text("An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."),
             "network_security_groups": or_empty({"description": "An explicit name for a subnet's NSG, by the subnet's name.", "type": "object", "additionalProperties": {"type": "string"}}),
         }, "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.")),
         "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},

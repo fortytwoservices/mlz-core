@@ -104,7 +104,7 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", "budget: null\n")
         self.allocate()
         rows = self.rows()
-        self.assertEqual(rows["subscription"], ("made by vending", "none is handed over: vending's apply makes it, billed where billing_scope says (EA)"))
+        self.assertEqual(rows["subscription"], ("made by vending", "none is handed over: vending's apply makes it, by the alias demo-payments-prod, billed where billing_scope says (EA)"))
         self.assertEqual(rows["billing_scope"], (ea, "landing-zones/_defaults/all.yaml"))
         self.assertEqual(rows["name subscription"], ("sub-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
         lz = vending.landing_zones(self.repo)["payments-prod"]

@@ -3,6 +3,7 @@
   "root_id": "mlz",
   "subscription_id": null,
   "subscription": {
+    "alias": "mlz-payments-prod",
     "billing_scope": "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321",
     "name": "sub-acme-pay-pd-nwe-01"
   },

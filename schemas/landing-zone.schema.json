@@ -184,7 +184,7 @@
         },
         "subscription": {
           "type": "string",
-          "description": "An explicit name for the subscription vending makes (its alias and display name), instead of the template's. Changed once it is made, only its display name follows."
+          "description": "An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."
         },
         "network_security_groups": {
           "description": "An explicit name for a subnet's NSG, by the subnet's name.",

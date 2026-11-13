@@ -192,10 +192,12 @@ A landing zone's subscription is handed over, or made by vending:
   before the file is merged (`docs/bootstrap.md`); vending places it in its management group and changes nothing
   else about it.
 - **Made by vending:** no `subscription`, and a `billing_scope`, usually once for every landing zone in
-  `_defaults/all.yaml`. Vending's apply makes the subscription there, straight into its management group,
-  named from the template (`sub-acme-pay-pd-nwe-01`, its alias and display name, recorded in `_generated/names.yaml`,
-  `docs/naming.md`), tagged as the landing zone, as a Production subscription. The plan shows it to be made, and
-  everything in it waits for its ID. A landing zone may still set `subscription` to hand one over instead.
+  `_defaults/all.yaml`. Vending's apply makes the subscription there, straight into its management group, as a
+  Production subscription tagged as the landing zone. Its display name comes from the template
+  (`sub-acme-pay-pd-nwe-01`, recorded in `_generated/names.yaml`, `docs/naming.md`). Its alias, the handle Azure
+  makes it by, is `<root>-<key>` (`mlz-payments-prod`): unique in the tenant, and never changed, so the subscription
+  is made once whatever it is named later. The plan shows it to be made, and everything in it waits for its ID. A
+  landing zone may still set `subscription` to hand one over instead.
 
 ```yaml
 # landing-zones/_defaults/all.yaml
@@ -214,15 +216,21 @@ nothing else in that landing zone is made.
 
 **Azure makes vending's apply identity the new subscription's Owner**, besides the rights it has from the tree.
 
-**Vending never cancels a subscription it made.** Decommissioned, it moves to `<root>-decommissioned` like a
-handed-over one ([below](#decommissioning-a-landing-zone)); cancelling it is the customer's call, in Azure. Two
-changes do nothing or are refused:
+**Vending never reads the alias back, and never cancels a subscription.** Azure lets only those who may make an alias
+read it (`Microsoft.Subscription/aliases/write`, which no Reader role has: tested in the TCAF tenant on 13 November
+2026), and the plans run as the read-only plan identity. So vending makes the subscription with one request to its
+alias, which Terraform keeps the answer of and never sends again, rather than with sub-vending's alias resource,
+which every plan would read. From then on sub-vending places, names and tags the subscription by its ID.
 
+- **Decommissioned**, it moves to `<root>-decommissioned` like a handed-over one
+  ([below](#decommissioning-a-landing-zone)); cancelling it is the customer's call, in Azure.
+- **`subscription: <its ID>` added later** hands it over: vending stops naming and tagging it, and changes nothing in it.
 - **A changed `billing_scope`** moves no subscription already made: Azure bills it where it was made until its billing
-  is transferred there. Only subscriptions made from then on are billed to the new scope.
-- **`subscription: <its ID>` added later** would have the module that made the subscription cancel it, so vending's
-  plan refuses it ("Instance cannot be destroyed", `terraform_data.made_subscription`). A subscription vending made
-  stays vending's.
+  is transferred. Only subscriptions made from then on are billed to the new scope.
+- **A landing zone of the same key later**, after this one was decommissioned and released, has the same alias, and
+  Azure answers it with the old subscription, cancelled or not. To give it a new one, delete the alias first, as
+  someone who may make subscriptions there (deleting an alias leaves its subscription as it is):
+  `az rest --method delete --url "https://management.azure.com/providers/Microsoft.Subscription/aliases/<root>-<key>?api-version=2021-10-01"`.
 
 ## The workload repo
 

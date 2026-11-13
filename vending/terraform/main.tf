@@ -3,10 +3,11 @@ locals {
   # the hub to peer with, and every name, from the customer's template or the landing zone's own (docs/naming.md).
   lz = jsondecode(file(var.config_file))
 
-  # Handed over (subscription_id), or made here (subscription: its billing scope and name), known once it is made.
-  subscription = "/subscriptions/${module.vending.subscription_id}"
-  names        = local.lz.names
-  github       = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
+  # Handed over (subscription_id), or made here (subscription: its alias, billing scope and name), known once made.
+  subscription_id = local.lz.subscription == null ? local.lz.subscription_id : time_sleep.subscription["made"].triggers.subscription_id
+  subscription    = "/subscriptions/${local.subscription_id}"
+  names           = local.lz.names
+  github          = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
 
   # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
   # the NSGs, the route table, the deploy identity and its role, the budget and the two resource groups (with
@@ -112,7 +113,7 @@ data "azapi_client_config" "current" {}
 resource "github_actions_variable" "workload" {
   for_each = local.repo_made ? {
     AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
-    AZURE_SUBSCRIPTION_ID   = module.vending.subscription_id
+    AZURE_SUBSCRIPTION_ID   = local.subscription_id
     AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
     TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
     TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
@@ -251,6 +252,46 @@ moved {
   to   = module.route_table["live"]
 }
 
+# A subscription vending makes: one PUT of its alias, by this apply's identity, which the customer's billing owner lets
+# make subscriptions where the billing scope says (docs/vending.md); Azure makes it the subscription's owner. Not
+# sub-vending's alias, which every plan reads back: Azure lets only those who may make an alias read it
+# (Microsoft.Subscription/aliases/write, tested in TCAF on 13 November 2026), and the plan identity may not. An action
+# is never read back, and destroyed it does nothing, so vending never cancels a subscription. The alias is the root
+# and the landing zone's key, which never change, so it is made once; Azure keeps an alias's properties as made, so
+# a changed body is not sent again, and sub-vending names and tags the subscription from then on.
+resource "azapi_resource_action" "subscription" {
+  for_each = local.lz.subscription == null ? {} : { made = local.lz.subscription }
+
+  type        = "Microsoft.Subscription/aliases@2021-10-01"
+  resource_id = "/providers/Microsoft.Subscription/aliases/${each.value.alias}"
+  method      = "PUT"
+  when        = "apply" # only: nothing on destroy
+  body = {
+    properties = {
+      displayName  = each.value.name
+      workload     = "Production"
+      billingScope = each.value.billing_scope
+      additionalProperties = {
+        managementGroupId = "/providers/Microsoft.Management/managementGroups/${local.lz.management_group_id}"
+        tags              = local.lz.tags
+      }
+    }
+  }
+  response_export_values = ["properties.subscriptionId"]
+
+  lifecycle {
+    ignore_changes = [body]
+  }
+}
+
+# A new subscription takes a while to take its first writes: its ID goes on only after this, as sub-vending waits too.
+resource "time_sleep" "subscription" {
+  for_each = azapi_resource_action.subscription
+
+  create_duration = "30s"
+  triggers        = { subscription_id = each.value.output.properties.subscriptionId }
+}
+
 # Budgets start on the first of the month the landing zone was vended, and stay there.
 resource "time_static" "budget_start" {}
 
@@ -261,15 +302,12 @@ module "vending" {
   location         = local.lz.location
   enable_telemetry = false
 
-  # A subscription handed over is placed, not changed. One without is made where the billing scope says, by this
-  # apply's identity, which the customer's billing owner lets create subscriptions there (docs/vending.md); Azure
-  # makes it the subscription's owner. Made, it is named and tagged here, and never cancelled (made_subscription).
-  subscription_alias_enabled                        = local.lz.subscription != null
-  subscription_alias_name                           = try(local.lz.subscription.name, null)
+  # A subscription handed over is placed, not changed; one vending made (azapi_resource_action.subscription) is named
+  # and tagged too.
+  subscription_alias_enabled                        = false
+  subscription_id                                   = local.subscription_id
+  subscription_update_existing                      = local.lz.subscription != null
   subscription_display_name                         = try(local.lz.subscription.name, null)
-  subscription_billing_scope                        = try(local.lz.subscription.billing_scope, null)
-  subscription_workload                             = local.lz.subscription == null ? null : "Production"
-  subscription_id                                   = local.lz.subscription_id
   subscription_management_group_association_enabled = true
   subscription_management_group_id                  = local.lz.management_group_id
   subscription_tags                                 = local.lz.tags
@@ -384,16 +422,5 @@ module "vending" {
         }
       }
     }
-  }
-}
-
-# The sub-vending module cancels a subscription it made once it no longer makes it: a landing zone given
-# subscription: <its ID> after vending made its subscription would have it cancelled. This refuses that plan
-# ("Instance cannot be destroyed"): a subscription vending made stays vending's, decommissioned or not (docs/vending.md).
-resource "terraform_data" "made_subscription" {
-  for_each = local.lz.subscription == null ? {} : { made = true }
-
-  lifecycle {
-    prevent_destroy = true
   }
 }

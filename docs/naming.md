@@ -65,7 +65,7 @@ landing zone's environment (its file name) and its region:
 | The workload repo's plan identity | `plan` | `id-acme-pay-plan-pd-nwe-01` |
 | Its state's resource group and storage account | `state` | `rg-acme-pay-state-pd-nwe-01`, `stacmepaystatepdnwe01` |
 | The workload repo itself, when vending makes it | `customer.yaml`'s `naming.repository` | `payments-prod` |
-| The subscription, when vending makes it: its alias and display name | none | `sub-acme-pay-pd-nwe-01` |
+| The subscription, when vending makes it: its display name (its alias is `<root>-<key>`, `docs/vending.md`) | none | `sub-acme-pay-pd-nwe-01` |
 
 Subnets (`snet-<name>`) and peerings (`peer-<key>-to-hub`, `peer-hub-to-<key>`) are named inside their network,
 so they keep that pattern.
@@ -85,7 +85,7 @@ so they keep that pattern.
   ```
 
   A changed name replaces the resource: the plan shows it deleted and created again. The subscription is the
-  exception: Azure keeps the alias's name, so only its display name changes.
+  exception: only its display name changes, as it is made by an alias that never does.
 - Both resource groups, and every NSG, need names of their own. A template without `{purpose}` gives them one
   each, so the check refuses it until `{purpose}` is back or one of them is named under `names:`.
 - `python3 -m mlz explain <key>` shows every name and where it came from.

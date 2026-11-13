@@ -35,8 +35,10 @@ BILLING_SCOPES = {
     "MCA": re.compile(BILLING_ACCOUNT + r"/billingProfiles/[^/]+/invoiceSections/[^/]+"),
     "MPA": re.compile(BILLING_ACCOUNT + r"/customers/[^/]+"),
 }
-# Recorded beside the landing zone's other names: the subscription vending makes, its alias and display name.
+# Recorded beside the landing zone's other names: the display name of the subscription vending makes. Its alias,
+# which makes it once and never changes, is the root's and the landing zone's key (subscription_alias).
 SUBSCRIPTION = "subscription"
+ALIAS_LENGTH = 63  # Microsoft.Subscription/aliases, as Azure/avm-ptn-alz-sub-vending documents it
 # What vending names in a landing zone from the customer's template (docs/naming.md), by the config's key: the type,
 # and the purpose that tells apart two of one type. An explicit name under names: in the landing zone's file wins.
 NAMED = {
@@ -188,6 +190,9 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     elif agreement(billing) == "MPA":
         problems.append(f"{at('billing_scope')}: a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center, "
                         "not by vending: make it there, then hand it over with subscription: <id> (docs/vending.md).")
+    if makes_subscription(lz) and len(subscription_alias(governance["root"], key)) > ALIAS_LENGTH:
+        problems.append(f"{where}: the alias vending makes its subscription by, {subscription_alias(governance['root'], key)}, is more than "
+                        f"Azure's {ALIAS_LENGTH} characters; give the workload or the environment a shorter name, or hand a subscription over.")
     for single in ("owner", "archetype", "location", "subscription"):
         if s.get(single) is not None and not isinstance(s[single], str):
             problems.append(f"{at(single)}: {single} is one value, not {s[single]!r}.")
@@ -551,15 +556,6 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 problems.append(f"{lz['where']}: its workload repo's values: {error}")
     subscriptions = [str(z["settings"].get("subscription") or "").lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
-    # An alias names one subscription in the whole tenant: two landing zones making one under the same name would get
-    # one subscription between them. Azure ignores case in it.
-    aliases: dict[str, list[str]] = {}
-    for key, lz in zones.items():
-        if makes_subscription(lz) and isinstance((names.get(key) or {}).get(SUBSCRIPTION), str):
-            aliases.setdefault(names[key][SUBSCRIPTION].lower(), []).append(key)
-    problems += [f"landing-zones: {', '.join(sorted(keys))} would all make the subscription {names[keys[0]][SUBSCRIPTION]}, and an alias "
-                 "names one subscription in the tenant; set names.subscription apart in their files."
-                 for keys in aliases.values() if len(keys) > 1]
     if problems:
         raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
 
@@ -573,7 +569,8 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "root_id": governance["root"],
             # Handed over, or made by vending's apply, where the billing scope says (subscription_id null until then).
             "subscription_id": s["subscription"].lower() if s.get("subscription") else None,
-            "subscription": {"billing_scope": s["billing_scope"], "name": names[key][SUBSCRIPTION]} if makes_subscription(lz) else None,
+            "subscription": {"alias": subscription_alias(governance["root"], key), "billing_scope": s["billing_scope"],
+                             "name": names[key][SUBSCRIPTION]} if makes_subscription(lz) else None,
             # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
             "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
             "location": s["location"],
@@ -630,6 +627,13 @@ def agreement(billing_scope: object) -> str | None:
     if not isinstance(billing_scope, str):
         return None
     return next((name for name, form in BILLING_SCOPES.items() if form.fullmatch(billing_scope)), None)
+
+
+def subscription_alias(root: str, key: str) -> str:
+    """The alias vending makes a landing zone's subscription by: its root and key, unique in the tenant and never
+    changed, so the subscription is made once whatever it is named. Azure keeps an alias after the subscription it made
+    is cancelled: a landing zone of the same key later would get that subscription again (docs/vending.md)."""
+    return f"{root}-{key}"
 
 
 def makes_subscription(lz: dict) -> bool:
@@ -719,8 +723,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         names[REPOSITORY] = one(REPOSITORY, REPOSITORY, None, {}, kept)
         if names[REPOSITORY] is not None:
             entry[REPOSITORY] = names[REPOSITORY]
-    # The subscription, when vending makes it: its alias and display name. Recorded like the rest; renewed, only its
-    # display name changes, as Azure keeps an alias's name.
+    # The subscription, when vending makes it: its display name, recorded like the rest; its alias never changes.
     if makes_subscription(lz):
         names[SUBSCRIPTION] = one(SUBSCRIPTION, "subscription", None, explicit, kept)
         if SUBSCRIPTION not in explicit and names[SUBSCRIPTION] is not None:

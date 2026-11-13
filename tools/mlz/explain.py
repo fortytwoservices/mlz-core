@@ -80,7 +80,8 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
     filled = [(k, "not set", "required: set it in one of the layers") for k in REQUIRED
               if settings.get(k) in (None, "") and not (k == "subscription" and vending.makes_subscription(lz))]
     if vending.makes_subscription(lz):
-        filled.append(("subscription", "made by vending", f"none is handed over: vending's apply makes it, billed where billing_scope says ({vending.agreement(settings['billing_scope'])})"))
+        alias = f", by the alias {vending.subscription_alias(governance['root'], key)}" if governance is not None else ""
+        filled.append(("subscription", "made by vending", f"none is handed over: vending's apply makes it{alias}, billed where billing_scope says ({vending.agreement(settings['billing_scope'])})"))
     budget, network = settings.get("budget"), settings.get("network")
     budget, network = budget if isinstance(budget, dict) else {}, network if isinstance(network, dict) else {}
     if budget.get("monthly") is None:
