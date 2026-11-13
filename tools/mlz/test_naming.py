@@ -123,8 +123,32 @@ class SettingsTest(unittest.TestCase):
         self.assertIn("naming.environments.hotfix is 'hot-fix'", self.problems(environments={"hotfix": "hot-fix"}))
         self.assertIn("naming.regions.atlantis is not an Azure region", self.problems(regions={"atlantis": "atl"}))
         self.assertIn("gives westeurope the code nwe, which norwayeast has too", self.problems(regions={"westeurope": "nwe"}))
-        for key, value in (("templates", "oops"), ("environments", ["prod"]), ("regions", "weu")):
+        self.assertIn("naming.platform.firewall is not a part of the platform; use hub, dns, management, identity, bootstrap", self.problems(platform={"firewall": "fw"}))
+        self.assertIn("naming.platform.hub is 'connectivity'; it must be 2 to 5", self.problems(platform={"hub": "connectivity"}))
+        self.assertIn("naming.platform gives identity the short name mgt, which management has too", self.problems(platform={"identity": "mgt"}))
+        for key, value in (("templates", "oops"), ("environments", ["prod"]), ("regions", "weu"), ("platform", "hub")):
             self.assertIn(f"naming.{key} maps each name to its value, not {value!r}", self.problems(**{key: value}))
+
+
+class PlatformTest(unittest.TestCase):
+    def test_each_part_of_the_platform_is_an_app_in_prod(self):
+        n = naming.settings({"naming": {"org": "acme"}}, "mlz")
+        name = lambda *args: naming.platform_name(n, *args)
+        self.assertEqual(name("hub", "virtual_network", "norwayeast"), "vnet-acme-hub-pd-nwe-01")
+        self.assertEqual(name("hub", "public_ip_address", "norwayeast", "afw"), "pip-acme-hub-afw-pd-nwe-01")
+        self.assertEqual(name("management", "resource_group", "norwayeast", "net"), "rg-acme-mgt-net-pd-nwe-01")
+        self.assertEqual(name("management", "data_collection_rule", "norwayeast", "changetracking"), "dcr-acme-mgt-changetracking-pd-nwe-01")
+        self.assertEqual(name("management", "github_network_settings", "norwayeast"), "ghns-acme-mgt-pd-nwe-01")
+        self.assertEqual(name("identity", "virtual_network", "swedencentral"), "vnet-acme-idn-pd-sdc-01")
+        self.assertEqual(name("bootstrap", "user_assigned_identity", "norwayeast", "govplan"), "id-acme-mlz-govplan-pd-nwe-01")
+        self.assertEqual(name("bootstrap", "storage_account", "norwayeast", "state"), "stacmemlzstatepdnwe01")
+        with self.assertRaisesRegex(ConfigError, "'firewall' is not a part of the platform"):
+            name("firewall", "azure_firewall", "norwayeast")
+
+    def test_customer_yaml_changes_a_part_s_short_name_and_prod_s_code(self):
+        n = naming.settings({"naming": {"org": "acme", "platform": {"hub": "con"}, "environments": {"prod": "p"}}}, "mlz")
+        self.assertEqual(naming.platform_name(n, "hub", "azure_firewall", "norwayeast"), "afw-acme-con-p-nwe-01")
+        self.assertEqual(naming.platform_name(n, "dns", "resource_group", "norwayeast"), "rg-acme-dns-p-nwe-01")
 
 
 class RulesTest(unittest.TestCase):
@@ -136,6 +160,14 @@ class RulesTest(unittest.TestCase):
                 re.compile(rule["pattern"])
             self.assertRegex(rule["slug"], r"^[a-z]{2,6}$", kind)
             self.assertIsNotNone(rule["max_length"], kind)
+
+    def test_mlz_core_s_own_rule_where_microsoft_publishes_none(self):
+        for kind in ("data_collection_rule", "github_network_settings"):
+            self.assertIn("Microsoft publishes no naming rule", naming.RULES[kind]["own_rule"])
+            self.assertEqual(naming.check(kind, "dcr-acme-mgt-vm_insights.1"), "dcr-acme-mgt-vm_insights.1")
+            for wrong in ("-dcr", "dcr.", "dcr acme", "x" * 65):
+                with self.assertRaises(ConfigError):
+                    naming.check(kind, wrong)
 
 
 if __name__ == "__main__":

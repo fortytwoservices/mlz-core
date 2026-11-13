@@ -470,6 +470,12 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         if isinstance(short_name(lz), str):  # check() reports one that is not
             shorts.setdefault(short_name(lz), set()).add(lz["workload"])
     problems += [f"landing-zones: workloads {', '.join(sorted(w))} share the short name {k}; give each its own short_name." for k, w in sorted(shorts.items()) if len(w) > 1]
+    # Nor one of the platform's: a landing zone named hub would name its network as the hub's is named.
+    given = (governance.get("naming") or {}).get("platform") if isinstance(governance.get("naming"), dict) else None
+    parts = {**naming.PLATFORM, **(given if isinstance(given, dict) else {})}
+    problems += [f"landing-zones: workload{'s' if len(w) > 1 else ''} {', '.join(sorted(w))} {'have' if len(w) > 1 else 'has'} the short name {k}, "
+                 f"which names the platform's {part} (customer.yaml's naming.platform); give {'each' if len(w) > 1 else 'it'} another short_name."
+                 for k, w in sorted(shorts.items()) for part, code in parts.items() if code == k]
     # Names as recorded when first given, under any the landing zone's file sets: the template is not read here,
     # so a changed one renames nothing until the IP allocator records it for a landing zone (names --renew).
     recorded, names = recorded_names(repo), {}

@@ -40,6 +40,12 @@ length, case, dashes and allowed characters. mlz-core adds what the catalog's pa
 hyphens in a row in a key vault's name, no period at the end of a resource group's), and takes its short
 names from CAF. `tools/dev/name_rules.py` writes the file from the catalog.
 
+Two types have no rule anywhere: data collection rules (the catalog's entry has no lengths) and GitHub's network
+settings (not in the catalog). Microsoft publishes none for either: they are not on the naming rules page, the REST
+API specs give the name no pattern or length, and azurerm only checks that it is not empty. For those mlz-core sets
+its own, narrow enough to be safe: 1 to 64 letters, digits, hyphens, underscores and periods, starting and ending
+with a letter or digit. It may refuse a name Azure would take, never the other way round.
+
 **A name that does not fit is refused, never cut**: two long names cut short can come out the same. The
 message gives the name, its length and how far over it is. The way out is a shorter short name, a template of
 its own for that type, or an explicit name. Storage accounts and key vaults allow only 24 characters, so the
@@ -124,11 +130,18 @@ naming:
     hotfix: hf
   regions:                     # replacing Microsoft's code, before the first deployment only
     westeurope: weu
+  platform:                    # the platform's parts' short names, replacing mlz-core's
+    hub: con
 ```
 
 mlz-core's environments: `dev: dv`, `test: te`, `uat: ut`, `sit: st`, `qa: qa`, `preprod: pp`,
 `sandbox: sb`, `dr: dr`, `prod: pd`. Regions take Microsoft's codes (`nwe`, `sdc`, `we`, `ne`, …); two regions
 may not share one.
+
+The platform's parts are each named as an app of their own, in `prod`: `hub`, `dns`, `mgt` (management), `idn`
+(identity) and `mlz` (the bootstrap), as in `vnet-acme-hub-pd-nwe-01`, `rg-acme-mgt-net-pd-nwe-01` or
+`id-acme-mlz-govplan-pd-nwe-01`. `naming.platform` gives a part another short name, 2 to 5, each its own. A workload
+may not take one of them as its short name: a landing zone named `hub` would name its network as the hub's is named.
 
 The section is checked where it is written, in governance's run (`governance/scripts/render_library.py`), and
 governance's contract carries it as written to the repos that name things with it. A root ID longer than four

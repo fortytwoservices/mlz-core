@@ -10,8 +10,8 @@ case where the type needs it, and a length and characters the type allows. A nam
 refused, never cut: two long names cut short can come out the same.
 
 customer.yaml's naming section sets the customer's code, the template (and one per type, for the 24-character
-ones), and adds to or changes the environments' and regions' short names. An explicit name for one resource
-wins over all of it, and is checked against the same rules.
+ones), and adds to or changes the environments' and regions' short names, and the platform's parts' short names. An
+explicit name for one resource wins over all of it, and is checked against the same rules.
 """
 
 from __future__ import annotations
@@ -36,7 +36,11 @@ ENVIRONMENTS = {"dev": "dv", "test": "te", "uat": "ut", "sit": "st", "qa": "qa",
 LIMITS = {"org": (2, 4), "app": (2, 5), "purpose": (1, 20), "env": (1, 4), "region": (2, 5)}
 SHORT = re.compile(r"^[a-z0-9]+$")
 PURPOSE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")  # as a subnet's name: hyphens inside, any number
-SETTINGS = {"org", "template", "templates", "environments", "regions"}
+SETTINGS = {"org", "template", "templates", "environments", "regions", "platform"}
+# The platform's parts, each named as an app of its own: vnet-acme-hub-pd-nwe-01, rg-acme-mgt-net-pd-nwe-01. Their
+# environment is prod, so its code follows naming.environments. customer.yaml's naming.platform changes any.
+PLATFORM = {"hub": "hub", "dns": "dns", "management": "mgt", "identity": "idn", "bootstrap": "mlz"}
+PLATFORM_ENVIRONMENT = "prod"
 RULES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json").read_text())["types"]
 PART = re.compile(r"\{([a-z]+)\}|(-)|([a-z0-9]+)")
 
@@ -49,6 +53,7 @@ class Naming:
     templates: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     environments: dict[str, str] = field(default_factory=lambda: dict(ENVIRONMENTS))
     regions: dict[str, str] = field(default_factory=lambda: dict(REGION_CODES))
+    platform: dict[str, str] = field(default_factory=lambda: dict(PLATFORM))
 
 
 def rules_for(kind: str) -> dict:
@@ -126,6 +131,17 @@ def settings(customer: dict, root_id: str) -> Naming:
             problems.append(f"customer.yaml: naming.regions.{region} is not an Azure region (modules/naming/region-codes.json).")
         elif short(f"customer.yaml: naming.regions.{region}", "region", code, problems):
             regions[region] = code
+    platform = dict(PLATFORM)
+    for part, code in mapping(given, "platform", problems).items():
+        if part not in PLATFORM:
+            problems.append(f"customer.yaml: naming.platform.{part} is not a part of the platform; use {', '.join(PLATFORM)}.")
+        elif short(f"customer.yaml: naming.platform.{part}", "app", code, problems):
+            platform[part] = code
+    parts = {}
+    for part, code in platform.items():
+        if code in parts:
+            problems.append(f"customer.yaml: naming.platform gives {part} the short name {code}, which {parts[code]} has too; every part needs its own.")
+        parts.setdefault(code, part)
     taken = {}
     for region, code in sorted(regions.items()):
         if code in taken:
@@ -133,7 +149,7 @@ def settings(customer: dict, root_id: str) -> Naming:
         taken.setdefault(code, region)
     if problems:
         raise ConfigError("naming settings are not valid:\n  " + "\n  ".join(problems))
-    return Naming(org=org, template=template, templates=templates, environments=environments, regions=regions)
+    return Naming(org=org, template=template, templates=templates, environments=environments, regions=regions, platform=platform)
 
 
 def short(where: str, token: str, value: object, problems: list[str]) -> bool:
@@ -177,6 +193,13 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
             del parts[index]
     name = "".join(values[v] if k == "token" else ("-" if rules["dashes"] else "") if k == "dash" else v for k, v in parts)
     return check(kind, name.lower() if rules["lowercase"] else name)
+
+
+def platform_name(naming: Naming, part: str, kind: str, region: str, purpose: str | None = None) -> str:
+    """The name of one of the platform's resources: its part (PLATFORM) is the app, its environment prod."""
+    if part not in PLATFORM:
+        raise ConfigError(f"{part!r} is not a part of the platform; use {', '.join(PLATFORM)}.")
+    return render(naming, kind, app=naming.platform[part], env=PLATFORM_ENVIRONMENT, region=region, purpose=purpose)
 
 
 def check(kind: str, name: str) -> str:

@@ -510,6 +510,19 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/_defaults/all: short_name is the workload's, so it goes in landing-zones/payments/_workload.yaml.", problems)
         self.assertNotIn("landing-zones/payments/_workload:", problems)
 
+    def test_a_workload_may_not_take_a_platform_part_s_short_name(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: hub"))
+        self.allocate()
+        self.assertIn("landing-zones: workload payments has the short name hub, which names the platform's hub (customer.yaml's naming.platform); "
+                      "give it another short_name.", self.problems(build, GOVERNANCE, PLATFORM))
+        # customer.yaml gives the hub another: hub is free, con is not.
+        moved = {**GOVERNANCE, "naming": {"platform": {"hub": "con"}}}
+        build(self.repo, moved, PLATFORM)
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: con"))
+        (self.repo / NAMES).unlink()
+        self.allocate(governance=moved)
+        self.assertIn("has the short name con, which names the platform's hub", self.problems(build, moved, PLATFORM))
+
     def test_a_short_name_that_is_not_text_is_reported_not_a_crash(self):
         self.allocate()
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))

@@ -5,7 +5,13 @@
 Only lengths, case, dashes and allowed characters come from the catalog. The short names are CAF's, set here,
 since some catalog slugs are unusable (a blob container's is storage-account-blob-service-container). Rules the
 catalog's patterns leave out are added here (no_double_hyphen, no_trailing_period). A type whose catalog entry is incomplete or
-wrong (virtual machines: no dashes; data collection rules: no lengths) is left out until checked another way.
+wrong (virtual machines: no dashes) is left out until checked another way.
+
+Two types mlz-core names have no rule anywhere: data collection rules (the catalog's entry has no lengths) and
+GitHub's network settings (not in the catalog). Microsoft publishes none for either: they are not on the resource
+naming rules page, the REST API specs give the name no pattern or length, and azurerm only checks that it is not
+empty. For those mlz-core sets a rule of its own (OWN), narrow enough to hold on any Azure resource it knows of:
+it may refuse a name Azure would take, never the other way round.
 """
 
 from __future__ import annotations
@@ -38,6 +44,14 @@ TYPES = {
     "dns_resolver_inbound_endpoint": ("dns_resolver_inbound_endpoint", "in", {}),
     "dns_resolver_outbound_endpoint": ("dns_resolver_outbound_endpoint", "out", {}),
 }
+
+# mlz-core's key: (the CAF short name, or mlz-core's where CAF has none; the resource type). Each takes CONSERVATIVE.
+OWN = {
+    "data_collection_rule": ("dcr", "Microsoft.Insights/dataCollectionRules"),
+    "github_network_settings": ("ghns", "GitHub.Network/networkSettings"),
+}
+CONSERVATIVE = {"min_length": 1, "max_length": 64, "dashes": True, "lowercase": False, "global": False,
+                "pattern": r"^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$"}
 
 
 def entries(catalog: dict) -> dict[str, dict]:
@@ -73,6 +87,8 @@ def main(path: str) -> None:
         types[key] = {"slug": slug, "min_length": rule["min_length"], "max_length": rule["max_length"],
                       "dashes": rule["dashes"], "lowercase": rule["lowercase"], "global": rule["scope"] == "global",
                       **({"pattern": rule["regex"]} if not allowed else allowed), **extra}
+    for key, (slug, resource_type) in OWN.items():
+        types[key] = {"slug": slug, **CONSERVATIVE, "own_rule": f"Microsoft publishes no naming rule for {resource_type}: mlz-core's own"}
     out = Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json"
     out.write_text(json.dumps({"source": CATALOG, "types": types}, indent=2) + "\n")
     print(f"wrote {out}: {len(types)} types")

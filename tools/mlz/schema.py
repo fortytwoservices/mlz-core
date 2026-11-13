@@ -187,6 +187,7 @@ def customer() -> dict:
             "templates": or_empty({"description": "A template for one type, for the 24-character ones (storage_account, key_vault).", "type": "object", "propertyNames": {"enum": sorted(naming.RULES)}, "additionalProperties": {"type": "string"}}),
             "environments": or_empty({"description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.ENVIRONMENTS.items()) + ").", "type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{1,4}$"}}),
             "regions": or_empty({"description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.", "type": "object", "propertyNames": {"enum": sorted(naming.REGION_CODES)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
+            "platform": or_empty({"description": "A part of the platform to its short name in names, replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.PLATFORM.items()) + "). The platform's environment is prod.", "type": "object", "propertyNames": {"enum": list(naming.PLATFORM)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
         }, "How mlz-core names what it creates (docs/naming.md).")),
     }
     return {
