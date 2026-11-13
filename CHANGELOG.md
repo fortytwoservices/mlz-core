@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/fortytwoservices/mlz-core/compare/v0.3.7...v0.3.8) (2026-11-13)
+
+
+### Features
+
+* **governance:** customer.yaml's naming section, checked by governance and published in its contract ([#57](https://github.com/fortytwoservices/mlz-core/issues/57)) ([17b8812](https://github.com/fortytwoservices/mlz-core/commit/17b8812f536c6844df57c2c12572cdb19b17be4d))
+
 ## [0.3.7](https://github.com/fortytwoservices/mlz-core/compare/v0.3.6...v0.3.7) (2026-11-13)
 
 
