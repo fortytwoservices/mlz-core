@@ -6,15 +6,10 @@
 locals {
   # Microsoft's geo codes (Azure/avm-utl-regions), the same ones the az-tf-mlz connectivity modules put
   # in their names, so a customer's names share one set of codes. A region missing here is an error.
-  # Checked against avm-utl-regions v0.13.0 (locals.geo.codes.tf.json).
-  region_codes = {
-    norwayeast    = "nwe"
-    norwaywest    = "nww"
-    westeurope    = "we"
-    northeurope   = "ne"
-    swedencentral = "sdc"
-  }
-  region = local.region_codes[var.region]
+  # region-codes.json is avm-utl-regions v0.13.0's locals.geo.codes.tf.json, every region; mlz-core's Python
+  # reads the same file. A code is in resource names, so one never changes once used.
+  region_codes = jsondecode(file("${path.module}/region-codes.json"))
+  region       = local.region_codes[var.region]
 
   suffix = "${var.root_id}-%s-${local.region}"
 }
