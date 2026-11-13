@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -551,14 +552,23 @@ class InstallTest(unittest.TestCase):
         text = "\n".join(self.printed)
         self.assertIn("you are not an owner of acme, so nothing was changed", text)
         self.assertIn("gh auth refresh -h github.com -s manage_runners:org,write:network_configurations", text)
-        self.assertIn("gh api -X POST orgs/acme/settings/network-configurations -f 'name=mlz' -f 'compute_service=actions' "
+        self.assertIn("gh api -X POST orgs/acme/settings/network-configurations -f name=mlz -f compute_service=actions "
                       "-f 'network_settings_ids[]=GHID123' --jq .id", text)
         self.assertIn("-F 'selected_repository_ids[]=101' -F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' "
-                      "-F 'allows_public_repositories=false' -f network_configuration_id=\"$configuration\"", text)
-        self.assertIn("-f 'image[id]=ubuntu-latest' -f 'image[source]=github' -f 'size=2-core' -F 'maximum_runners=10' -F runner_group_id=\"$group\"", text)
+                      "-F allows_public_repositories=false -f network_configuration_id=\"$configuration\"", text)
+        self.assertIn("-f 'image[id]=ubuntu-latest' -f 'image[source]=github' -f size=2-core -F maximum_runners=10 -F runner_group_id=\"$group\"", text)
         self.assertIn("as an admin on them. Not yet: the state account has no private endpoint yet, and the runner reaches the state "
                       "only through it: run mlz install bootstrap again, then run these:", text)
         self.assertIn("gh variable set MLZ_RUNS_ON --repo acme/mlz-vending --body mlz", text)
+
+    def test_a_value_from_yaml_stays_one_argument_in_the_commands(self):
+        hostile = "2-core'; printf INJECTED; #"
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", f'  reviewers: [acme-lead]\n  runner_size: "{hostile}"\n'))
+        install.step_runners(RunnersGitHub(owner=False), runners_azure(), self.folder, self.out)
+        line = next(line for block in self.printed for line in block.split("\n") if "hosted-runners" in line)
+        words = shlex.split(line)
+        self.assertIn(f"size={hostile}", words)
+        self.assertNotIn("printf", words)
 
     def test_the_runner_size_comes_from_bootstrap_yaml(self):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", "  reviewers: [acme-lead]\n  runner_size: 4-core\n"))
@@ -620,8 +630,9 @@ class PrepareTest(unittest.TestCase):
 class PagedGitHub(GitHub):
     """GitHub with its API in memory: a listing answers per_page items a page."""
 
-    def __init__(self, listings: dict[str, list]):
-        self.listings, self.posted = listings, []
+    def __init__(self, listings: dict[str, list], wrapped: dict[str, str] | None = None):
+        # wrapped: the listings GitHub answers inside an object, by path, with the key that holds the items.
+        self.listings, self.wrapped, self.posted = listings, wrapped or {}, []
 
     def _api(self, path, method="GET", body=None, missing_ok=False):
         if method == "POST":
@@ -630,7 +641,8 @@ class PagedGitHub(GitHub):
         base, _, query = path.partition("?")
         params = dict(part.split("=") for part in query.split("&"))
         size, page = int(params["per_page"]), int(params["page"])
-        return self.listings[base][(page - 1) * size:page * size]
+        items = self.listings[base][(page - 1) * size:page * size]
+        return {self.wrapped[base]: items} if base in self.wrapped else items
 
 
 class GitHubTest(unittest.TestCase):
@@ -643,6 +655,17 @@ class GitHubTest(unittest.TestCase):
     def test_every_page_of_releases_is_read(self):
         releases = [{"tag_name": f"v0.{n}.0", "body": "", "draft": False, "prerelease": False} for n in range(150)]
         self.assertEqual(len(PagedGitHub({"repos/f/mlz-core/releases": releases}).releases("f/mlz-core")), 150)
+
+    def test_the_runner_settings_past_the_first_page_are_found(self):
+        others = [{"name": f"other-{n}", "id": n} for n in range(150)]
+        paths = {"orgs/acme/settings/network-configurations": "network_configurations", "orgs/acme/actions/runner-groups": "runner_groups",
+                 "orgs/acme/actions/hosted-runners": "runners", "orgs/acme/actions/runner-groups/7/repositories": "repositories"}
+        github = PagedGitHub({path: others + [{"name": "mlz", "id": 999}] for path in paths}, wrapped=paths)
+        self.assertEqual(github.network_configuration("acme", "mlz")["id"], 999)
+        self.assertEqual(github.runner_group("acme", "mlz")["id"], 999)
+        self.assertEqual(github.hosted_runner("acme", "mlz")["id"], 999)
+        self.assertEqual(len(github.runner_group_repositories("acme", 7)), 151)
+        self.assertIsNone(github.runner_group("acme", "missing"))
 
     def test_only_an_active_admin_is_an_owner(self):
         for membership, owner in (({"state": "active", "role": "admin"}, True), ({"state": "active", "role": "member"}, False),

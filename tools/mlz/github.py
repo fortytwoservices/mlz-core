@@ -28,11 +28,13 @@ class GitHub:
             raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
         return json.loads(run.stdout) if run.stdout.strip() else None
 
-    def _pages(self, path: str) -> list:
-        """Every item of a listing, not only its first page."""
+    def _pages(self, path: str, key: str | None = None) -> list:
+        """Every item of a listing, not only its first page: the answer itself, or its `key` for a listing that
+        comes wrapped in an object (network configurations, runner groups, runners)."""
         found, page = [], 1
         while True:
-            batch = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or []
+            answer = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or ({} if key else [])
+            batch = (answer.get(key) or []) if key else answer
             found += batch
             if len(batch) < 100:
                 return found
@@ -143,15 +145,13 @@ class GitHub:
         return found.get("state") == "active" and found.get("role") == "admin"
 
     def network_configuration(self, org: str, name: str) -> dict | None:
-        found = self._api(f"orgs/{org}/settings/network-configurations?per_page=100") or {}
-        return next((c for c in found.get("network_configurations", []) if c["name"] == name), None)
+        return next((c for c in self._pages(f"orgs/{org}/settings/network-configurations", "network_configurations") if c["name"] == name), None)
 
     def create_network_configuration(self, org: str, body: dict) -> dict:
         return self._api(f"orgs/{org}/settings/network-configurations", "POST", body)
 
     def runner_group(self, org: str, name: str) -> dict | None:
-        found = self._api(f"orgs/{org}/actions/runner-groups?per_page=100") or {}
-        return next((g for g in found.get("runner_groups", []) if g["name"] == name), None)
+        return next((g for g in self._pages(f"orgs/{org}/actions/runner-groups", "runner_groups") if g["name"] == name), None)
 
     def create_runner_group(self, org: str, body: dict) -> dict:
         return self._api(f"orgs/{org}/actions/runner-groups", "POST", body)
@@ -160,15 +160,13 @@ class GitHub:
         self._api(f"orgs/{org}/actions/runner-groups/{group}", "PATCH", body)
 
     def runner_group_repositories(self, org: str, group: int) -> set[int]:
-        found = self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories?per_page=100") or {}
-        return {r["id"] for r in found.get("repositories", [])}
+        return {r["id"] for r in self._pages(f"orgs/{org}/actions/runner-groups/{group}/repositories", "repositories")}
 
     def set_runner_group_repositories(self, org: str, group: int, repositories: list[int]) -> None:
         self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories", "PUT", {"selected_repository_ids": repositories})
 
     def hosted_runner(self, org: str, name: str) -> dict | None:
-        found = self._api(f"orgs/{org}/actions/hosted-runners?per_page=100") or {}
-        return next((r for r in found.get("runners", []) if r["name"] == name), None)
+        return next((r for r in self._pages(f"orgs/{org}/actions/hosted-runners", "runners") if r["name"] == name), None)
 
     def create_hosted_runner(self, org: str, body: dict) -> dict:
         return self._api(f"orgs/{org}/actions/hosted-runners", "POST", body)

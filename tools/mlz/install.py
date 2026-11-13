@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -362,7 +363,8 @@ RUNNER_SIZE, MAXIMUM_RUNNERS = "2-core", 10
 
 
 def gh_fields(body: dict, prefix: str = "") -> list[str]:
-    """A request body as gh api fields: -f for text, -F for numbers and booleans, key[] for lists, key[sub]."""
+    """A request body as gh api fields: -f for text, -F for numbers and booleans, key[] for lists, key[sub].
+    Each one quoted for the shell: these are pasted into one by an owner, and some values come from YAML."""
     fields = []
     for key, value in body.items():
         name = f"{prefix}[{key}]" if prefix else key
@@ -372,7 +374,7 @@ def gh_fields(body: dict, prefix: str = "") -> list[str]:
             for item in value if isinstance(value, list) else [value]:
                 flag = "-f" if isinstance(item, str) else "-F"
                 text = str(item).lower() if isinstance(item, bool) else str(item)
-                fields.append(f"{flag} '{name}{'[]' if isinstance(value, list) else ''}={text}'")
+                fields.append(f"{flag} {shlex.quote(name + ('[]' if isinstance(value, list) else '') + '=' + text)}")
     return fields
 
 
@@ -404,16 +406,16 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
     group = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False}
     runner = {"name": RUNNER, "image": {"id": "ubuntu-latest", "source": "github"},
               "size": bootstrap["github"].get("runner_size") or RUNNER_SIZE, "maximum_runners": MAXIMUM_RUNNERS}
-    switch = [f"gh variable set {RUNS_ON} --repo {repo} --body {RUNNER}" for repo in repos.values()]
+    switch = [f"gh variable set {RUNS_ON} --repo {shlex.quote(repo)} --body {RUNNER}" for repo in repos.values()]
 
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the network "
             f"configuration {RUNNER} for {settings_name}, the runner group {RUNNER} for the three repos only, and the runner {RUNNER} in it.\n")
         out("\n".join([
             f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
-            f"configuration=$(gh api -X POST orgs/{org}/settings/network-configurations {' '.join(gh_fields(configuration))} --jq .id)",
-            f"group=$(gh api -X POST orgs/{org}/actions/runner-groups {' '.join(gh_fields(group))} -f network_configuration_id=\"$configuration\" --jq .id)",
-            f"gh api -X POST orgs/{org}/actions/hosted-runners {' '.join(gh_fields(runner))} -F runner_group_id=\"$group\"",
+            f"configuration=$(gh api -X POST {shlex.quote(f'orgs/{org}/settings/network-configurations')} {' '.join(gh_fields(configuration))} --jq .id)",
+            f"group=$(gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(group))} -f network_configuration_id=\"$configuration\" --jq .id)",
+            f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/hosted-runners')} {' '.join(gh_fields(runner))} -F runner_group_id=\"$group\"",
         ]) + "\n")
         out("runners: then move the three repos onto the runner, as an admin on them"
             + ("" if ready else f". Not yet: {waiting}, then run these") + ":\n")
