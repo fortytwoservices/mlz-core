@@ -17,21 +17,25 @@ locals {
   # The workload repo (docs/vending.md): made here, or an existing one the landing zone names (github.repo), which
   # vending only trusts. A made one is archived, never deleted, when the landing zone is decommissioned.
   repo_made = local.github != null && try(local.github.create, false) && !local.decommission
-  repo_id   = local.github == null ? null : (try(local.github.create, false) ? try(github_repository.workload["made"].repo_id, null) : one(data.github_repository.existing[*].repo_id))
+  repo_id   = local.github == null ? null : (try(local.github.create, false) ? try(github_repository.workload["made"].repo_id, null) : one([for repo in data.github_rest_api.existing : jsondecode(repo.body).id]))
   # GitHub's immutable subjects, which the customer's organization issues (docs/bootstrap.md): a renamed or
   # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
   # the plan identity plans its pull requests.
   subject = local.github == null || local.decommission ? null : "repo:${local.github.organization}@${one(data.github_organization.customer[*].id)}/${local.github.repo}@${local.repo_id}"
 }
 
+# IDs only: summary_only, so the provider lists none of the organization's repos and members.
 data "github_organization" "customer" {
-  count = local.github == null || local.decommission ? 0 : 1
-  name  = local.github.organization
+  count        = local.github == null || local.decommission ? 0 : 1
+  name         = local.github.organization
+  summary_only = true
 }
 
-data "github_repository" "existing" {
-  count     = local.github != null && !try(local.github.create, false) && !local.decommission ? 1 : 0
-  full_name = "${local.github.organization}/${local.github.repo}"
+# An existing repo's ID, by the repo's own API: its metadata, nothing more (the provider's repository data source
+# also reads its Pages settings, which needs a permission vending's tokens do not have).
+data "github_rest_api" "existing" {
+  count    = local.github != null && !try(local.github.create, false) && !local.decommission ? 1 : 0
+  endpoint = "repos/${local.github.organization}/${local.github.repo}"
 }
 
 resource "github_repository" "workload" {
@@ -59,8 +63,9 @@ resource "github_branch_default" "main" {
 }
 
 data "github_team" "owner" {
-  count = local.repo_made ? 1 : 0
-  slug  = local.github.team
+  count        = local.repo_made ? 1 : 0
+  slug         = local.github.team
+  summary_only = true # its ID: none of its members and repos
 }
 
 # The owning team maintains the repo, and approves its applies.

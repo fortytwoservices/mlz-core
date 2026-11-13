@@ -22,8 +22,8 @@ mock_provider "github" {
   mock_data "github_team" {
     defaults = { id = "42" }
   }
-  mock_data "github_repository" {
-    defaults = { repo_id = 3003 }
+  mock_data "github_rest_api" {
+    defaults = { body = "{\"id\": 3003, \"name\": \"payments-infra\"}" }
   }
 }
 

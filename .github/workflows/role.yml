@@ -200,6 +200,7 @@ jobs:
         env:
           STACK: ${{ matrix.stack }}
           GITHUB_TOKEN: ${{ steps.github-reader.outputs.token }} # vending's GitHub provider; empty for the others
+          GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
           set +e
           .mlz-core/tools/ci/plan.sh "$ROLE" "$STACK"
@@ -416,6 +417,7 @@ jobs:
         env:
           STACKS: ${{ matrix.stack }} # one stack, or the platform's changed stacks in order
           GITHUB_TOKEN: ${{ steps.github-writer.outputs.token }} # vending's GitHub provider; empty for the others
+          GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
           for stack in $STACKS; do
             .mlz-core/tools/ci/apply.sh "$ROLE" "$stack"
