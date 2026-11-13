@@ -123,6 +123,10 @@
       },
       "additionalProperties": false
     },
+    "decommission": {
+      "description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.",
+      "const": true
+    },
     "tags": {
       "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
       "type": [

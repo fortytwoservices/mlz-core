@@ -58,8 +58,9 @@ most 24.
   publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
   that do not exist yet (met in the canary).
 - **Vending's rights:** with the bootstrap's contract (`bootstrap_contract_file`, `_generated/bootstrap.yaml`),
-  governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones and
-  Sandboxes, the groups it creates. Without the contract, no such rights are granted.
+  governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones,
+  Sandboxes and Decommissioned, the groups it creates (a decommissioned landing zone's subscription moves to
+  Decommissioned, and its stack still plans there). Without the contract, no such rights are granted.
 - `contract` output: what platform and vending read, written as `_generated/governance.yaml` in their repos by `python3 -m mlz contract governance`.
 
 ## Tested

@@ -282,6 +282,29 @@ class VendingTest(unittest.TestCase):
         self.write(IP_PLAN, render_plan(plan, retired))
         self.assertNotIn("held", vending_contract(landing_zones(self.repo), ip_plan(self.repo)))  # none left: as before
 
+    def test_a_decommissioned_landing_zone_goes_to_decommissioned_and_keeps_its_range_held(self):
+        self.allocate()
+        dev_range = self.plan()["payments-dev"]["range"]
+        self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
+        self.assertEqual(self.allocate(), [])  # nothing moves, nothing is released
+        config = build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]
+        self.assertTrue(config["decommission"])
+        self.assertEqual(config["management_group_id"], "demo-decommissioned")
+        self.assertFalse(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["decommission"])
+        # The platform stops applying its rules, and builds nothing over its range, until it is released.
+        contract = vending_contract(landing_zones(self.repo), ip_plan(self.repo))
+        self.assertEqual((sorted(contract["landing_zones"]), contract["held"]), (["payments-prod"], {"payments-dev": dev_range}))
+        self.assertIn("payments-dev is still in landing-zones/payments/dev", self.problems(release, "payments-dev"))
+
+    def test_decommission_is_only_true_and_only_in_the_landing_zone_s_own_file(self):
+        self.allocate()
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "decommission: true\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/_workload: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/payments/dev.yaml", "decommission: false\n" + DEV)
+        self.assertIn("landing-zones/payments/dev: decommission is true or not there at all, not False.", self.problems(build, GOVERNANCE, PLATFORM))
+
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()
         self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))

@@ -6,6 +6,13 @@ locals {
   subscription = "/subscriptions/${local.lz.subscription_id}"
   names        = module.naming.landing_zone
   github       = local.lz.github # {organization, repo} when the landing zone has a repo, else null
+
+  # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
+  # the NSGs, the route table, the deploy identity and its role, the budget and the two resource groups (with
+  # anything else in them) are destroyed, and the subscription goes to Decommissioned (its management group
+  # comes from the config), where ALZ's policies deny new resources.
+  decommission = try(local.lz.decommission, false)
+  live         = local.decommission ? {} : { live = true } # for_each over what only a live landing zone has
 }
 
 module "naming" {
@@ -17,7 +24,7 @@ module "naming" {
 }
 
 resource "azapi_resource" "resource_group" {
-  for_each = {
+  for_each = local.decommission ? {} : {
     network  = local.names.network_resource_group
     identity = local.names.identity_resource_group
   }
@@ -33,7 +40,8 @@ resource "azapi_resource" "resource_group" {
 
 # Everything leaves the spoke through the hub's firewall.
 module "route_table" {
-  source = "git::https://github.com/fortytwoservices/az-tf-mlz-route-table.git?ref=v0.1.1"
+  for_each = local.live
+  source   = "git::https://github.com/fortytwoservices/az-tf-mlz-route-table.git?ref=v0.1.1"
 
   name                          = local.names.route_table
   parent_id                     = azapi_resource.resource_group["network"].id
@@ -41,6 +49,12 @@ module "route_table" {
   bgp_route_propagation_enabled = false
   routes                        = local.lz.network.routes
   tags                          = local.lz.tags
+}
+
+# Before decommissioning existed, the route table was the module itself.
+moved {
+  from = module.route_table
+  to   = module.route_table["live"]
 }
 
 # Budgets start on the first of the month the landing zone was vended, and stay there.
@@ -61,8 +75,8 @@ module "vending" {
   subscription_tags                                 = local.lz.tags
   subscription_register_resource_providers_enabled  = true
 
-  network_security_group_enabled = true
-  network_security_groups = {
+  network_security_group_enabled = !local.decommission
+  network_security_groups = local.decommission ? {} : {
     for name, _ in local.lz.network.subnets : name => {
       name                         = format(local.names.network_security_group, name)
       resource_group_name_existing = azapi_resource.resource_group["network"].name
@@ -71,8 +85,8 @@ module "vending" {
     }
   }
 
-  virtual_network_enabled = true
-  virtual_networks = {
+  virtual_network_enabled = !local.decommission
+  virtual_networks = local.decommission ? {} : {
     spoke = {
       name                         = local.names.virtual_network
       address_space                = [local.lz.network.address_space]
@@ -86,7 +100,7 @@ module "vending" {
           name                   = format(local.names.subnet, name)
           address_prefix         = prefix
           network_security_group = { key_reference = name }
-          route_table            = { id = module.route_table.resource_id }
+          route_table            = { id = module.route_table["live"].resource_id }
         }
       }
 
@@ -101,8 +115,8 @@ module "vending" {
   }
 
   # The landing zone's own deploy identity: Contributor on its subscription, signed in from its repo.
-  umi_enabled = true
-  user_managed_identities = {
+  umi_enabled = !local.decommission
+  user_managed_identities = local.decommission ? {} : {
     deploy = {
       name                         = local.names.deploy_identity
       resource_group_name_existing = azapi_resource.resource_group["identity"].name
@@ -122,8 +136,8 @@ module "vending" {
     }
   }
 
-  budget_enabled = try(local.lz.budget.monthly, null) != null
-  budgets = try(local.lz.budget.monthly, null) == null ? {} : {
+  budget_enabled = !local.decommission && try(local.lz.budget.monthly, null) != null
+  budgets = local.decommission || try(local.lz.budget.monthly, null) == null ? {} : {
     monthly = {
       name              = local.names.budget
       amount            = local.lz.budget.monthly
