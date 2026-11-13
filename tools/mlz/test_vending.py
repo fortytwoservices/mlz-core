@@ -358,6 +358,15 @@ class VendingTest(unittest.TestCase):
         names = build(self.repo, flat, PLATFORM)["payments-prod"]["names"]
         self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe-01", "rg-pay-identity"))
 
+    def test_the_short_name_is_set_once_for_the_workload(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "short_name: xyz\n")
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "short_name: all\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: short_name is the workload's, so it goes in landing-zones/payments/_workload.yaml.", problems)
+        self.assertIn("landing-zones/_defaults/all: short_name is the workload's, so it goes in landing-zones/payments/_workload.yaml.", problems)
+        self.assertNotIn("landing-zones/payments/_workload:", problems)
+
     def test_a_short_name_that_is_not_text_is_reported_not_a_crash(self):
         self.allocate()
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))

@@ -125,11 +125,11 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         own = lz["settings"].get("names") if isinstance(lz["settings"].get("names"), dict) else {}
         for item, value in named.items():
             if item in vending.NAMED and value:
-                worked.append((f"name {item}", value, f"names: in {lz['where']}.yaml" if item in own else "the naming template (docs/naming.md)"))
+                worked.append((f"name {item}", value, f"names: in {file_of(repo, lz['where'])}" if item in own else "the naming template (docs/naming.md)"))
         for subnet, value in (named.get("network_security_groups") or {}).items():
             if value:
                 given = subnet in (own.get("network_security_groups") or {}) if isinstance(own.get("network_security_groups"), dict) else False
-                worked.append((f"name NSG of {subnet}", value, f"names: in {lz['where']}.yaml" if given else "the naming template (docs/naming.md)"))
+                worked.append((f"name NSG of {subnet}", value, f"names: in {file_of(repo, lz['where'])}" if given else "the naming template (docs/naming.md)"))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
 
 
