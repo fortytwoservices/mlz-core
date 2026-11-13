@@ -27,10 +27,9 @@ def starter() -> dict[str, str]:
     return {str(p.relative_to(STARTER)): RELEASE_PLEASE_MARKER.sub("", p.read_text()) for p in sorted(STARTER.rglob("*")) if p.is_file()}
 
 
-def first_readme(text: str, name: str) -> bool:
-    """GitHub's own README in a new repo: its name as a heading, and its description, if any. Nothing a team wrote."""
-    lines = text.strip("\n").split("\n")
-    return lines[0] == f"# {name}" and len(lines) <= 2
+def first_readme(text: str, name: str, description: str) -> bool:
+    """GitHub's own README in a repo vending made: its name as a heading and vending's description, exactly."""
+    return text.rstrip("\n") == f"# {name}\n{description}"
 
 
 def values_file(workload: dict) -> str:
@@ -53,14 +52,17 @@ def sync(github, configs: Path, out: Callable[[str], None] = print) -> None:
         if found.get("archived"):
             continue
         want = values_file(workload)
-        values, _ = github.file(repo, VALUES, BRANCH)
+        # Everything read at one commit, and the commit made only if main is still there: a team's push in between
+        # makes it fail, never overwrites what they pushed.
+        head = github.head(repo, BRANCH)
+        values, _ = github.file(repo, VALUES, head)
         if values is None:
             # The first time: the starter, without any file the team has written already (GitHub's own first README
             # is not the team's), and the values.
             files = {}
             for name, text in starter().items():
-                there, _ = github.file(repo, name, BRANCH)
-                if there is None or (name == "README.md" and first_readme(there, github_config["repo"])):
+                there, _ = github.file(repo, name, head)
+                if there is None or (name == "README.md" and first_readme(there, github_config["repo"], github_config.get("description", ""))):
                     files[name] = text
             files[VALUES] = want
             message = "chore: mlz-core's workload starter, and the landing zone's values"
@@ -68,5 +70,5 @@ def sync(github, configs: Path, out: Callable[[str], None] = print) -> None:
             files, message = {VALUES: want}, "chore: the landing zone's values, from vending"
         else:
             continue
-        github.commit_files(repo, BRANCH, github.head(repo, BRANCH), files, message)
+        github.commit_files(repo, BRANCH, head, files, message)
         out(f"{repo}: {', '.join(sorted(files))}")

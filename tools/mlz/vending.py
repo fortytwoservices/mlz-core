@@ -592,7 +592,8 @@ def github_config(lz: dict, names: dict) -> dict | None:
     if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
         return None  # check() reports a github that is not a group of settings
     repo = github["repo"] if github.get("repo") is not None else names.get(REPOSITORY)  # '' or false: check() reports it
-    return {"organization": github["organization"], "repo": repo, "create": creates_repo(lz), "team": github.get("team")}
+    return {"organization": github["organization"], "repo": repo, "create": creates_repo(lz), "team": github.get("team"),
+            "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending."}
 
 
 def short_name(lz: dict) -> str:

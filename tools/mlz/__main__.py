@@ -158,7 +158,13 @@ def main() -> int:
 
     if args.role == "workload-repos":
         try:
-            workload.sync(GitHub(), args.configs)
+            github = GitHub()
+            # Only the run of main's current commit writes: an older one, a daily run among them, has older values.
+            sha, vending_repo = os.environ.get("GITHUB_SHA"), os.environ.get("GITHUB_REPOSITORY")
+            if sha and vending_repo and github.head(vending_repo, "main") != sha:
+                print(f"mlz workload-repos: main has moved on from this run's {sha}: the newer run does it.")
+                return 0
+            workload.sync(github, args.configs)
         except ConfigError as error:
             print(f"mlz workload-repos: {error}", file=sys.stderr)
             return 1

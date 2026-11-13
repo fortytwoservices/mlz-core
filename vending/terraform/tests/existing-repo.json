@@ -39,7 +39,8 @@
     "organization": "acme-org",
     "repo": "payments-infra",
     "create": false,
-    "team": null
+    "team": null,
+    "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."
   },
   "names": {
     "network_resource_group": "rg-acme-pay-net-pd-nwe-01",

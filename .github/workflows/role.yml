@@ -557,8 +557,9 @@ jobs:
       always() && inputs.role == 'vending' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
       && needs.check.result == 'success' && needs.check.outputs.stacks != '[]'
       && contains(fromJSON('["success", "skipped"]'), needs.plan.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.changed.result)
       && contains(fromJSON('["success", "skipped"]'), needs.apply.result)
-    needs: [check, plan, apply]
+    needs: [check, plan, changed, apply]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
