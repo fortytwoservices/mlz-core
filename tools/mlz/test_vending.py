@@ -682,9 +682,10 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: AB-Preprod\n")
         self.assertIn("would share the repo demo-org/ab-preprod, which vending makes for ab-preprod", self.problems(build, GOVERNANCE, PLATFORM))
-        # Not text: reported by the check, not a crash here.
-        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: 42\n")
-        self.assertIn("github.repo 42 is a repository name", self.problems(build, GOVERNANCE, PLATFORM))
+        # Not text, or empty: reported by the check, not a crash here.
+        for wrong in ("42", "''", "false"):
+            self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + f"github:\n  repo: {wrong}\n")
+            self.assertIn("is a repository name in the organization", self.problems(build, GOVERNANCE, PLATFORM))
         # Two landing zones naming one existing repo, which vending makes for neither: theirs to share.
         self.write("landing-zones/ab/preprod.yaml", DEV.replace("44", "55") + "github:\n  repo: shared-infra\n")
         self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: shared-infra\n")
