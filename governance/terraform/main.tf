@@ -31,6 +31,8 @@ locals {
   # ALZ's Deploy-Private-DNS-Zones set, worked out from that set in the ALZ library (57; avm-ptn-alz's own list
   # has only some of them). Check it again when the library changes.
   private_dns_zone_parameters = jsondecode(file("${path.module}/private-dns-zone-parameters.json"))
+  # Where the policy looks for the zones, after any override in policy_default_values: the role goes there.
+  private_dns_subscription = jsondecode(merge(local.private_dns_defaults, var.policy_default_values).private_dns_zone_subscription_id).value
 
   # Vending's rights on the groups landing zone subscriptions go into, for its pipeline identities from
   # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them.
@@ -135,18 +137,19 @@ module "alz" {
   subscription_placement = local.placement
 }
 
-# Deploy-Private-DNS-Zones' identity may manage every Private Link zone in the connectivity subscription, the
-# zones the platform builds there included, before and after they exist (see private_dns_zone_parameters).
+# Deploy-Private-DNS-Zones' identity may manage every Private Link zone in the subscription it looks in, the
+# connectivity subscription unless policy_default_values says otherwise, before and after the zones exist (see
+# private_dns_zone_parameters).
 resource "azapi_resource" "private_dns_zone_role" {
   for_each = { for key, id in module.alz.policy_assignment_resource_ids : key => id if endswith(key, "/Deploy-Private-DNS-Zones") }
 
   type = "Microsoft.Authorization/roleAssignments@2022-04-01"
   # Azure cannot change an assignment's principal, so a new identity (a policy assignment made again) makes a new one.
   name      = uuidv5("url", "mlz-core/${local.config.root_id}/private-dns-zone-role/${each.key}/${module.alz.policy_assignment_identity_ids[each.key]}")
-  parent_id = "/subscriptions/${local.subscriptions.connectivity}"
+  parent_id = "/subscriptions/${local.private_dns_subscription}"
   body = {
     properties = {
-      roleDefinitionId = "/subscriptions/${local.subscriptions.connectivity}/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f" # Private DNS Zone Contributor
+      roleDefinitionId = "/subscriptions/${local.private_dns_subscription}/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f" # Private DNS Zone Contributor
       principalId      = module.alz.policy_assignment_identity_ids[each.key]
       principalType    = "ServicePrincipal"
       description      = "mlz-core governance: ${each.key} links private endpoints to the Private Link zones."
