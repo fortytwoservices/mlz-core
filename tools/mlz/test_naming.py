@@ -68,6 +68,8 @@ class RenderTest(unittest.TestCase):
             naming.check("storage_account", "st")
         # A resource group takes Unicode letters and decimal digits, not every character Python counts as one.
         self.assertEqual(naming.check("resource_group", "rg-økonomi-(prod)_1"), "rg-økonomi-(prod)_1")
+        with self.assertRaisesRegex(ConfigError, "resource_group name rg-pay. ends with a period"):
+            naming.check("resource_group", "rg-pay.")
         for odd in ("rg-½", "rg-x²", "rg x"):
             with self.assertRaisesRegex(ConfigError, "has characters Azure does not allow there"):
                 naming.check("resource_group", odd)

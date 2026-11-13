@@ -188,6 +188,8 @@ def check(kind: str, name: str) -> str:
         fits, shown = re.fullmatch(rules["pattern"], name) is not None, rules["pattern"]
     if not fits or (rules.get("no_double_hyphen") and "--" in name):
         raise ConfigError(f"{kind} name {name} has characters Azure does not allow there ({shown}{', and no two hyphens in a row' if rules.get('no_double_hyphen') else ''}).")
+    if rules.get("no_trailing_period") and name.endswith("."):
+        raise ConfigError(f"{kind} name {name} ends with a period, which Azure does not allow.")
     if rules["lowercase"] and name != name.lower():
         raise ConfigError(f"{kind} name {name} must be lower case.")
     return name

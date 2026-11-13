@@ -14,7 +14,8 @@
           "Nd"
         ],
         "characters": "_-.()"
-      }
+      },
+      "no_trailing_period": true
     },
     "virtual_network": {
       "slug": "vnet",

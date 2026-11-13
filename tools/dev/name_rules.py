@@ -4,7 +4,7 @@
 
 Only lengths, case, dashes and allowed characters come from the catalog. The short names are CAF's, set here,
 since some catalog slugs are unusable (a blob container's is storage-account-blob-service-container). Rules the
-catalog's patterns leave out are added here (no_double_hyphen). A type whose catalog entry is incomplete or
+catalog's patterns leave out are added here (no_double_hyphen, no_trailing_period). A type whose catalog entry is incomplete or
 wrong (virtual machines: no dashes; data collection rules: no lengths) is left out until checked another way.
 """
 
@@ -18,7 +18,7 @@ from pathlib import Path
 CATALOG = "Azure/avm-utl-naming v0.2.0, data/resource-name-rules.json"
 # mlz-core's key: (the catalog's key, the CAF short name, rules the catalog's pattern leaves out)
 TYPES = {
-    "resource_group": ("resource_group", "rg", {}),
+    "resource_group": ("resource_group", "rg", {"no_trailing_period": True}),
     "virtual_network": ("virtual_network", "vnet", {}),
     "network_security_group": ("network_security_group", "nsg", {}),
     "route_table": ("route_table", "rt", {}),
