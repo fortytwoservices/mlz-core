@@ -640,6 +640,20 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
 
+    def test_a_repo_vending_makes_gets_the_landing_zone_s_values(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
+        own = {**GOVERNANCE, "naming": {"org": "dmo", "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"}}}
+        self.allocate(governance=own)
+        configs = build(self.repo, own, PLATFORM)
+        # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written.
+        self.assertEqual(configs["payments-prod"]["workload"], {
+            "landing_zone": "payments-prod", "subscription_id": "33333333-3333-3333-3333-333333333333", "location": "norwayeast",
+            "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
+            "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
+        })
+        self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
+
     def test_a_repo_vending_makes_needs_its_team(self):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team.
         self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
