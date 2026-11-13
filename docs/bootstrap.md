@@ -113,6 +113,16 @@ who created it normally has.
 Vending does not create subscriptions yet; it adopts existing ones. For EA and MCA customers it could
 create them itself, and then the handover step disappears for them.
 
+## GitHub Enterprise
+
+MLZ needs the customer's GitHub organization on **GitHub Enterprise**. Every apply waits for a reviewer: the role
+repos' environments, and the landing zones' workload repos' `apply` environments. GitHub allows required reviewers
+on an environment in a private repo only on Enterprise; on Free, Pro and Team only in public repos (GitHub Docs,
+"Managing environments for deployment", availability). Tested on 13 November 2026 in a test organization on Free:
+GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers protection rule").
+`mlz install check` reads the organization's plan and refuses another one; GitHub shows the plan only to its
+owners, so for anyone else it says so and goes on.
+
 ## Running it
 
 `mlz install` does it step by step, from an mlz-core checkout. Every step can run again and changes only what
@@ -144,8 +154,9 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - Each gets the ruleset `main`: changes only through pull requests, no force push, no deletion.
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
      request. A ruleset of its own named `main` is left as it is.
-2. **`check`** confirms the customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and
-   `MLZ_RELEASE_APP_PRIVATE_KEY`). Making the App needs a browser, so that step stays manual.
+2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), and that the
+   customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`).
+   Making the App needs a browser, so that step stays manual.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the

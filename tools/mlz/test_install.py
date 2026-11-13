@@ -42,7 +42,8 @@ WORKFLOW = ".github/workflows/mlz.yml"
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
-                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=()):
+                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise"):
+        self.org_plan = org_plan
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
@@ -57,6 +58,9 @@ class FakeGitHub:
 
     def repo(self, repo):
         return self.repos.get(repo)
+
+    def plan(self, org):
+        return self.org_plan
 
     def create_repo(self, owner, name):
         self.created.append(f"{owner}/{name}")
@@ -366,7 +370,17 @@ class InstallTest(unittest.TestCase):
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
-        self.assertEqual(len(self.printed), 4)
+        self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
+        self.assertEqual(len(self.printed), 5)
+
+    def test_check_refuses_an_organization_not_on_enterprise(self):
+        ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                     secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's team plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer"):
+            install.step_check(FakeGitHub(**ready, org_plan="team"), self.folder, self.out)
+        # Only owners see the plan: said, not refused.
+        install.step_check(FakeGitHub(**ready, org_plan=None), self.folder, self.out)
+        self.assertIn("acme: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.", self.printed)
 
     def test_check_lists_every_missing_piece(self):
         github = FakeGitHub(existing=["acme/mlz-governance", "acme/mlz-platform"],

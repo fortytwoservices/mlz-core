@@ -185,22 +185,33 @@ owner: payments@demo.example
 ## The workload repo
 
 Once `github.organization` is set, every landing zone has a workload repo of its own for the team's code, in the
-customer's GitHub organization, unless its `github.repo` names an existing one or `github.create` is `false`. What
-it has in Azure, from vending:
+customer's GitHub organization, unless its `github.repo` names an existing one or `github.create` is `false`.
 
 - **Its name**, from `customer.yaml`'s `naming.repository` (default `{app}-{env}`, with long names:
   `payments-prod`), recorded with the landing zone's other names (`docs/naming.md`).
-- **A plan identity**, `id-acme-pay-plan-pd-nwe-01`: Reader on the subscription, for the repo's pull requests' plans,
-  beside the deploy identity, Contributor, for its applies.
+- **The repo**, made by vending's Terraform, as the customer's MLZ App: private, squash merges only. Decommissioned,
+  it is archived, never deleted: the team's code and history stay.
+- **Its team**: `github.team`, required for a repo vending makes, set once per workload in `_workload.yaml`. The team
+  maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. Every apply in MLZ
+  waits for a reviewer, which GitHub allows in a private repo only on GitHub Enterprise (`docs/bootstrap.md`).
+- **Its identities**: a plan identity, `id-acme-pay-plan-pd-nwe-01`, Reader on the subscription, trusted for the
+  repo's pull requests; the deploy identity, Contributor, trusted for its `apply` environment. Both trust GitHub's
+  immutable subjects, `repo:<organization>@<id>/<repo>@<id>`, as the role repos' identities do, so a renamed or
+  recreated repo inherits neither.
 - **Its Terraform state**, in a storage account in the landing zone's own subscription, `stacmepaystatepdnwe01`
   in `rg-acme-pay-state-pd-nwe-01`: Entra ID only, versioned, 30 days of soft delete, container `tfstate`. The plan
   identity reads it, the deploy identity writes it. It is never replaced (`prevent_destroy`) and outlives a
-  decommission ([above](#decommissioning-a-landing-zone)). The root's `landing_zone` output names it.
+  decommission ([above](#decommissioning-a-landing-zone)).
+- **Its variables**: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID` (the plan identity; inside the
+  `apply` environment, the deploy identity) and `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`,
+  `TFSTATE_CONTAINER`. No secrets.
 
-**Where it stands:** vending names and records the repo, and makes its identities and state, but does not make the
-repo itself yet. The next part does: the repo, its `apply` environment with the team as reviewer, its variables,
-and the identities' trust in GitHub's immutable subjects (`docs/bootstrap.md`), which today's trust of the
-`main` branch by name does not match. Then a workload starter, with a pipeline and the naming helper.
+An existing repo (`github.repo`) is the team's own: vending makes nothing in it, and its identities trust it the same
+way, so its workflows sign in from its `apply` environment and its pull requests.
+
+The workload repos are in the organization the vending repo is in: the pipeline's App token is for that one. The
+root's `landing_zone` output names the identities and the state. A workload starter, with a pipeline and the naming
+helper, comes next.
 
 ## Operating notes
 

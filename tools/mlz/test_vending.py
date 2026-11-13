@@ -629,19 +629,27 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n")
         self.allocate()
         self.assertIn("github.repo needs github.organization", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.assertIn("payments-dev: _generated/names.yaml has no name for repository yet", self.problems(build, GOVERNANCE, PLATFORM))
         self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         # An existing repo, which vending only trusts; and one vending makes, named by naming.repository.
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": None})
-        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": None})
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": "demo-devs"})
+        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs"})
         self.assertNotIn("repository", configs["payments-prod"]["names"])
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
 
-    def test_the_workload_repo_s_settings_are_checked(self):
+    def test_a_repo_vending_makes_needs_its_team(self):
+        # Every apply needs someone to approve it: in a repo vending makes, the owning team.
         self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.allocate()
+        self.assertIn("landing-zones/payments/prod: github.team is needed: the GitHub team that owns the repo vending makes", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "github:\n  create: false\n")
+        build(self.repo, GOVERNANCE, PLATFORM)  # no repo, so no team needed
+
+    def test_the_workload_repo_s_settings_are_checked(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n  create: true\n  team: Payments Devs\n")
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: 'no'\n")
         self.allocate()
@@ -651,7 +659,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/payments/dev: github.create is true or false, without quotes.", problems)
 
     def test_the_workload_repo_takes_customer_yaml_s_template_and_keeps_its_name(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "github:\n  team: payments-devs\n")
         own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
         self.allocate(governance=own)
@@ -667,7 +675,7 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
 
     def test_no_two_landing_zones_get_one_repo(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         # {app}{env} without a dash: ab/preprod and abpre/prod come out the same.
         for workload, env, sub in (("ab", "preprod", "55"), ("abpre", "prod", "66")):
             self.write(f"landing-zones/{workload}/_workload.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))

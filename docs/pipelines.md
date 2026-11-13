@@ -126,7 +126,7 @@ App that may write to the three repos, and the App merges them.
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests and commits the IP plan and the names to vending pull requests; installed on the three repos |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments and Variables read and write, and Members read |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in

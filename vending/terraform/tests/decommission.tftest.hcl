@@ -14,6 +14,18 @@ mock_provider "azapi" {
   }
 }
 mock_provider "time" {}
+# The landing zone's GitHub organization, its owning team, and the repo vending makes, by the IDs GitHub would give.
+mock_provider "github" {
+  mock_data "github_organization" {
+    defaults = { id = "1001" }
+  }
+  mock_data "github_team" {
+    defaults = { id = "42" }
+  }
+  mock_data "github_repository" {
+    defaults = { repo_id = 3003 }
+  }
+}
 
 run "live" {
   command = plan
@@ -58,5 +70,59 @@ run "decommissioned" {
   assert {
     condition     = azapi_resource.state.name == "stacmepaystatepdnwe01" && length(azapi_resource.state_role) == 0
     error_message = "A decommissioned landing zone keeps its state account, without the roles of the identities that went."
+  }
+}
+
+run "with_a_repo" {
+  command = plan
+  variables {
+    config_file = "tests/with-repo.json"
+  }
+  # The repo's ID is GitHub's, known once it is made: given here, as GitHub would.
+  override_resource {
+    target = github_repository.workload["made"]
+    values = { repo_id = 2002 }
+  }
+  assert {
+    condition     = github_repository.workload["made"].name == "payments-prod" && github_repository.workload["made"].archive_on_destroy && github_repository.workload["made"].visibility == "private"
+    error_message = "Vending makes the landing zone's repo, private, archived rather than deleted."
+  }
+  assert {
+    condition     = github_team_repository.owner[0].permission == "maintain" && contains(github_repository_environment.apply[0].reviewers[0].teams, 42)
+    error_message = "The owning team maintains the repo and approves its applies."
+  }
+  assert {
+    condition     = github_repository_environment_deployment_policy.main[0].branch_pattern == "main"
+    error_message = "Only main may apply."
+  }
+  assert {
+    condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01"
+    error_message = "The repo's variables name its subscription, its plan identity and its state."
+  }
+}
+
+run "with_an_existing_repo" {
+  command = plan
+  variables {
+    config_file = "tests/existing-repo.json"
+  }
+  assert {
+    condition     = length(github_repository.workload) == 0 && length(github_actions_variable.workload) == 0 && length(github_repository_environment.apply) == 0
+    error_message = "An existing repo is the team's own: vending only trusts it."
+  }
+  assert {
+    condition     = local.subject == "repo:acme-org@1001/payments-infra@3003"
+    error_message = "The identities trust GitHub's immutable subject for the repo, by the organization's and the repo's IDs."
+  }
+}
+
+run "decommissioned_with_a_repo" {
+  command = plan
+  variables {
+    config_file = "tests/decommissioned-with-repo.json"
+  }
+  assert {
+    condition     = length(github_repository.workload) == 0 && length(github_repository_environment.apply) == 0 && local.subject == null
+    error_message = "A decommissioned landing zone's repo goes (archive_on_destroy archives it), with nothing trusting it."
   }
 }

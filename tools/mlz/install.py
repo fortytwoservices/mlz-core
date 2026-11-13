@@ -178,6 +178,17 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
     customer, bootstrap = settings(folder)
     out(f"names: the state account will be {bootstrap_names(customer, bootstrap)['storage_account']}")
     problems = []
+    # Every apply waits for a reviewer, in the role repos and the workload repos alike, and GitHub allows required
+    # reviewers on an environment in a private repo only on GitHub Enterprise (docs/bootstrap.md).
+    org = (bootstrap.get("github") or {}).get("organization")
+    plan = github.plan(org) if org else None
+    if plan is None and org:
+        out(f"{org}: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.")
+    elif plan and plan != "enterprise":
+        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer, which GitHub "
+                        "allows on an environment in a private repo only on Enterprise.")
+    else:
+        out(f"{org}: on GitHub Enterprise")
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -193,7 +204,7 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
     if problems:
-        raise ConfigError("\n  ".join(["the MLZ App is not set up everywhere:"] + problems))
+        raise ConfigError("\n  ".join(["not ready for MLZ:"] + problems))
 
 
 # bootstrap

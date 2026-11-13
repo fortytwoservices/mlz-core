@@ -13,6 +13,105 @@ locals {
   # comes from the config), where ALZ's policies deny new resources.
   decommission = try(local.lz.decommission, false)
   live         = local.decommission ? {} : { live = true } # for_each over what only a live landing zone has
+
+  # The workload repo (docs/vending.md): made here, or an existing one the landing zone names (github.repo), which
+  # vending only trusts. A made one is archived, never deleted, when the landing zone is decommissioned.
+  repo_made = local.github != null && try(local.github.create, false) && !local.decommission
+  repo_id   = local.github == null ? null : (try(local.github.create, false) ? try(github_repository.workload["made"].repo_id, null) : one(data.github_repository.existing[*].repo_id))
+  # GitHub's immutable subjects, which the customer's organization issues (docs/bootstrap.md): a renamed or
+  # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
+  # the plan identity plans its pull requests.
+  subject = local.github == null || local.decommission ? null : "repo:${local.github.organization}@${one(data.github_organization.customer[*].id)}/${local.github.repo}@${local.repo_id}"
+}
+
+data "github_organization" "customer" {
+  count = local.github == null || local.decommission ? 0 : 1
+  name  = local.github.organization
+}
+
+data "github_repository" "existing" {
+  count     = local.github != null && !try(local.github.create, false) && !local.decommission ? 1 : 0
+  full_name = "${local.github.organization}/${local.github.repo}"
+}
+
+resource "github_repository" "workload" {
+  for_each = local.repo_made ? { made = true } : {}
+
+  name                   = local.github.repo
+  description            = "Workload repo of landing zone ${local.lz.key}, made by mlz-core's vending."
+  visibility             = "private"
+  auto_init              = true # a main branch, which the apply environment's policy names
+  allow_merge_commit     = false
+  allow_rebase_merge     = false
+  allow_squash_merge     = true
+  delete_branch_on_merge = true
+  archive_on_destroy     = true # decommissioned: archived, the team's code and history kept
+}
+
+data "github_team" "owner" {
+  count = local.repo_made ? 1 : 0
+  slug  = local.github.team
+}
+
+# The owning team maintains the repo, and approves its applies.
+resource "github_team_repository" "owner" {
+  count = local.repo_made ? 1 : 0
+
+  team_id    = data.github_team.owner[0].id
+  repository = github_repository.workload["made"].name
+  permission = "maintain"
+}
+
+resource "github_repository_environment" "apply" {
+  count = local.repo_made ? 1 : 0
+
+  repository  = github_repository.workload["made"].name
+  environment = "apply"
+
+  reviewers {
+    teams = [tonumber(data.github_team.owner[0].id)]
+  }
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "main" {
+  count = local.repo_made ? 1 : 0
+
+  repository     = github_repository.workload["made"].name
+  environment    = github_repository_environment.apply[0].environment
+  branch_pattern = "main"
+}
+
+data "azapi_client_config" "current" {}
+
+# IDs and names only, no secrets. AZURE_CLIENT_ID is the plan identity for the repo, and the deploy identity inside
+# its apply environment, so a workflow always signs in as the identity its job is trusted for.
+resource "github_actions_variable" "workload" {
+  for_each = local.repo_made ? {
+    AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
+    AZURE_SUBSCRIPTION_ID   = local.lz.subscription_id
+    AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
+    TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
+    TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
+    TFSTATE_CONTAINER       = azapi_resource.state_container.name
+  } : {}
+
+  repository    = github_repository.workload["made"].name
+  variable_name = each.key
+  value         = each.value
+}
+
+resource "github_actions_environment_variable" "deploy_identity" {
+  count = local.repo_made ? 1 : 0
+
+  repository    = github_repository.workload["made"].name
+  environment   = github_repository_environment.apply[0].environment
+  variable_name = "AZURE_CLIENT_ID"
+  value         = module.vending.umi_client_ids["deploy"]
 }
 
 resource "azapi_resource" "resource_group" {
@@ -190,8 +289,8 @@ module "vending" {
     }
   }
 
-  # The landing zone's own identities for its repo: deploy, Contributor on its subscription, signed in from its repo;
-  # plan, Reader, for its pull requests' plans.
+  # The landing zone's own identities for its repo: deploy, Contributor on its subscription, signed in from its repo's
+  # apply environment; plan, Reader, for its pull requests' plans.
   umi_enabled = !local.decommission
   # Two entries of different shapes: each its own conditional, merged, so neither has to match the other's type.
   user_managed_identities = merge(local.decommission ? {} : {
@@ -203,6 +302,13 @@ module "vending" {
       role_assignments = {
         reader = { definition = "Reader" }
       }
+      federated_credentials_advanced = local.subject == null ? {} : {
+        pull_request = {
+          name               = "github-pull-request"
+          subject_identifier = "${local.subject}:pull_request"
+          issuer_url         = "https://token.actions.githubusercontent.com"
+        }
+      }
     }
     }, local.decommission ? {} : {
     deploy = {
@@ -213,12 +319,11 @@ module "vending" {
       role_assignments = {
         contributor = { definition = "Contributor" }
       }
-      federated_credentials_github = local.github == null ? {} : {
-        main = {
-          organization = local.github.organization
-          repository   = local.github.repo
-          entity       = "branch"
-          value        = "main"
+      federated_credentials_advanced = local.subject == null ? {} : {
+        apply = {
+          name               = "github-environment-apply"
+          subject_identifier = "${local.subject}:environment:apply"
+          issuer_url         = "https://token.actions.githubusercontent.com"
         }
       }
     }
