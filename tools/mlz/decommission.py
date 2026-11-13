@@ -55,17 +55,20 @@ def rules_files(github, repo: str, key: str) -> list[str]:
     return found + github.folder(repo, f"{RULES}/{key}", "main")
 
 
-def offer(github, repo: str, branch: str, files: dict[str, str | None], title: str, body: str) -> str:
-    """The changes as a pull request from the tool's own branch; an open one is left as it is."""
+def offer(github, repo: str, branch: str, files: dict[str, str | None], title: str, body: str, at: str | None = None) -> str:
+    """The changes as a pull request from the tool's own branch, made from main's head, or from the commit `at`
+    they were worked out from; an open one is left as it is."""
     url = github.open_pull(repo, branch)
     if url:
         return url
-    head = github.reset_branch(repo, branch, "main")
+    head = github.reset_branch(repo, branch, "main", at)
     github.commit_files(repo, branch, head, files, title)
     return github.create_pull(repo, branch, "main", title, body)
 
 
-def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print) -> None:
+def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print, sha: str | None = None) -> None:
+    """sha: the vending commit the checkout is at. Vending's pull request starts from it, so a main that moved on
+    meanwhile shows as a conflict, never as its newer files overwritten."""
     zones, plan = landing_zones(repo), ip_plan(repo)
     platform = read_yaml(repo / "_generated" / "platform.yaml")
     retired = sorted(set(plan) - set(zones))
@@ -93,5 +96,5 @@ def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: st
                     f"chore: remove decommissioned {key} and release its range",
                     f"{key} is decommissioned: its network is destroyed and its subscription is in Decommissioned ({run_url}). "
                     f"This deletes its file and releases its range, {plan[key]['range']}, which a new landing zone may then be given. "
-                    "The platform's rules file for it is gone already.\n")
+                    "The platform's rules file for it is gone already, and its rules are out of Azure.\n", at=sha)
         out(f"decommission: {key}'s file and range go in {url}")

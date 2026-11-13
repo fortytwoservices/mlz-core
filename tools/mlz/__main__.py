@@ -137,7 +137,7 @@ def main() -> int:
             run = os.environ.get("GITHUB_RUN_ID")
             run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{run}" if run else "run by hand"
             # Signed in as vending's read-only identity, which reads the hubs' firewall policies.
-            decommission.cleanup(github, install.Azure(os.environ["AZURE_TENANT_ID"]), args.repo, repositories, run_url)
+            decommission.cleanup(github, install.Azure(os.environ["AZURE_TENANT_ID"]), args.repo, repositories, run_url, sha=head)
         except KeyError as error:
             print(f"mlz decommission: {error} is not set; MLZ_REPOSITORIES and AZURE_TENANT_ID come from the bootstrap.", file=sys.stderr)
             return 1

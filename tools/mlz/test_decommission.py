@@ -34,7 +34,7 @@ class FakeGitHub:
     def __init__(self, platform_files=(), open_pulls=None):
         self.platform_files = set(platform_files)
         self.open_pulls = dict(open_pulls or {})  # (repo, branch) -> url
-        self.commits, self.pulls = [], []
+        self.commits, self.pulls, self.bases = [], [], []
 
     def file(self, repo, path, ref):
         return ("rules", "sha") if repo == REPOS["platform"] and path in self.platform_files else (None, None)
@@ -45,8 +45,9 @@ class FakeGitHub:
     def open_pull(self, repo, branch):
         return self.open_pulls.get((repo, branch))
 
-    def reset_branch(self, repo, branch, base):
-        return f"head-of-{base}"
+    def reset_branch(self, repo, branch, base, at=None):
+        self.bases.append((repo, at or f"head-of-{base}"))
+        return at or f"head-of-{base}"
 
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, files, message))
@@ -81,7 +82,7 @@ class DecommissionTest(unittest.TestCase):
         path.write_text(text)
 
     def cleanup(self, github):
-        decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append)
+        decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append, sha="run-sha")
 
     def test_nothing_is_offered_while_no_landing_zone_is_decommissioned(self):
         github = FakeGitHub(platform_files={"firewall/landing-zones/payments-dev.yaml"})
@@ -116,6 +117,8 @@ class DecommissionTest(unittest.TestCase):
         self.write(IP_PLAN, files[IP_PLAN])
         self.assertEqual(sorted(read_yaml(self.repo / IP_PLAN)), ["payments-prod"])
         self.assertIn(f"releases its range, {dev_range},", github.pulls[0][3])
+        # From the commit its files were worked out from, not whatever main is now.
+        self.assertEqual(github.bases, [(REPOS["vending"], "run-sha")])
 
     def test_the_range_waits_while_its_rules_are_still_in_azure(self):
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
