@@ -180,15 +180,29 @@ VENDING_IDENTITY = {"vending": {"apply": {"name": "id-acme-vending-apply-nwe", "
 class BillingAzure:
     """The billing API, as a sign-in that may or may not read and give billing roles sees it."""
 
-    def __init__(self, assignments=(), readable=True, grantable=True):
+    def __init__(self, assignments=(), readable=True, grantable=True, shows_after=0):
         self.assignments, self.readable, self.grantable = list(assignments), readable, grantable
+        # A grant shows in the role assignments after this many reads, as an MCA grant answers 202 and finishes later;
+        # None: never, as one that failed later.
+        self.shows_after, self.pending = shows_after, None
         self.calls = []
 
     def request(self, method, url, body=None):
         self.calls.append((method, url, body))
         if method == "GET" and not self.readable or method != "GET" and not self.grantable:
             raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
-        return {"value": self.assignments} if method == "GET" else {}
+        if method != "GET":
+            assignment = body.get("properties", body)
+            self.pending = (self.shows_after, {"properties": {"principalId": assignment["principalId"], "roleDefinitionId": assignment["roleDefinitionId"]}})
+            return {}
+        if self.pending is not None and self.pending[0] is not None:
+            reads, assignment = self.pending
+            if reads <= 0:
+                self.assignments.append(assignment)
+                self.pending = None
+            else:
+                self.pending = (reads - 1, assignment)
+        return {"value": self.assignments}
 
 
 class RunnersGitHub(FakeGitHub):
@@ -578,7 +592,8 @@ class InstallTest(unittest.TestCase):
         (self.work).mkdir(parents=True, exist_ok=True)
         (self.work / "backend.hcl").write_text("x")
         terraform = FakeTerraform(self.work, contract_identities=contract)
-        return install.step_subscriptions(azure, terraform, self.folder, scope, TENANT, yes, self.out, lambda question: answer)
+        self.waits = []
+        return install.step_subscriptions(azure, terraform, self.folder, scope, TENANT, yes, self.out, lambda question: answer, self.waits.append)
 
     def test_an_identity_with_the_role_needs_nothing(self):
         role = f"{EA}/billingRoleDefinitions/a0bcee42-bf30-4d1b-926a-48d21664ef71"
@@ -591,8 +606,8 @@ class InstallTest(unittest.TestCase):
     def test_ea_the_role_is_given_when_the_sign_in_may(self):
         azure = BillingAzure()
         self.assertTrue(self.subscriptions(azure, answer="y"))
-        method, path, body = azure.calls[-1]
-        self.assertEqual(method, "PUT")
+        self.assertEqual([c[0] for c in azure.calls], ["GET", "PUT", "GET"])  # done once the role assignments show it
+        method, path, body = azure.calls[1]
         # Named after the scope and the identity: given again, it is the same assignment.
         name = path.split("/billingRoleAssignments/")[1].split("?")[0]
         self.assertEqual(path, f"{EA}/billingRoleAssignments/{name}?api-version=2019-10-01-preview")
@@ -601,11 +616,25 @@ class InstallTest(unittest.TestCase):
                                                "roleDefinitionId": f"{EA}/billingRoleDefinitions/a0bcee42-bf30-4d1b-926a-48d21664ef71"}})
 
     def test_mca_the_role_is_given_on_the_invoice_section(self):
-        azure = BillingAzure()
+        # Answered 202, and shown in the role assignments two reads later: done only then.
+        azure = BillingAzure(shows_after=2)
         self.assertTrue(self.subscriptions(azure, scope=MCA, yes=True))
-        self.assertEqual(azure.calls[-1], ("POST", f"{MCA}/createBillingRoleAssignment?api-version=2024-04-01", {
+        grant = next(call for call in azure.calls if call[0] == "POST")
+        self.assertEqual(grant, ("POST", f"{MCA}/createBillingRoleAssignment?api-version=2024-04-01", {
             "principalId": PRINCIPAL, "principalTenantId": TENANT,
             "roleDefinitionId": f"{MCA}/billingRoleDefinitions/30000000-aaaa-bbbb-cccc-100000000006"}))
+        self.assertEqual([c[0] for c in azure.calls], ["GET", "POST", "GET", "GET", "GET"])
+        self.assertEqual(self.waits, [install.GRANT_WAIT] * 2)
+
+    def test_a_grant_azure_took_but_never_shows_is_not_reported_done(self):
+        azure = BillingAzure(shows_after=None)
+        self.assertFalse(self.subscriptions(azure, scope=MCA, yes=True))
+        self.assertEqual(len(self.waits), install.GRANT_CHECKS)
+        text = "\n".join(self.printed)
+        self.assertIn("Azure took the request, but its role assignments do not show the role yet", text)
+        self.assertNotIn("subscriptions: done", text)
+        self.assertIn("subscriptions: an owner of the invoice section, of its billing profile or of the billing account gives it", text)
+        self.assertTrue(any(line.startswith("  az rest --method get") for line in self.printed))
 
     def test_without_the_billing_role_the_person_who_has_it_gets_the_command(self):
         # The engineer may neither read nor give billing roles there, as usually only the customer's billing owner may.

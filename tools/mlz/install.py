@@ -573,6 +573,9 @@ BILLING_ROLES = {
 }
 
 
+GRANT_CHECKS, GRANT_WAIT = 10, 6.0  # how often, and how many seconds apart, a grant is looked for after it is asked
+
+
 def grant_request(kind: str, scope: str, principal: str, tenant: str) -> tuple[str, str, dict]:
     """The billing API call that gives principal the role on scope: (method, path, body). An EA assignment is named by
     whoever makes it: here after the scope and the identity, so making it again changes nothing."""
@@ -612,7 +615,8 @@ def holds_role(azure, kind: str, scope: str, principal: str) -> bool | None:
 
 
 def step_subscriptions(azure, terraform, folder: Path, scope: str, tenant: str, yes: bool = False,
-                       out: Callable[[str], None] = print, ask: Callable[[str], str] = answer) -> bool:
+                       out: Callable[[str], None] = print, ask: Callable[[str], str] = answer,
+                       wait: Callable[[float], None] = time.sleep) -> bool:
     """Lets vending's apply identity make the landing zones' subscriptions billed to scope: gives it the billing role
     when this sign-in may, after asking; otherwise prints the role the person who may give it holds, and the command
     they run. Returns whether the identity has the role."""
@@ -638,12 +642,20 @@ def step_subscriptions(azure, terraform, folder: Path, scope: str, tenant: str, 
     if yes or ask("Give it the role now, signed in as you? [y/N] ").strip().lower() in ("y", "yes"):
         try:
             azure.request(method, path, body)
-            out(f"subscriptions: done; {who} has the role {role['role']} on {role['on']}.")
-            return True
         except urllib.error.HTTPError as error:
             if error.code not in (400, 401, 403):
                 raise
             out(f"subscriptions: Azure refused it (HTTP {error.code}): your sign-in may not give billing roles there.")
+        else:
+            # Taken is not given: an MCA grant answers 202 and finishes later, or fails later. Done only once the role
+            # assignments show it, read as at the start; for about a minute.
+            for _ in range(GRANT_CHECKS):
+                if holds_role(azure, kind, scope, principal):
+                    out(f"subscriptions: done; {who} has the role {role['role']} on {role['on']}.")
+                    return True
+                wait(GRANT_WAIT)
+            out("subscriptions: Azure took the request, but its role assignments do not show the role yet: it may still be "
+                "on its way, or have failed. Check again later (below), or have the person who may give it run the command.")
     # The person who may: what they must hold, and what they run.
     check = az_rest("GET", f"{scope}/billingRoleAssignments?api-version={role['api']}",
                     query=f'value[?properties.principalId==`"{principal}"`].properties.roleDefinitionId')
