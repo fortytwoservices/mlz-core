@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/fortytwoservices/mlz-core/compare/v0.3.4...v0.3.5) (2026-11-13)
+
+
+### Features
+
+* **vending:** decommission a landing zone with decommission: true in its file ([#50](https://github.com/fortytwoservices/mlz-core/issues/50)) ([052d0d3](https://github.com/fortytwoservices/mlz-core/commit/052d0d33ebad560f77b1af8f8793e83d7ff26a42))
+
 ## [0.3.4](https://github.com/fortytwoservices/mlz-core/compare/v0.3.3...v0.3.4) (2026-11-13)
 
 
