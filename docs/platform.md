@@ -60,7 +60,9 @@ vending on v0.2 fails its check on the new one.
   second (Basic only), gateway /27, Bastion /26 at the start of the second /24, then the DNS resolver's
   inbound and outbound /28s. Every hub looks the same.
 - **Names**, `<type>-<root>-hub-<region code>` (for example `afw-mlz-hub-nwe`), and the Private Link zones'
-  group `rg-<root>-dns-<region code>`, the one governance's DNS policy points at.
+  group `rg-<root>-dns-<region code>`, the one governance's DNS policy points at. The codes are Microsoft's,
+  for every Azure region, in `modules/naming/region-codes.json` (from avm-utl-regions); a hub may be in any
+  of them. A code is in resource names, so one never changes.
 
 `python3 -m mlz platform` reads `hubs/` and `_generated/governance.yaml`, checks both, and writes the
 root's config (JSON, for one run, never committed); the Terraform roots only read that file.
@@ -91,8 +93,10 @@ the firewall's rules like a landing zone's ([below](#firewall-rules)): `firewall
 
 ### GitHub-hosted runners
 
-Where GitHub runs its hosted runners in the customer's own networks (of the regions mlz-core supports,
-Norway East and Sweden Central; [GitHub's list](https://docs.github.com/en/organizations/managing-organization-settings/about-azure-private-networking-for-github-hosted-runners-in-your-organization#about-supported-regions)),
+Where GitHub runs its hosted runners in the customer's own networks (`GITHUB_RUNNER_REGIONS` in
+`tools/mlz/platform.py`, from [GitHub's list](https://docs.github.com/en/organizations/managing-organization-settings/about-azure-private-networking-for-github-hosted-runners-in-your-organization#about-supported-regions):
+Norway East, Sweden Central, France Central, Switzerland North and UK South and West in Europe; not West or
+North Europe),
 the management stack delegates `snet-github-runners` to GitHub and creates the `GitHub.Network/networkSettings`
 resource that joins it to the customer's GitHub organization, `ghns-<root>-management-<region code>`. The
 pipeline names the organization by its ID (`GITHUB_REPOSITORY_OWNER_ID`); a plan by hand takes

@@ -578,7 +578,7 @@ class InstallTest(unittest.TestCase):
 
     def test_no_runners_where_github_does_not_join_them_to_a_network(self):
         (self.folder / "customer.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
-        with self.assertRaisesRegex(ConfigError, "of mlz-core's, norwayeast and swedencentral, not westeurope"):
+        with self.assertRaisesRegex(ConfigError, "only in some regions, not westeurope"):
             install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
 
     def test_the_network_settings_come_first(self):
@@ -609,13 +609,16 @@ class PrepareTest(unittest.TestCase):
                 (core / folder / "main.tf").write_text("# main\n")
             (core / "bootstrap/terraform/backend_override.tf").write_text('terraform {\n  backend "local" {}\n}\n')
             (core / "bootstrap/terraform/.terraform.lock.hcl").write_text("# lock\n")
+            (core / "modules/naming/region-codes.json").write_text("{}\n")
             (work / "bootstrap/terraform").mkdir(parents=True)
             (work / "bootstrap/terraform/removed.tf").write_text("# from an older mlz-core\n")
+            (work / "modules/naming").mkdir(parents=True)
+            (work / "modules/naming/removed.json").write_text("{}\n")
             with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
                 install.Terraform(work, "tenant").prepare()
             root = work / "bootstrap/terraform"
             self.assertEqual(sorted(p.name for p in root.iterdir()), [".terraform.lock.hcl", "main.tf"])
-            self.assertTrue((work / "modules/naming/main.tf").exists())
+            self.assertEqual(sorted(p.name for p in (work / "modules/naming").iterdir()), ["main.tf", "region-codes.json"])
 
     def test_the_checkout_itself_is_refused_as_the_work_folder_and_keeps_its_files(self):
         with tempfile.TemporaryDirectory() as tmp:

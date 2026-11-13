@@ -81,7 +81,7 @@ def landing_zone() -> dict:
         "owner": text("The owning team's email address. Becomes the Owner tag, and gets the budget alerts unless budget.contacts names others.", pattern=pattern(vending.EMAIL), maxLength=vending.TAG_VALUE_LENGTH),
         "cost_center": {"description": "The cost center. Becomes the CostCenter tag.", "type": ["string", "integer"], "maxLength": vending.TAG_VALUE_LENGTH},
         "archetype": text("The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).", enum=list(ARCHETYPES)),
-        "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=list(platform.REGIONS)),
+        "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
         "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged.", pattern=pattern(vending.GUID, ignore_case=True)),
         "budget": or_empty(mapping({
             "monthly": {"description": "A whole amount per month, in the subscription's currency. No monthly, no budget.", "type": "integer", "exclusiveMinimum": 0},

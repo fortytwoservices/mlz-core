@@ -163,8 +163,9 @@ state account's private endpoint ([below](#running-it-again)), `mlz install runn
   nothing and prints the commands to send to an owner, filled in, and then the three commands that switch
   the repos, which an admin on them runs.
 
-GitHub runs these runners in customers' networks only in some regions: of mlz-core's, Norway East and
-Sweden Central. Elsewhere the step stops, and the pipelines stay on GitHub's public runners.
+GitHub runs these runners in customers' networks only in some regions ([platform](platform.md#github-hosted-runners)):
+in Europe, Norway East, Sweden Central, France Central, Switzerland North and UK South and West. Elsewhere
+the step stops, and the pipelines stay on GitHub's public runners.
 
 If the organization belongs to a GitHub Enterprise account, organizations cannot make network
 configurations until an enterprise owner allows it, once: the enterprise's Settings, Policies, Hosted

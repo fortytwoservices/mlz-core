@@ -16,7 +16,7 @@ variable "region" {
   nullable    = false
 
   validation {
-    condition     = contains(["norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral"], var.region)
-    error_message = "`region` has no short code yet; add it to modules/naming/main.tf."
+    condition     = contains(keys(jsondecode(file("${path.module}/region-codes.json"))), var.region)
+    error_message = "`region` is not an Azure region in modules/naming/region-codes.json (lower case, no spaces, for example `norwayeast`)."
   }
 }
