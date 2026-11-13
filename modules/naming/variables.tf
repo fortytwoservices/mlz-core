@@ -10,6 +10,13 @@ variable "mlz" {
   description = "The landing zone's naming values, as vending writes them to the workload repo's mlz.auto.tfvars.json."
   nullable    = false
 
+  # The codes as Python's short() takes them (tools/mlz/naming.py, LIMITS): only {purpose} may be empty. Microsoft's
+  # region codes are 2 to 4 (region-codes.json), a customer's own 2 to 5.
+  validation {
+    condition = alltrue([for code, limits in { org = [2, 4], app = [2, 5], env = [1, 4], region = [2, 5] } :
+    can(regex(format("^[a-z0-9]{%d,%d}$", limits[0], limits[1]), var.mlz[code]))])
+    error_message = "The codes are lower-case letters and digits: org 2 to 4, app 2 to 5, env 1 to 4, region 2 to 5."
+  }
   # Templates are checked as customer.yaml's are (tools/mlz/naming.py, parse()), so none renders a name Python would not.
   validation {
     condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :

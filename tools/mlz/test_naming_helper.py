@@ -87,6 +87,16 @@ class HelperTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, template)
                 self.assertIn(message, " ".join(result.stderr.split()), template)
 
+    def test_codes_python_refuses_the_helper_refuses(self):
+        good = {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": naming.TEMPLATE, "templates": {}}
+        settings = naming.settings({"naming": {"org": "acme"}}, "mlz")
+        with self.assertRaisesRegex(naming.ConfigError, "app is ''"):
+            naming.render(settings, "application_gateway", app="", env="prod", region="norwayeast")
+        for code, wrong in (("app", ""), ("app", "payments"), ("org", "a"), ("org", "ACME"), ("env", ""), ("env", "prod1"), ("region", "n")):
+            result, _ = apply({"case": {"mlz": {**good, code: wrong}, "type": "application_gateway", "purpose": None, "nn": 1}})
+            self.assertNotEqual(result.returncode, 0, f"{code}={wrong!r}")
+            self.assertIn("The codes are lower-case letters and digits", " ".join(result.stderr.split()), f"{code}={wrong!r}")
+
     def test_a_name_azure_would_not_take_is_refused_not_cut(self):
         settings = naming.settings({"naming": {"org": "acme"}}, "mlz")
         result, _ = apply({"long": {"mlz": {**values(settings, "prod", "norwayeast"), "app": "pay"}, "type": "key_vault", "purpose": "logs", "nn": 1}})
