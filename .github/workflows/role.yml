@@ -20,6 +20,7 @@
 # publish main: offers the role's contract to the repos that read it, as a pull request each.
 # merge  a contract pull request: merges it once check and plan have passed on it.
 # drift  the daily check: one issue in the repo while a stack differs from main or its plan did not finish.
+# decommission  vending, main: the pull requests that delete a decommissioned landing zone's files.
 #
 # The bootstrap sets the variables (AZURE_*, TFSTATE_*, MLZ_REPOSITORIES); docs/pipelines.md lists the rest.
 # plan, apply and publish reach Azure and the state, so they run on the private runner in management's network
@@ -451,6 +452,67 @@ jobs:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
         run: .mlz-core/tools/ci/publish.sh "$ROLE"
+
+  # After a landing zone's decommission is applied, its files go in pull requests a person merges
+  # (tools/mlz/decommission.py): the platform's rules file for it first, then its own file with its range
+  # released. Runs on main, after every run in which the landing zones are as main says: an approved apply, no
+  # change to apply, or a daily check without drift, which also offers vending's once the platform's is merged.
+  decommission:
+    if: >-
+      always() && inputs.role == 'vending' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      && needs.check.result == 'success' && needs.plan.result == 'success'
+      && contains(fromJSON('["success", "skipped"]'), needs.changed.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.apply.result)
+    needs: [check, plan, changed, apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: mlz-decommission
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # signs in as vending's plan identity, to see the hubs' firewall policies
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # The mlz tools read YAML through terraform console (tools/mlz/files.py).
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      # Read-only: the range is released only once the platform's apply has taken the rules out of Azure.
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - id: writer
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Offer the pull requests that delete decommissioned landing zones' files
+        env:
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          PYTHONPATH: .mlz-core/tools
+        run: python3 -m mlz decommission --repo .
 
   # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's

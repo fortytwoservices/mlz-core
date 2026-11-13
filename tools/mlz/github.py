@@ -68,13 +68,20 @@ class GitHub:
             return None, None
         return base64.b64decode(found["content"]).decode(), found["sha"]
 
+    def folder(self, repo: str, path: str, ref: str) -> list[str]:
+        """The paths of the files in a folder and below it; [] when there is no such folder."""
+        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        if not isinstance(found, list):
+            return []
+        return sorted(p for item in found for p in ([item["path"]] if item["type"] == "file" else self.folder(repo, item["path"], ref)))
+
     def head(self, repo: str, branch: str) -> str:
         return self._api(f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
-    def reset_branch(self, repo: str, branch: str, base: str) -> str:
-        """The branch at the base branch's head, created or moved back there (it is the tool's own); returns
-        that commit."""
-        sha = self.head(repo, base)
+    def reset_branch(self, repo: str, branch: str, base: str, at: str | None = None) -> str:
+        """The branch at the base branch's head, or at the commit `at`, created or moved back there (it is the
+        tool's own); returns that commit."""
+        sha = at or self.head(repo, base)
         if self._api(f"repos/{repo}/git/ref/heads/{branch}", missing_ok=True):
             self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True})
         else:

@@ -23,10 +23,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-from . import contract, explain, firewall, install, new, platform, schema, upgrade, vending
+from . import contract, decommission, explain, firewall, install, new, platform, schema, upgrade, vending
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -74,6 +75,8 @@ def main() -> int:
     w = roles.add_parser("vending-contract", help="each landing zone's region and range, for the platform's firewall rules")
     w.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     w.add_argument("--out", type=Path, required=True, help="the YAML file to write")
+    d = roles.add_parser("decommission", help="after a landing zone's decommission is applied, offer the pull requests that delete its files")
+    d.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout, at main")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
     c.add_argument("kind", choices=sorted(contract.CONTRACTS))
     c.add_argument("--out", type=Path, required=True, help="the YAML file to write, in a repo's _generated/")
@@ -119,6 +122,27 @@ def main() -> int:
                         install.step_publish(GitHub(), terraform, args.settings)
         except ConfigError as error:
             print(f"mlz install {args.step}: {error}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.role == "decommission":
+        try:
+            repositories = json.loads(os.environ["MLZ_REPOSITORIES"])
+            github = GitHub()
+            # Only the run of main's current commit offers anything: an older one would offer files main has left.
+            sha, head = os.environ.get("GITHUB_SHA"), github.head(repositories["vending"], "main")
+            if sha and head != sha:
+                print(f"mlz decommission: main is at {head} now, not at this run's {sha}: the newer run does it.")
+                return 0
+            run = os.environ.get("GITHUB_RUN_ID")
+            run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ.get('GITHUB_REPOSITORY')}/actions/runs/{run}" if run else "run by hand"
+            # Signed in as vending's read-only identity, which reads the hubs' firewall policies.
+            decommission.cleanup(github, install.Azure(os.environ["AZURE_TENANT_ID"]), args.repo, repositories, run_url, sha=head)
+        except KeyError as error:
+            print(f"mlz decommission: {error} is not set; MLZ_REPOSITORIES and AZURE_TENANT_ID come from the bootstrap.", file=sys.stderr)
+            return 1
+        except ConfigError as error:
+            print(f"mlz decommission: {error}", file=sys.stderr)
             return 1
         return 0
 
