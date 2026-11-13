@@ -2,6 +2,7 @@
 
     python3 -m mlz platform --repo <mlz-platform> --out <config.json>
     python3 -m mlz allocate --repo <mlz-vending> [--check]
+    python3 -m mlz names    --repo <mlz-vending> --renew <key> [<key> ...]
     python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
     python3 -m mlz explain  --repo <mlz-vending> <key>
@@ -41,10 +42,16 @@ def main() -> int:
     p.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     p.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     p.add_argument("--out", type=Path, required=True, help="where to write the root's config (JSON)")
-    a = roles.add_parser("allocate", help="give new landing zones and subnets their blocks in _generated/ip-plan.yaml")
+    a = roles.add_parser("allocate", help="give new landing zones and subnets their blocks in _generated/ip-plan.yaml, and their names in _generated/names.yaml")
     a.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
+    a.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     a.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
-    a.add_argument("--check", action="store_true", help="write nothing; fail if the IP plan is not what allocate would write (for CI)")
+    a.add_argument("--check", action="store_true", help="write nothing; fail if the IP plan or the names are not what allocate would write (for CI)")
+    a.add_argument("--base-names", type=Path, help="the names on a pull request's base branch: only those are kept, the rest given again (for CI)")
+    nm = roles.add_parser("names", help="give landing zones the naming template's names again (docs/naming.md)")
+    nm.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
+    nm.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
+    nm.add_argument("--renew", nargs="+", required=True, metavar="key", help="the landing zones to rename: their next plan replaces what is renamed")
     r = roles.add_parser("release", help="free what a landing zone no longer uses, once it is destroyed")
     r.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     r.add_argument("key", help="the landing zone's key, <workload>-<env>")
@@ -165,12 +172,12 @@ def main() -> int:
     # Every file the command reads, parsed in one terraform run before anything is read.
     inputs = {
         "platform": ["hubs", "_generated"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
-        "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
+        "names": ["landing-zones", "_generated"], "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
         "explain": ["landing-zones", "_generated"], "new": ["landing-zones", "_generated"],
     }
     try:
         if args.role != "contract":
-            contracts = [getattr(args, name) for name in ("governance", "platform") if getattr(args, name, None)]
+            contracts = [getattr(args, name) for name in ("governance", "platform", "base_names") if getattr(args, name, None)]
             preload([p for p in contracts if p.is_file()] + [f for folder in inputs[args.role] for f in yaml_files(args.repo / folder)])
         if args.role == "contract":
             args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -198,7 +205,7 @@ def main() -> int:
             governance, platform_contract = optional_contracts(args)
             lz, plan = zones[args.key], vending.ip_plan(args.repo)
             parts = explain.explain(args.repo, args.key, lz, plan, governance, platform_contract)
-            found = explain.problems(args.key, lz, plan, governance, platform_contract)
+            found = explain.problems(args.key, lz, plan, governance, platform_contract, vending.recorded_names(args.repo))
             print(explain.render(args.repo, args.key, lz, parts, found, None not in (governance, platform_contract)), end="")
         elif args.role == "new":
             given = {k: getattr(args, k) for k in ("owner", "cost_center", "archetype", "location", "subscription", "short_name")}
@@ -206,7 +213,8 @@ def main() -> int:
                 print(f"mlz new: wrote {path}")
             key = f"{args.workload}-{args.env}"
             governance, platform_contract = optional_contracts(args)
-            found = explain.problems(key, vending.landing_zones(args.repo)[key], vending.ip_plan(args.repo), governance, platform_contract)
+            found = explain.problems(key, vending.landing_zones(args.repo)[key], vending.ip_plan(args.repo), governance, platform_contract,
+                                     vending.recorded_names(args.repo))
             print(f"mlz new: next, fill in the settings commented out in those files (the check below names them), hand "
                   f"the subscription over to vending (docs/bootstrap.md), and open a pull request: its run gives {key} its addresses.")
             print("".join(f"  {problem}\n" for problem in found) or f"  {explain.clean(None not in (governance, platform_contract))}\n", end="")
@@ -223,23 +231,33 @@ def main() -> int:
             print(f"mlz platform: wrote {args.out}")
         elif args.role == "allocate":
             plan, changes, retired = vending.allocate(args.repo, published("platform"))
-            text = vending.render_plan(plan, retired)
+            base = vending.recorded_names(args.repo, args.base_names) if args.base_names else None
+            record, named = vending.give_names(args.repo, plan, published("governance"), base=base)
+            changes += named
+            texts = {vending.IP_PLAN: vending.render_plan(plan, retired), vending.NAMES: vending.render_names(record)}
             if args.check:
-                path = args.repo / vending.IP_PLAN
-                if (path.read_text() if path.exists() else "") != text:
+                stale = [name for name, text in texts.items() if not (args.repo / name).exists() or (args.repo / name).read_text() != text]
+                if stale:
                     raise ConfigError(
-                        f"{vending.IP_PLAN} is not up to date; run python3 -m mlz allocate and commit it."
+                        f"{' and '.join(stale)} {'is' if len(stale) == 1 else 'are'} not up to date; run python3 -m mlz allocate and commit {'it' if len(stale) == 1 else 'them'}."
                         + "".join(f"\n  {c}" for c in changes)
                     )
-                print(f"mlz allocate: {vending.IP_PLAN} is up to date")
+                print(f"mlz allocate: {vending.IP_PLAN} and {vending.NAMES} are up to date")
                 return 0
-            write_plan(args.repo, text)
+            for name, text in texts.items():
+                write_file(args.repo / name, text)
             print("mlz allocate: " + (f"{len(changes)} change(s)" if changes else "nothing new") + "".join(f"\n  {c}" for c in changes))
             for key in retired:
                 print(f"mlz allocate: {key} was removed but holds its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")
+        elif args.role == "names":
+            record, changes = vending.give_names(args.repo, vending.ip_plan(args.repo), published("governance"), set(args.renew))
+            write_file(args.repo / vending.NAMES, vending.render_names(record))
+            print("mlz names: " + (f"{len(changes)} renamed" if changes else "the names were the template's already") + "".join(f"\n  {c}" for c in changes))
+            if changes:
+                print(f"mlz names: commit {vending.NAMES} in a pull request; its plan replaces each renamed resource, for its reviewer to approve.")
         elif args.role == "release":
             plan, retired, freed = vending.release(args.repo, args.key)
-            write_plan(args.repo, vending.render_plan(plan, retired))
+            write_file(args.repo / vending.IP_PLAN, vending.render_plan(plan, retired))
             print(f"mlz release: freed {freed}")
         else:
             configs = vending.build(args.repo, published("governance"), published("platform"))
@@ -270,8 +288,7 @@ def own_folder(folder: Path) -> None:
     (folder / MARKER).write_text("Written by python3 -m mlz vending, which empties this folder on every run.\n")
 
 
-def write_plan(repo: Path, text: str) -> None:
-    path = repo / vending.IP_PLAN
+def write_file(path: Path, text: str) -> None:
     if not path.exists() or path.read_text() != text:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)

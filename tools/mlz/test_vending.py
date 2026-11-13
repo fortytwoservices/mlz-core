@@ -18,7 +18,7 @@ from mlz.__main__ import MARKER, main, own_folder
 from mlz import files
 from mlz.contract import render
 from mlz.firewall import vending_contract
-from mlz.vending import IP_PLAN, allocate, build, ip_plan, landing_zones, place, release, render_plan
+from mlz.vending import IP_PLAN, NAMES, allocate, build, give_names, ip_plan, landing_zones, place, release, render_names, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -62,10 +62,13 @@ class VendingTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def allocate(self, platform: dict = PLATFORM) -> list[str]:
-        """Runs the allocator and writes its plan, as `python3 -m mlz allocate` does."""
+    def allocate(self, platform: dict = PLATFORM, governance: dict = GOVERNANCE) -> list[str]:
+        """Runs the allocator and writes its plan and the names, as `python3 -m mlz allocate` does. Returns the
+        plan's changes."""
         plan, changes, retired = allocate(self.repo, platform)
+        record, _ = give_names(self.repo, plan, governance)
         self.write(IP_PLAN, render_plan(plan, retired))
+        self.write(NAMES, render_names(record))
         return changes
 
     def plan(self) -> dict:

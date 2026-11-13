@@ -23,8 +23,12 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
+        self.allocate()
+
+    def allocate(self, governance=GOVERNANCE) -> None:
         plan, _, retired = vending.allocate(self.repo, PLATFORM)
         self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
+        self.write(vending.NAMES, vending.render_names(vending.give_names(self.repo, plan, governance)[0]))
 
     def tearDown(self):
         self.tmp.cleanup()

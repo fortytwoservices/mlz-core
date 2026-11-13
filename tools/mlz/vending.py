@@ -19,7 +19,7 @@ from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
 from . import naming
-from .files import preload, read_setting, setting_names, yaml_files
+from .files import preload, read_setting, read_yaml, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
 
@@ -55,6 +55,13 @@ IP_PLAN_HEADER = (
     "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
     "Nothing here ever moves. A removed landing zone or subnet keeps its block until it is destroyed and\n"
     "released (python3 -m mlz release)."
+)
+NAMES = "_generated/names.yaml"
+NAMES_HEADER = (
+    "The names vending gave each landing zone from the naming template (docs/naming.md), kept as first given.\n"
+    "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
+    "A name here stays when the template or a short name changes. To give a landing zone the template's names\n"
+    "again, run python3 -m mlz names --renew <key>; to change one name, set it under names: in its file."
 )
 
 
@@ -462,14 +469,16 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         if isinstance(short_name(lz), str):  # check() reports one that is not
             shorts.setdefault(short_name(lz), set()).add(lz["workload"])
     problems += [f"landing-zones: workloads {', '.join(sorted(w))} share the short name {k}; give each its own short_name." for k, w in sorted(shorts.items()) if len(w) > 1]
-    try:
-        # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
-        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
-    except ConfigError as error:
-        problems.append(f"_generated/governance.yaml: {error}")
-        settings = None
-    names = {key: landing_zone_names(key, lz, settings, sorted(plan[key]["subnets"]), problems)
-             for key, lz in zones.items() if settings is not None and key in plan}
+    # Names as recorded when first given, under any the landing zone's file sets: the template is not read here,
+    # so a changed one renames nothing until the IP allocator records it for a landing zone (names --renew).
+    recorded, names = recorded_names(repo), {}
+    for key, lz in zones.items():
+        if key not in plan:
+            continue
+        if key not in recorded:
+            problems.append(f"{key}: no names yet; run the IP allocator (python3 -m mlz allocate).")
+            continue
+        names[key], _ = landing_zone_names(key, lz, sorted(plan[key]["subnets"]), recorded[key], None, problems)
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -516,13 +525,13 @@ def short_name(lz: dict) -> str:
     return lz["settings"].get("short_name") or lz["workload"]
 
 
-def landing_zone_names(key: str, lz: dict, settings: naming.Naming, subnets: list[str], problems: list[str]) -> dict:
-    """Every name vending gives in the landing zone: from the template, or from names: in its file. Subnets and
-    peerings, which are named inside their network, keep their own pattern (docs/naming.md)."""
+def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, settings: naming.Naming | None,
+                       problems: list[str]) -> tuple[dict, dict]:
+    """Every name vending gives in the landing zone, and the record's entry for it (_generated/names.yaml).
+    A name under names: in its file wins; then the one kept in the record; else, given settings, the template's.
+    The entry holds the template's names, kept or new, for whatever has no name of its own. Subnets and peerings,
+    named inside their network, keep their own pattern (docs/naming.md)."""
     where, s = lz["where"], lz["settings"]
-    app = short_name(lz)
-    if not (isinstance(app, str) and naming.SHORT.fullmatch(app) and 2 <= len(app) <= 5) or not isinstance(s.get("location"), str):
-        return {}  # check() says what the short name or the location must be; no name is right without them
     explicit = s.get("names")
     if explicit is not None and not isinstance(explicit, dict):
         problems.append(f"{where}: names maps each name to set ({', '.join([*NAMED, 'network_security_groups'])}) to the name.")
@@ -534,20 +543,46 @@ def landing_zone_names(key: str, lz: dict, settings: naming.Naming, subnets: lis
         problems.append(f"{where}: names.network_security_groups maps a subnet to its NSG's name.")
         nsgs = {}
     problems += [f"{where}: names.network_security_groups.{k} is not one of its subnets ({', '.join(subnets)})." for k in sorted(set(nsgs) - set(subnets), key=str)]
+    app, env = short_name(lz), lz["environment"]
+    # check() says what the short name or the location must be: no name is right without them.
+    fits = isinstance(app, str) and naming.SHORT.fullmatch(app) is not None and 2 <= len(app) <= 5 and isinstance(s.get("location"), str)
+    template = settings is not None and fits
+    if template and env not in settings.environments:
+        problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
+        template = False
+    entry: dict = {}
 
-    def one(kind: str, purpose: str | None, given: object) -> str | None:
+    def one(item: str, kind: str, purpose: str | None, given: dict, held: dict) -> str | None:
         try:
-            if given is not None:
-                if not isinstance(given, str):
-                    raise ConfigError(f"{given!r} is not a name")
-                return naming.check(kind, given)
-            return naming.render(settings, kind, app=app, env=lz["environment"], region=s["location"], purpose=purpose)
+            if item in given:
+                if not isinstance(given[item], str):
+                    raise ConfigError(f"{given[item]!r} is not a name")
+                return naming.check(kind, given[item])
+            if item in held:
+                name = held[item]
+            elif template:
+                name = naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
+            elif settings is None and fits:
+                problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (python3 -m mlz allocate).")
+                return None
+            else:
+                return None
+            return name
         except ConfigError as error:
             problems.append(f"{where}: {error}")
             return None
 
-    names = {name: one(kind, purpose, explicit.get(name)) for name, (kind, purpose) in NAMED.items()}
-    names["network_security_groups"] = {subnet: one("network_security_group", subnet, nsgs.get(subnet)) for subnet in subnets}
+    names = {}
+    for item, (kind, purpose) in NAMED.items():
+        names[item] = one(item, kind, purpose, explicit, kept)
+        if item not in explicit and names[item] is not None:
+            entry[item] = names[item]
+    held = kept.get("network_security_groups") or {}
+    names["network_security_groups"] = {}
+    for subnet in subnets:
+        names["network_security_groups"][subnet] = one(subnet, "network_security_group", subnet, nsgs, held)
+        if subnet not in nsgs and names["network_security_groups"][subnet] is not None:
+            entry.setdefault("network_security_groups", {})[subnet] = names["network_security_groups"][subnet]
     # Two of one type side by side need names apart, which a template without {purpose} would not give: both
     # resource groups in one subscription, or every NSG in one resource group. Azure ignores case in both.
     for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group")]),
@@ -561,7 +596,74 @@ def landing_zone_names(key: str, lz: dict, settings: naming.Naming, subnets: lis
                 seen[value.lower()] = item
     names["subnet"] = "snet-%s"
     names["peering_to_hub"], names["peering_from_hub"] = f"peer-{key}-to-hub", f"peer-hub-to-{key}"
-    return names
+    return names, entry
+
+
+def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
+    """_generated/names.yaml, or another copy of it (source): {key: {name: value, network_security_groups: {subnet:
+    value}}}, each checked."""
+    recorded = (read_yaml(source) if source else read_setting(repo / NAMES.removesuffix(".yaml"))) or {}
+    parsed = {}
+    for key, entry in recorded.items():
+        try:
+            entry = entry or {}
+            if set(entry) - set(NAMED) - {"network_security_groups"}:
+                raise ValueError
+            parsed[str(key)] = {item: naming.check(NAMED[item][0], value) for item, value in entry.items() if item in NAMED}
+            if entry.get("network_security_groups"):
+                parsed[str(key)]["network_security_groups"] = {str(subnet): naming.check("network_security_group", value)
+                                                                for subnet, value in entry["network_security_groups"].items()}
+        except (AttributeError, TypeError, ValueError, ConfigError):
+            raise ConfigError(f"{NAMES}: {key} is not as the IP allocator writes it; restore the file from git.") from None
+    return parsed
+
+
+def flat(entry: dict) -> dict[str, str]:
+    """A record's entry as one level: network_security_groups.<subnet> for each NSG."""
+    return {**{k: v for k, v in entry.items() if k != "network_security_groups"},
+            **{f"network_security_groups.{s}": v for s, v in (entry.get("network_security_groups") or {}).items()}}
+
+
+def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[str] = frozenset(),
+               base: dict[str, dict] | None = None) -> tuple[dict[str, dict], list[str]]:
+    """The names record for every landing zone with a range in plan: what it had, and the template's name for anything
+    new. A landing zone in renew gets the template's names again, all of them. base is the record on a pull request's
+    base branch: a name is kept only once it is there, where it can be deployed from, so one this pull request gave
+    on an earlier run follows its YAML as it is now. Returns (record, what changed); fails with every problem when a
+    name cannot be given."""
+    zones, recorded = landing_zones(repo), recorded_names(repo)
+    for key in sorted(renew):
+        if key not in zones:
+            raise ConfigError(f"no landing zone {key}; the landing zones are {', '.join(sorted(zones)) or 'none yet'}.")
+        if key not in plan:
+            raise ConfigError(f"{key} has no address range yet, so no names to renew; the IP allocator gives both on its pull request.")
+    try:
+        # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
+        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+    except ConfigError as error:
+        raise ConfigError(f"_generated/governance.yaml: {error}") from None
+    def kept(key: str) -> dict:
+        entry = {} if key in renew else recorded.get(key, {})
+        if base is None:
+            return entry
+        on_base = base.get(key, {})
+        return {**{item: value for item, value in entry.items() if item in NAMED and item in on_base},
+                "network_security_groups": {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items()
+                                            if subnet in (on_base.get("network_security_groups") or {})}}
+
+    record, changes, problems = {}, [], []
+    for key in sorted(set(zones) & set(plan)):
+        before = flat(recorded.get(key, {}))
+        _, record[key] = landing_zone_names(key, zones[key], sorted(plan[key]["subnets"]), kept(key), settings, problems)
+        changes += [f"{key}: {item} {value}" if item not in before else f"{key}: {item} {before[item]}, now {value}"
+                    for item, value in flat(record[key]).items() if before.get(item) != value]
+    if problems:
+        raise ConfigError("cannot name:\n  " + "\n  ".join(dict.fromkeys(problems)))
+    return record, changes
+
+
+def render_names(record: dict[str, dict]) -> str:
+    return dump(record, NAMES_HEADER, spaced=True)
 
 
 def decommissioned(lz: dict) -> bool:
