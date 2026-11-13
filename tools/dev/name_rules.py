@@ -11,6 +11,7 @@ wrong (virtual machines: no dashes; data collection rules: no lengths) is left o
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -61,10 +62,17 @@ def main(path: str) -> None:
     types = {}
     for key, (source, slug, extra) in TYPES.items():
         rule = catalog[source]
-        pattern = rule["regex"].replace(r"\p{L}\p{Nd}", r"\w")  # Python's re has no \p{}; \w is letters, digits, _
+        allowed = {}
+        if r"\p{" in rule["regex"]:
+            # Python's re has no \p{}: a class of Unicode letters (L), decimal digits (Nd) and a few characters becomes
+            # those categories and characters, checked one by one (tools/mlz/naming.py). Any other use stops here.
+            found = re.fullmatch(r"\^\[\\p\{L\}\\p\{Nd\}((?:\\?[^\]\\])*)\]\+\$", rule["regex"])
+            if not found:
+                raise SystemExit(f"{source}: {rule['regex']} uses \\p{{}} in a way this script does not translate")
+            allowed = {"allowed": {"categories": ["L", "Nd"], "characters": found.group(1).replace("\\", "")}}
         types[key] = {"slug": slug, "min_length": rule["min_length"], "max_length": rule["max_length"],
                       "dashes": rule["dashes"], "lowercase": rule["lowercase"], "global": rule["scope"] == "global",
-                      "pattern": pattern, **extra}
+                      **({"pattern": rule["regex"]} if not allowed else allowed), **extra}
     out = Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json"
     out.write_text(json.dumps({"source": CATALOG, "types": types}, indent=2) + "\n")
     print(f"wrote {out}: {len(types)} types")

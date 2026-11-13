@@ -66,6 +66,16 @@ class RenderTest(unittest.TestCase):
             naming.check("storage_account", "StPay")
         with self.assertRaisesRegex(ConfigError, "Azure needs at least 3"):
             naming.check("storage_account", "st")
+        # A resource group takes Unicode letters and decimal digits, not every character Python counts as one.
+        self.assertEqual(naming.check("resource_group", "rg-økonomi-(prod)_1"), "rg-økonomi-(prod)_1")
+        for odd in ("rg-½", "rg-x²", "rg x"):
+            with self.assertRaisesRegex(ConfigError, "has characters Azure does not allow there"):
+                naming.check("resource_group", odd)
+
+    def test_a_type_mlz_core_does_not_name(self):
+        for call in (lambda: naming.check("virtual_machine", "vm-01"), lambda: naming.render(acme(), "virtual_machine", app="pay", env="prod", region="norwayeast")):
+            with self.assertRaisesRegex(ConfigError, "'virtual_machine' is not a type mlz-core names; use application_gateway, "):
+                call()
 
 
 class SettingsTest(unittest.TestCase):
@@ -94,6 +104,8 @@ class SettingsTest(unittest.TestCase):
         self.assertIn("naming.environments.hotfix is 'hot-fix'", self.problems(environments={"hotfix": "hot-fix"}))
         self.assertIn("naming.regions.atlantis is not an Azure region", self.problems(regions={"atlantis": "atl"}))
         self.assertIn("gives westeurope the code nwe, which norwayeast has too", self.problems(regions={"westeurope": "nwe"}))
+        for key, value in (("templates", "oops"), ("environments", ["prod"]), ("regions", "weu")):
+            self.assertIn(f"naming.{key} maps each name to its value, not {value!r}", self.problems(**{key: value}))
 
 
 class RulesTest(unittest.TestCase):
@@ -101,7 +113,8 @@ class RulesTest(unittest.TestCase):
         slugs = [rule["slug"] for rule in naming.RULES.values()]
         self.assertEqual(len(slugs), len(set(slugs)))
         for kind, rule in naming.RULES.items():
-            re.compile(rule["pattern"])
+            if "pattern" in rule:
+                re.compile(rule["pattern"])
             self.assertRegex(rule["slug"], r"^[a-z]{2,6}$", kind)
             self.assertIsNotNone(rule["max_length"], kind)
 

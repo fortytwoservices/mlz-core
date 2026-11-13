@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,23 @@ class Naming:
     templates: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
     environments: dict[str, str] = field(default_factory=lambda: dict(ENVIRONMENTS))
     regions: dict[str, str] = field(default_factory=lambda: dict(REGION_CODES))
+
+
+def rules_for(kind: str) -> dict:
+    if kind not in RULES:
+        raise ConfigError(f"{kind!r} is not a type mlz-core names; use {', '.join(sorted(RULES))}.")
+    return RULES[kind]
+
+
+def mapping(given: dict, key: str, problems: list[str]) -> dict:
+    """A part of the naming section that maps names to values, or {} with a problem when it is something else."""
+    value = given.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        problems.append(f"customer.yaml: naming.{key} maps each name to its value, not {value!r}.")
+        return {}
+    return value
 
 
 def parse(template: object, where: str, problems: list[str]) -> list[tuple[str, str]]:
@@ -88,17 +106,17 @@ def settings(customer: dict, root_id: str) -> Naming:
                         "letters and digits; set naming.org.")
     template = parse(given.get("template", TEMPLATE), "customer.yaml: naming.template", problems)
     templates = {}
-    for kind, text in (given.get("templates") or {}).items():
+    for kind, text in mapping(given, "templates", problems).items():
         if kind not in RULES:
             problems.append(f"customer.yaml: naming.templates.{kind} is not a type mlz-core names; use {', '.join(sorted(RULES))}.")
             continue
         templates[kind] = parse(text, f"customer.yaml: naming.templates.{kind}", problems)
     environments = dict(ENVIRONMENTS)
-    for env, code in (given.get("environments") or {}).items():
+    for env, code in mapping(given, "environments", problems).items():
         if short(f"customer.yaml: naming.environments.{env}", "env", code, problems):
             environments[str(env)] = code
     regions = dict(REGION_CODES)
-    for region, code in (given.get("regions") or {}).items():
+    for region, code in mapping(given, "regions", problems).items():
         if region not in REGION_CODES:
             problems.append(f"customer.yaml: naming.regions.{region} is not an Azure region (modules/naming/region-codes.json).")
         elif short(f"customer.yaml: naming.regions.{region}", "region", code, problems):
@@ -126,7 +144,7 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
     """The name of one resource of type `kind`, or a ConfigError saying which rule it breaks and how to fix it.
     env is the environment's long name (prod), region Azure's (norwayeast); both are turned into short codes."""
     problems: list[str] = []
-    rules = RULES[kind]
+    rules = rules_for(kind)
     short("app", "app", app, problems)
     if purpose:
         short("purpose", "purpose", purpose, problems)
@@ -155,15 +173,21 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
 
 def check(kind: str, name: str) -> str:
     """The name if Azure takes it for this type, else a ConfigError naming the rule it breaks."""
-    rules = RULES[kind]
+    rules = rules_for(kind)
     low, high = rules["min_length"] or 1, rules["max_length"]
     if high is not None and len(name) > high:
         raise ConfigError(f"{kind} name {name} is {len(name)} characters, {len(name) - high} more than Azure allows; "
                           f"shorten a short name, give the type a template of its own in customer.yaml, or set this name explicitly.")
     if len(name) < low:
         raise ConfigError(f"{kind} name {name} is {len(name)} characters; Azure needs at least {low}.")
-    if not re.fullmatch(rules["pattern"], name) or (rules.get("no_double_hyphen") and "--" in name):
-        raise ConfigError(f"{kind} name {name} has characters Azure does not allow there ({rules['pattern']}{', and no two hyphens in a row' if rules.get('no_double_hyphen') else ''}).")
+    if "allowed" in rules:  # Unicode letters, decimal digits and a few characters (the catalog's \p{L}\p{Nd})
+        allowed = rules["allowed"]
+        fits = all(unicodedata.category(c)[0] in allowed["categories"] or unicodedata.category(c) in allowed["categories"] or c in allowed["characters"] for c in name)
+        shown = f"letters, digits and {allowed['characters']}"
+    else:
+        fits, shown = re.fullmatch(rules["pattern"], name) is not None, rules["pattern"]
+    if not fits or (rules.get("no_double_hyphen") and "--" in name):
+        raise ConfigError(f"{kind} name {name} has characters Azure does not allow there ({shown}{', and no two hyphens in a row' if rules.get('no_double_hyphen') else ''}).")
     if rules["lowercase"] and name != name.lower():
         raise ConfigError(f"{kind} name {name} must be lower case.")
     return name

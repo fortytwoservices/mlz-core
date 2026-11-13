@@ -8,7 +8,13 @@
       "dashes": true,
       "lowercase": false,
       "global": false,
-      "pattern": "^[\\w_\\-\\.()]+$"
+      "allowed": {
+        "categories": [
+          "L",
+          "Nd"
+        ],
+        "characters": "_-.()"
+      }
     },
     "virtual_network": {
       "slug": "vnet",
