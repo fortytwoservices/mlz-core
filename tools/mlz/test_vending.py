@@ -382,6 +382,18 @@ class VendingTest(unittest.TestCase):
         self.assertIn("vnet-demo-pay-dv-nwe-01", (self.repo / NAMES).read_text())
         self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # the allocator keeps what was renewed
 
+    def test_an_environment_without_a_short_name_is_asked_for_once_and_only_when_needed(self):
+        self.allocate()
+        self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "55"))
+        plan, _, _ = allocate(self.repo, PLATFORM)
+        with self.assertRaises(ConfigError) as caught:
+            give_names(self.repo, plan, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertEqual(message.count("landing-zones/payments/hotfix: the environment 'hotfix' has no short name for names"), 1)
+        self.assertNotIn("payments-prod", message)  # its names are recorded: nothing needs the template
+        record, _ = give_names(self.repo, plan, {**GOVERNANCE, "naming": {"environments": {"hotfix": "hf"}}})
+        self.assertEqual(record["payments-hotfix"]["virtual_network"], "vnet-demo-pay-hf-nwe-01")
+
     def test_a_recorded_name_is_checked_and_a_missing_one_asked_for(self):
         self.allocate()
         self.write(NAMES, (self.repo / NAMES).read_text().replace("vnet-demo-pay-pd-nwe-01", "vnet demo"))

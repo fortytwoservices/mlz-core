@@ -552,9 +552,6 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
     # check() says what the short name or the location must be: no name is right without them.
     fits = isinstance(app, str) and naming.SHORT.fullmatch(app) is not None and 2 <= len(app) <= 5 and isinstance(s.get("location"), str)
     template = settings is not None and fits
-    if template and env not in settings.environments:
-        problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
-        template = False
     entry: dict = {}
 
     def one(item: str, kind: str, purpose: str | None, given: dict, held: dict) -> str | None:
@@ -564,15 +561,14 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
                     raise ConfigError(f"{given[item]!r} is not a name")
                 return naming.check(kind, given[item])
             if item in held:
-                name = held[item]
+                return held[item]
+            if template and env not in settings.environments:  # once, however many names need it
+                problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
             elif template:
-                name = naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
+                return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
             elif settings is None and fits:
                 problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (python3 -m mlz allocate).")
-                return None
-            else:
-                return None
-            return name
+            return None
         except ConfigError as error:
             problems.append(f"{where}: {error}")
             return None
