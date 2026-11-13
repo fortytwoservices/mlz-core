@@ -12,7 +12,7 @@ turned on later never moves another, and nobody types a subnet:
     then two /28s         DNS resolver inbound and outbound
     the rest              free for later
   fifth /24             management's network, in the primary region
-    first /25             GitHub-hosted runners (a subnet delegated to GitHub holds nothing else)
+    first /25             GitHub-hosted runners (delegated to GitHub where it supports the region)
     next /26              self-hosted runners
     next /27              private endpoints
     last /27              free for later
@@ -43,6 +43,10 @@ NETWORKS = {
     "identity": (1280, {"domain-controllers": (0, 26)}),
 }
 REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
+# Where GitHub's hosted runners can join a subnet of the customer's (GitHub Docs, "About Azure private
+# networking for GitHub-hosted runners", supported regions): of REGIONS, only these. Elsewhere management's
+# network keeps the subnet, undelegated, for self-hosted runners.
+GITHUB_RUNNER_REGIONS = ("norwayeast", "swedencentral")
 # Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
 AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
 
@@ -223,7 +227,7 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
 
     # Built by the management and identity stacks: management in the primary region, identity where asked.
     networks = {
-        "management": {primary: spoke(hubs[primary], "management")},
+        "management": {primary: {**spoke(hubs[primary], "management"), "github_runners": primary in GITHUB_RUNNER_REGIONS}},
         "identity": {region: spoke(h, "identity") for region, h in hubs.items() if h["identity"]},
     }
     # A landing zone given its range before v0.3.0 may lie where one of these is built now, even one removed

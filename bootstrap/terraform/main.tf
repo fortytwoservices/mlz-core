@@ -19,6 +19,14 @@ locals {
   # Identity's only when customer.yaml names an identity subscription.
   network_subscriptions = { for network in ["management", "identity"] : network => local.subscriptions[network] if contains(keys(local.subscriptions), network) }
 
+  # Where the state account's private endpoint goes, once the platform has built them: management's
+  # private endpoint subnet, and the hub's zone for blob names (tools/mlz/platform.py, modules/naming).
+  management_network    = module.naming.platform_networks.management
+  management_network_id = "${local.management}/resourceGroups/${local.management_network.resource_group}/providers/Microsoft.Network/virtualNetworks/${local.management_network.virtual_network}"
+  state_endpoint_subnet = "${local.management_network_id}/subnets/${format(local.management_network.subnet, "private-endpoints")}"
+  blob_zone             = "${local.connectivity}/resourceGroups/${module.naming.connectivity.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  state_endpoint        = data.azapi_resource.state_endpoint_subnet.exists && data.azapi_resource.blob_zone.exists
+
   # One read-only identity per role for pull request plans, and one for approved applies.
   roles      = toset(["governance", "platform", "vending"])
   identities = { for pair in setproduct(local.roles, ["plan", "apply"]) : "${pair[0]}-${pair[1]}" => { role = pair[0], kind = pair[1] } }
@@ -79,9 +87,10 @@ module "naming" {
   region  = local.region
 }
 
-# The management subscription may be new: the state account and the identities need their providers.
+# The management subscription may be new: the state account and the identities need their providers, and
+# GitHub's hosted runners join management's network through a GitHub.Network resource.
 resource "azapi_resource_action" "register" {
-  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity"])
+  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity", "GitHub.Network"])
 
   type        = "Microsoft.Resources/providers@2021-04-01"
   resource_id = "${local.management}/providers/${each.key}"
@@ -133,7 +142,8 @@ resource "azapi_resource" "network_resource_group" {
 }
 
 # Terraform state for every role. Entra ID only: account keys and key-signed SAS are refused. Versions
-# and soft delete keep earlier states. The public endpoint stays on until the private runners exist.
+# and soft delete keep earlier states. The public endpoint stays on until the private runners use the
+# private endpoint below.
 resource "azapi_resource" "state" {
   type      = "Microsoft.Storage/storageAccounts@2024-01-01"
   name      = local.names.storage_account
@@ -179,6 +189,80 @@ resource "azapi_resource" "container" {
   name      = each.key
   parent_id = azapi_update_resource.blob_service.id
   body      = { properties = { publicAccess = "None" } }
+}
+
+# The private runners reach the state through management's network: a private endpoint for blobs, and its
+# name in the hub's zone, which the runners resolve through the hub. Both are built by the platform's first
+# run, after the first bootstrap, so the bootstrap run again after it adds the endpoint; until then there
+# is none, and nothing waits. The endpoint is the state account's, so it lives beside it, never in the
+# network's group, where the platform's pipeline may change things.
+data "azapi_resource" "state_endpoint_subnet" {
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2024-07-01"
+  resource_id            = local.state_endpoint_subnet
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+data "azapi_resource" "blob_zone" {
+  type                   = "Microsoft.Network/privateDnsZones@2024-06-01"
+  resource_id            = local.blob_zone
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_endpoint" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateEndpoints@2024-07-01"
+  name      = "pep-${local.root}-state-${module.naming.region_code}"
+  parent_id = azapi_resource.resource_group.id
+  location  = local.region
+  tags      = local.tags
+  body = {
+    properties = {
+      subnet                     = { id = local.state_endpoint_subnet }
+      customNetworkInterfaceName = "nic-pep-${local.root}-state-${module.naming.region_code}"
+      privateLinkServiceConnections = [{
+        name       = "blob"
+        properties = { privateLinkServiceId = azapi_resource.state.id, groupIds = ["blob"] }
+      }]
+    }
+  }
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_endpoint_dns" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01"
+  name      = "default"
+  parent_id = azapi_resource.state_endpoint[0].id
+  body = {
+    properties = {
+      privateDnsZoneConfigs = [{ name = "blob", properties = { privateDnsZoneId = local.blob_zone } }]
+    }
+  }
+}
+
+# The zone answers only networks linked to it, and the hub links it to the hubs. Management resolves through
+# the hub (its firewall's DNS proxy, or its resolver) except behind a Basic firewall without a resolver, where
+# it asks Azure's own DNS from its own network: this link makes the endpoint's name resolve there too, and
+# changes nothing when management resolves through the hub.
+resource "azapi_resource" "state_endpoint_zone_link" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01"
+  name      = local.management_network.virtual_network
+  parent_id = local.blob_zone
+  location  = "global"
+  tags      = local.tags
+  body = {
+    properties = {
+      virtualNetwork      = { id = local.management_network_id }
+      registrationEnabled = false
+    }
+  }
+  response_export_values = []
 }
 
 resource "azapi_resource" "identity" {

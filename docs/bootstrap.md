@@ -24,9 +24,10 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Where | What |
 |---|---|
 | Tenant | The top management group, `<root>`, below the tenant root or `parent_management_group_id`. Governance builds everything below it, so its pipeline never needs rights at the tenant root. |
-| Management subscription | `rg-<root>-bootstrap-<region>`, holding the state account and the six pipeline identities. `rg-<root>-management-network-<region>`, empty, for management's network, which the platform builds. |
+| Management subscription | `rg-<root>-bootstrap-<region>`, holding the state account and the six pipeline identities. `rg-<root>-management-network-<region>`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub's hosted runners in that network. |
 | Identity subscription | `rg-<root>-identity-network-<region>`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
-| State account | `st<root>state<4 hex>`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners exist. |
+| State account | `st<root>state<4 hex>`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners use the private endpoint. |
+| State account's private endpoint | `pep-<root>-state-<region>`, beside the account, in management's `snet-private-endpoints`, with its name in the hub's `privatelink.blob.core.windows.net` zone, and that zone linked to management's network, so the name resolves there whether management asks the hub or, behind a Basic firewall without a resolver, Azure's own DNS. Made on the first run after the platform has built that network and zone ([below](#running-it-again)); until then there is none. |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
 | GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
 
@@ -141,6 +142,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
 command in `terraform output -raw handover`).
 
+### Running it again
+
 Run `bootstrap` again before the platform's next run when:
 - the customer was bootstrapped before mlz-core built management's and identity's networks;
 - or an identity subscription was added to `customer.yaml`.
@@ -148,6 +151,10 @@ Run `bootstrap` again before the platform's next run when:
 It makes the networks' resource groups, registers `Microsoft.Network` in their subscriptions, and gives the
 platform's identities their rights there. Without it, the platform's `management` or `identity` apply fails
 for lack of rights.
+
+Run it again after the platform's first apply, too, for the state account's private endpoint: it needs
+management's network and the hub's blob zone, which that apply builds. The step says which it found: the
+endpoint in place, or still waiting. The private runners reach the state only through it.
 
 A governance deployment applied before the bootstrap existed created the top group itself. Hand the
 group over before its next run, or governance plans to delete it (and Azure refuses, since it holds the

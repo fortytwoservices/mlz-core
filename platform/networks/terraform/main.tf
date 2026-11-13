@@ -39,5 +39,11 @@ module "network" {
   dns_servers            = each.value.dns_servers
   firewall               = each.value.firewall
   hub_virtual_network_id = "/subscriptions/${local.config.connectivity_subscription_id}/resourceGroups/${module.naming[each.key].connectivity.hub_resource_group}/providers/Microsoft.Network/virtualNetworks/${module.naming[each.key].connectivity.hub_virtual_network}"
-  tags                   = local.tags
+  # Management's, where GitHub supports the region (tools/mlz/platform.py).
+  github_runners = try(each.value.github_runners, false) ? {
+    subnet      = "github-runners"
+    name        = module.naming[each.key].platform_networks[var.network].github_network_settings
+    business_id = var.github_business_id
+  } : null
+  tags = local.tags
 }

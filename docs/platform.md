@@ -74,7 +74,7 @@ firewall); and a network security group on every subnet.
 
 | Network | Where | Subnets |
 |---|---|---|
-| Management, `vnet-<root>-management-<region code>` | the management subscription, in the primary region | `snet-github-runners` /25, for GitHub-hosted runners (a subnet delegated to GitHub holds nothing else); `snet-runners` /26, for self-hosted runners; `snet-private-endpoints` /27, the state account's first; a /27 free |
+| Management, `vnet-<root>-management-<region code>` | the management subscription, in the primary region | `snet-github-runners` /25, for GitHub-hosted runners ([below](#github-hosted-runners)); `snet-runners` /26, for self-hosted runners; `snet-private-endpoints` /27, the state account's first; a /27 free |
 | Identity, `vnet-<root>-identity-<region code>` | the identity subscription, in each region whose hub file says `identity: true` | `snet-domain-controllers` /26: the domain controllers will have its .4 and .5 |
 
 Each is a stack of its own in the platform pipeline, `management` and `identity`, with its own state, so
@@ -87,8 +87,24 @@ They are built in a resource group the bootstrap makes in each subscription,
 The platform's pipeline identities have rights on that group only, not on the rest of the subscription:
 governance's monitoring and the state account are in management too. Their outbound traffic is allowed by
 the firewall's rules like a landing zone's ([below](#firewall-rules)): `firewall/management.yaml` and
-`firewall/identity.yaml`. Runners, the state account's private endpoint and the domain controllers come in
-later releases.
+`firewall/identity.yaml`. The domain controllers come in a later release.
+
+### GitHub-hosted runners
+
+Where GitHub runs its hosted runners in the customer's own networks (of the regions mlz-core supports,
+Norway East and Sweden Central; [GitHub's list](https://docs.github.com/en/organizations/managing-organization-settings/about-azure-private-networking-for-github-hosted-runners-in-your-organization#about-supported-regions)),
+the management stack delegates `snet-github-runners` to GitHub and creates the `GitHub.Network/networkSettings`
+resource that joins it to the customer's GitHub organization, `ghns-<root>-management-<region code>`. The
+pipeline names the organization by its ID (`GITHUB_REPOSITORY_OWNER_ID`); a plan by hand takes
+`-var github_business_id=<id>` (`gh api orgs/<organization> --jq .id`). The stack's `networks` output
+holds the resource's ID at GitHub, which the organization's network configuration names. The runners take
+no connections, so the subnet's network security group refuses every one opened to them; their own
+connections out still get their replies. Elsewhere the subnet stays undelegated, for self-hosted runners.
+
+The state account's private endpoint, through which the runners reach the state, is the bootstrap's
+([bootstrap](bootstrap.md#running-it-again)). Azure refuses to delete the network settings resource while
+the organization's network configuration still uses it: to take management's network down, delete that
+configuration in GitHub first.
 
 ## Firewall rules
 

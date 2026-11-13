@@ -89,6 +89,7 @@ class PlatformTest(unittest.TestCase):
             "subnets": {"github-runners": "10.100.4.0/25", "runners": "10.100.4.128/26", "private-endpoints": "10.100.4.192/27"},
             "dns_servers": ["10.100.0.4"],  # the firewall's DNS proxy
             "firewall": "10.100.0.4",
+            "github_runners": True,  # GitHub's hosted runners can join a subnet in Norway East
         }})
         self.assertEqual(config["networks"]["identity"], {"swedencentral": {
             "address_space": "10.200.5.0/24",
@@ -97,6 +98,11 @@ class PlatformTest(unittest.TestCase):
             "firewall": "10.200.0.4",
         }})
         self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
+
+    def test_github_s_runners_join_management_s_network_only_where_github_supports_the_region(self):
+        self.hub("westeurope", HUB)
+        config = build(self.repo, {**GOVERNANCE, "primary_region": "westeurope"})
+        self.assertFalse(config["networks"]["management"]["westeurope"]["github_runners"])
 
     def test_a_network_is_never_built_over_a_landing_zone_given_before_v0_3(self):
         self.hub("norwayeast", HUB)
