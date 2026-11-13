@@ -31,8 +31,11 @@ OPTIONAL = {"purpose"}
 # A landing zone's file name to its environment's short name; customer.yaml adds or changes any.
 ENVIRONMENTS = {"dev": "dv", "test": "te", "uat": "ut", "sit": "st", "qa": "qa", "preprod": "pp", "sandbox": "sb", "dr": "dr", "prod": "pd"}
 # Lengths of the short codes a customer chooses: short enough that the 24-character types still fit.
-LIMITS = {"org": (2, 4), "app": (2, 5), "purpose": (1, 8), "env": (1, 4), "region": (2, 5)}
+# A purpose may be a subnet's name (an NSG's), so it takes inner hyphens and up to 20; its type's own length is
+# the real limit, and a type without dashes drops them.
+LIMITS = {"org": (2, 4), "app": (2, 5), "purpose": (1, 20), "env": (1, 4), "region": (2, 5)}
 SHORT = re.compile(r"^[a-z0-9]+$")
+PURPOSE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")  # as a subnet's name: hyphens inside, any number
 SETTINGS = {"org", "template", "templates", "environments", "regions"}
 RULES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json").read_text())["types"]
 PART = re.compile(r"\{([a-z]+)\}|(-)|([a-z0-9]+)")
@@ -134,11 +137,13 @@ def settings(customer: dict, root_id: str) -> Naming:
 
 
 def short(where: str, token: str, value: object, problems: list[str]) -> bool:
-    """A short code a customer chooses: lower-case letters and digits, within its token's limits."""
+    """A short code a customer chooses: lower-case letters and digits (a purpose also inner hyphens), within its
+    token's limits."""
     low, high = LIMITS[token]
-    if isinstance(value, str) and SHORT.fullmatch(value) and low <= len(value) <= high:
+    shape = PURPOSE if token == "purpose" else SHORT
+    if isinstance(value, str) and shape.fullmatch(value) and low <= len(value) <= high:
         return True
-    problems.append(f"{where} is {value!r}; it must be {low} to {high} lower-case letters and digits.")
+    problems.append(f"{where} is {value!r}; it must be {low} to {high} lower-case letters and digits{', with hyphens inside' if token == 'purpose' else ''}.")
     return False
 
 
@@ -158,7 +163,8 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
         problems.append(f"the number {nn!r} must be 1 to 99.")
     if problems:
         raise ConfigError(f"no {kind} name: " + "; ".join(problems))
-    values = {"type": rules["slug"], "org": naming.org, "app": app, "purpose": purpose or "", "env": naming.environments[env],
+    purpose = (purpose or "") if rules["dashes"] else (purpose or "").replace("-", "")
+    values = {"type": rules["slug"], "org": naming.org, "app": app, "purpose": purpose, "env": naming.environments[env],
               "region": naming.regions[region], "nn": f"{nn:02d}"}
     parts = list(naming.templates.get(kind) or naming.template)
     # An empty optional token goes, with the dash before it, or the one after it when it comes first.

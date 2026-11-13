@@ -100,6 +100,11 @@ def landing_zone() -> dict:
             "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
             "repo": text("The landing zone's repo, whose main branch signs in as its deploy identity.", pattern=pattern(vending.GITHUB_REPO)),
         }, "The landing zone's own repo.")),
+        "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.", pattern="^[a-z0-9]{2,5}$"),
+        "names": or_empty(mapping({
+            **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
+            "network_security_groups": or_empty({"description": "An explicit name for a subnet's NSG, by the subnet's name.", "type": "object", "additionalProperties": {"type": "string"}}),
+        }, "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.")),
         "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},
         "tags": or_empty({
             "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",

@@ -51,6 +51,18 @@ class NewLandingZoneTest(unittest.TestCase):
         self.assertEqual(lz["settings"], vending.landing_zones(self.repo)["billing-prod"]["settings"])
         self.assertNotIn("owner", lz["settings"])
 
+    def test_a_new_workload_s_short_name(self):
+        # A name that is not 2 to 5 needs one: commented out, the check asks for it.
+        new.landing_zone(self.repo, "billing", "prod", NOTHING)
+        self.assertIn("# short_name: abc", self.read("landing-zones/billing/_workload.yaml"))
+        new.landing_zone(self.repo, "invoicing", "prod", {**NOTHING, "short_name": "inv"})
+        self.assertIn("\nshort_name: inv", self.read("landing-zones/invoicing/_workload.yaml"))
+        # One that fits is its own short name: nothing to write.
+        new.landing_zone(self.repo, "web", "prod", {**NOTHING, "owner": "web@demo.example", "cost_center": "1", "archetype": "corp"})
+        self.assertNotIn("short_name", self.read("landing-zones/web/_workload.yaml"))
+        with self.assertRaisesRegex(ConfigError, "payments is a workload already; its short name is in"):
+            new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "short_name": "pay"})
+
     def test_given_settings_are_written_and_one_a_layer_above_has_is_left_out(self):
         given = {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555", "cost_center": "4711", "archetype": "online"}
         new.landing_zone(self.repo, "payments", "dev", given)

@@ -120,6 +120,55 @@
       },
       "additionalProperties": false
     },
+    "short_name": {
+      "type": "string",
+      "description": "The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.",
+      "pattern": "^[a-z0-9]{2,5}$"
+    },
+    "names": {
+      "description": "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "network_resource_group": {
+          "type": "string",
+          "description": "An explicit name for the resource group, instead of the template's."
+        },
+        "identity_resource_group": {
+          "type": "string",
+          "description": "An explicit name for the resource group, instead of the template's."
+        },
+        "virtual_network": {
+          "type": "string",
+          "description": "An explicit name for the virtual network, instead of the template's."
+        },
+        "route_table": {
+          "type": "string",
+          "description": "An explicit name for the route table, instead of the template's."
+        },
+        "deploy_identity": {
+          "type": "string",
+          "description": "An explicit name for the user assigned identity, instead of the template's."
+        },
+        "budget": {
+          "type": "string",
+          "description": "An explicit name for the budget, instead of the template's."
+        },
+        "network_security_groups": {
+          "description": "An explicit name for a subnet's NSG, by the subnet's name.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "decommission": {
       "description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.",
       "const": true

@@ -31,6 +31,17 @@ class RenderTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, r"key_vault name kv-acme-pay-logs-pd-nwe-01 is 26 characters, 2 more than Azure allows; shorten a short name, give the type a template of its own"):
             naming.render(acme(), "key_vault", app="pay", env="prod", region="norwayeast", purpose="logs")
 
+    def test_a_purpose_may_be_a_subnet_s_name(self):
+        n = acme()
+        self.assertEqual(naming.render(n, "network_security_group", app="pay", env="prod", region="norwayeast", purpose="app-web"), "nsg-acme-pay-app-web-pd-nwe-01")
+        self.assertEqual(naming.render(n, "storage_account", app="pay", env="prod", region="norwayeast", purpose="app-web"), "stacmepayappwebpdnwe01")
+        with self.assertRaisesRegex(ConfigError, "purpose is '-web'; it must be 1 to 20 lower-case letters and digits, with hyphens inside"):
+            naming.render(n, "network_security_group", app="pay", env="prod", region="norwayeast", purpose="-web")
+        # Two hyphens in a row, as a subnet's name may have; a key vault's own rule still refuses them.
+        self.assertEqual(naming.render(n, "network_security_group", app="pay", env="prod", region="norwayeast", purpose="app--web"), "nsg-acme-pay-app--web-pd-nwe-01")
+        with self.assertRaisesRegex(ConfigError, "no two hyphens in a row"):
+            naming.render(acme(template="{type}-{app}-{purpose}"), "key_vault", app="pay", env="prod", region="norwayeast", purpose="a--b")
+
     def test_a_template_of_its_own_for_a_tight_type(self):
         n = acme(templates={"key_vault": "{type}{org}{app}{purpose}{env}{nn}"})
         self.assertEqual(naming.render(n, "key_vault", app="pay", env="prod", region="norwayeast", purpose="logs"), "kvacmepaylogspd01")

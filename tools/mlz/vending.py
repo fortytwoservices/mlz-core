@@ -18,6 +18,7 @@ import re
 from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
+from . import naming
 from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
@@ -25,7 +26,17 @@ from .yamlout import dump
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags", "decommission"}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags", "decommission", "short_name", "names"}
+# What vending names in a landing zone from the customer's template (docs/naming.md), by the config's key: the type,
+# and the purpose that tells apart two of one type. An explicit name under names: in the landing zone's file wins.
+NAMED = {
+    "network_resource_group": ("resource_group", "net"),
+    "identity_resource_group": ("resource_group", "id"),
+    "virtual_network": ("virtual_network", None),
+    "route_table": ("route_table", None),
+    "deploy_identity": ("user_assigned_identity", None),
+    "budget": ("budget", None),
+}
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 # 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
@@ -132,6 +143,18 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     for name, data in lz["layers"][:-1]:
         if "decommission" in data:
             problems.append(f"{name}: decommission retires one landing zone, so it goes in that landing zone's own file, {where}.")
+    for name, data in lz["layers"][:-1]:
+        if "names" in data:
+            problems.append(f"{name}: names are one landing zone's own, so they go in that landing zone's file, {where}.")
+    # One short name per workload: a landing zone's file, or a default, setting one would name it apart from the rest.
+    for name, data in lz["layers"]:
+        if "short_name" in data and name != f"landing-zones/{lz['workload']}/_workload":
+            problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/_workload.yaml.")
+    if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
+        problems.append(f"{at('short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits.")
+    elif "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):
+        problems.append(f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
+                        "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md).")
     if "decommission" in s and s["decommission"] is not True:
         problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
@@ -437,6 +460,20 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         elif wanted[key] and set(plan[key]["subnets"]) != set(wanted[key][1]):
             problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (python3 -m mlz allocate).")
     problems += plan_problems(plan, zones, wanted, platform)
+    # One short name per workload: two workloads with the same one would read alike in every name.
+    shorts = {}
+    for lz in zones.values():
+        if isinstance(short_name(lz), str):  # check() reports one that is not
+            shorts.setdefault(short_name(lz), set()).add(lz["workload"])
+    problems += [f"landing-zones: workloads {', '.join(sorted(w))} share the short name {k}; give each its own short_name." for k, w in sorted(shorts.items()) if len(w) > 1]
+    try:
+        # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
+        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+    except ConfigError as error:
+        problems.append(f"_generated/governance.yaml: {error}")
+        settings = None
+    names = {key: landing_zone_names(key, lz, settings, sorted(plan[key]["subnets"]), problems)
+             for key, lz in zones.items() if settings is not None and key in plan}
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -473,8 +510,63 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             },
             "github": {"organization": github["organization"], "repo": github["repo"]} if github.get("repo") else None,
             "decommission": decommissioned(lz),
+            "names": names[key],
         }
     return configs
+
+
+def short_name(lz: dict) -> str:
+    """The workload's short name in names: short_name, or the workload's own name when it fits."""
+    return lz["settings"].get("short_name") or lz["workload"]
+
+
+def landing_zone_names(key: str, lz: dict, settings: naming.Naming, subnets: list[str], problems: list[str]) -> dict:
+    """Every name vending gives in the landing zone: from the template, or from names: in its file. Subnets and
+    peerings, which are named inside their network, keep their own pattern (docs/naming.md)."""
+    where, s = lz["where"], lz["settings"]
+    app = short_name(lz)
+    if not (isinstance(app, str) and naming.SHORT.fullmatch(app) and 2 <= len(app) <= 5) or not isinstance(s.get("location"), str):
+        return {}  # check() says what the short name or the location must be; no name is right without them
+    explicit = s.get("names")
+    if explicit is not None and not isinstance(explicit, dict):
+        problems.append(f"{where}: names maps each name to set ({', '.join([*NAMED, 'network_security_groups'])}) to the name.")
+        explicit = {}
+    explicit = explicit or {}
+    problems += [f"{where}: names.{k} is not a name vending gives; use {', '.join([*NAMED, 'network_security_groups'])}." for k in sorted(set(explicit) - set(NAMED) - {"network_security_groups"}, key=str)]
+    nsgs = explicit.get("network_security_groups")
+    nsgs = {} if nsgs is None else nsgs  # only absent or empty means none: false or [] is reported
+    if not isinstance(nsgs, dict):
+        problems.append(f"{where}: names.network_security_groups maps a subnet to its NSG's name.")
+        nsgs = {}
+    problems += [f"{where}: names.network_security_groups.{k} is not one of its subnets ({', '.join(subnets)})." for k in sorted(set(nsgs) - set(subnets), key=str)]
+
+    def one(kind: str, purpose: str | None, given: object) -> str | None:
+        try:
+            if given is not None:
+                if not isinstance(given, str):
+                    raise ConfigError(f"{given!r} is not a name")
+                return naming.check(kind, given)
+            return naming.render(settings, kind, app=app, env=lz["environment"], region=s["location"], purpose=purpose)
+        except ConfigError as error:
+            problems.append(f"{where}: {error}")
+            return None
+
+    names = {name: one(kind, purpose, explicit.get(name)) for name, (kind, purpose) in NAMED.items()}
+    names["network_security_groups"] = {subnet: one("network_security_group", subnet, nsgs.get(subnet)) for subnet in subnets}
+    # Two of one type side by side need names apart, which a template without {purpose} would not give: both
+    # resource groups in one subscription, or every NSG in one resource group. Azure ignores case in both.
+    for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group")]),
+                        ("NSGs", [(f"network_security_groups.{s}", v) for s, v in names["network_security_groups"].items()])):
+        seen: dict[str, str] = {}
+        for item, value in items:
+            if value is not None and value.lower() in seen:
+                problems.append(f"{where}: {seen[value.lower()]} and {item} would both be {value}, and Azure needs its {what} named apart; "
+                                "put {purpose} in the template, or set one under names:.")
+            elif value is not None:
+                seen[value.lower()] = item
+    names["subnet"] = "snet-%s"
+    names["peering_to_hub"], names["peering_from_hub"] = f"peer-{key}-to-hub", f"peer-hub-to-{key}"
+    return names
 
 
 def decommissioned(lz: dict) -> bool:

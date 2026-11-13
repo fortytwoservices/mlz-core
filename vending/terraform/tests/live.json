@@ -35,5 +35,19 @@
       }
     }
   },
-  "github": null
+  "github": null,
+  "names": {
+    "network_resource_group": "rg-acme-pay-net-pd-nwe-01",
+    "identity_resource_group": "rg-acme-pay-id-pd-nwe-01",
+    "virtual_network": "vnet-acme-pay-pd-nwe-01",
+    "route_table": "rt-acme-pay-pd-nwe-01",
+    "deploy_identity": "id-acme-pay-pd-nwe-01",
+    "budget": "budget-acme-pay-pd-nwe-01",
+    "network_security_groups": {
+      "default": "nsg-acme-pay-default-pd-nwe-01"
+    },
+    "subnet": "snet-%s",
+    "peering_to_hub": "peer-payments-prod-to-hub",
+    "peering_from_hub": "peer-hub-to-payments-prod"
+  }
 }

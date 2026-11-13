@@ -2,6 +2,7 @@
 
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>]
         [--owner <email>] [--cost-center <id>] [--archetype corp|online|sandbox] [--location <region>]
+        [--short-name <2 to 5>]
 
 It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/_workload.yaml, with
 only what no layer above sets: a required setting given on the command line is written as given, one
@@ -29,9 +30,10 @@ COMMENTS = {
     "archetype": "corp, online or sandbox",
     "location": "a region with a hub",
     "subscription": "handed over to vending before this file is merged",
+    "short_name": "2 to 5, in every name of the workload's landing zones",
 }
 PLACEHOLDERS = {"owner": "team@example.com", "cost_center": "\"0000\"", "archetype": "corp", "location": "norwayeast",
-                "subscription": "00000000-0000-0000-0000-000000000000"}
+                "subscription": "00000000-0000-0000-0000-000000000000", "short_name": "abc"}
 
 
 def lines(settings: list[tuple[str, object]]) -> list[str]:
@@ -86,9 +88,15 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         written.append(path)
 
     written: list[Path] = []
+    short = given.get("short_name")
+    if short is not None and folder.exists():
+        raise ConfigError(f"{workload} is a workload already; its short name is in {folder / '_workload.yaml'}, or its own name when that fits.")
     if not folder.exists():
         folder.mkdir()
-        body = needed(WORKLOAD_SETTINGS)
+        # The workload's own name is its short name when it fits (docs/naming.md); otherwise one is needed.
+        fits = vending.naming.SHORT.fullmatch(workload) is not None and 2 <= len(workload) <= 5
+        body = [("short_name", short)] if short is not None and short != workload or short is None and not fits else []
+        body += needed(WORKLOAD_SETTINGS)
         if body:
             create(folder / "_workload.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
         rest = ("location",)
