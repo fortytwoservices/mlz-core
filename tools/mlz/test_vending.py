@@ -417,6 +417,13 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, named, PLATFORM)
         self.assertEqual(configs["payments-prod"]["names"]["network_security_groups"]["web"], "nsg-demo-pay-web-pd-nwe-01")
         self.assertEqual(configs["payments-dev"]["names"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        # Renewed while web is removed: what it has now is renamed, web's NSG keeps its name while its block is held.
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        self.allocate(governance=named)
+        record, _ = give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
+        self.assertEqual(record["payments-prod"]["network_security_groups"], {
+            "default": "nsg-acme-pay-default-pd-nwe-01", "web": "nsg-demo-pay-web-pd-nwe-01"})
+        self.assertEqual(record["payments-prod"]["virtual_network"], "vnet-acme-pay-pd-nwe-01")
         # Released, through the command: the names go with the addresses.
         self.write("_generated/platform.yaml", render("platform", PLATFORM))
         self.write("_generated/governance.yaml", render("governance", named))

@@ -640,7 +640,7 @@ def flat(entry: dict) -> dict[str, str]:
 def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[str] = frozenset(),
                base: dict[str, dict] | None = None) -> tuple[dict[str, dict], list[str]]:
     """The names record for every landing zone with a range in plan: what it had, and the template's name for anything
-    new. A landing zone in renew gets the template's names again, all of them. base is the record on a pull request's
+    new. A landing zone in renew gets the template's names again for everything it has now. base is the record on a pull request's
     base branch: a name is kept only once it is there, where it can be deployed from, so one this pull request gave
     on an earlier run follows its YAML as it is now. Returns (record, what changed); fails with every problem when a
     name cannot be given."""
@@ -656,7 +656,10 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
     except ConfigError as error:
         raise ConfigError(f"_generated/governance.yaml: {error}") from None
     def kept(key: str) -> dict:
-        entry = {} if key in renew else recorded.get(key, {})
+        entry = recorded.get(key, {})
+        if key in renew:  # what it has now gets the template's names; a removed subnet's NSG keeps its own while held
+            removed = plan[key]["removed_subnets"]
+            entry = {"network_security_groups": {subnet: name for subnet, name in (entry.get("network_security_groups") or {}).items() if subnet in removed}}
         if base is None:
             return entry
         on_base = base.get(key, {})

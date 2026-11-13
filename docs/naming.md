@@ -103,8 +103,8 @@ To rename:
 
 - **one resource**: set its name under `names:` in the landing zone's file. The file's name wins and the record
   drops that resource; take the name out again and the template gives it a new one.
-- **a whole landing zone**: `python3 -m mlz names --repo . --renew <key>` gives it the template's names again and
-  writes the record. Commit it in a pull request: its plan shows each renamed resource replaced, and nothing is
+- **a whole landing zone**: `python3 -m mlz names --repo . --renew <key>` gives what it has now the template's names
+  again and writes the record. Commit it in a pull request: its plan shows each renamed resource replaced, and nothing is
   changed until the reviewer approves the apply. `mlz explain <key>` shows, beside each recorded name, what the
   template would give now.
 
