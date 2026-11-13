@@ -48,6 +48,16 @@ resource "github_repository" "workload" {
   archive_on_destroy     = true # decommissioned: archived, the team's code and history kept
 }
 
+# auto_init makes the organization's default branch, which need not be main: the apply environment allows main alone.
+resource "github_branch_default" "main" {
+  count = local.repo_made ? 1 : 0
+
+  repository      = github_repository.workload["made"].name
+  branch          = "main"
+  rename          = true # whatever the organization's default made, renamed (Contents: write)
+  wait_for_rename = true
+}
+
 data "github_team" "owner" {
   count = local.repo_made ? 1 : 0
   slug  = local.github.team
@@ -67,6 +77,8 @@ resource "github_repository_environment" "apply" {
 
   repository  = github_repository.workload["made"].name
   environment = "apply"
+  # GitHub takes a reviewer that has access already: the team's, above.
+  depends_on = [github_team_repository.owner]
 
   reviewers {
     teams = [tonumber(data.github_team.owner[0].id)]
@@ -79,7 +91,8 @@ resource "github_repository_environment" "apply" {
 }
 
 resource "github_repository_environment_deployment_policy" "main" {
-  count = local.repo_made ? 1 : 0
+  count      = local.repo_made ? 1 : 0
+  depends_on = [github_branch_default.main]
 
   repository     = github_repository.workload["made"].name
   environment    = github_repository_environment.apply[0].environment

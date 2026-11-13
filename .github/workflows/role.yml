@@ -407,6 +407,7 @@ jobs:
           private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           permission-administration: write
+          permission-contents: write # to rename a new repo's first branch to main
           permission-environments: write
           permission-actions-variables: write
           permission-members: read

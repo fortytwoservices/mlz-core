@@ -189,8 +189,9 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
 
 - **Its name**, from `customer.yaml`'s `naming.repository` (default `{app}-{env}`, with long names:
   `payments-prod`), recorded with the landing zone's other names (`docs/naming.md`).
-- **The repo**, made by vending's Terraform, as the customer's MLZ App: private, squash merges only. Decommissioned,
-  it is archived, never deleted: the team's code and history stay.
+- **The repo**, made by vending's Terraform, as the customer's MLZ App: private, squash merges only, its default
+  branch `main` whatever the organization's default is. Decommissioned, it is archived, never deleted: the team's
+  code and history stay.
 - **Its team**: `github.team`, required for a repo vending makes, set once per workload in `_workload.yaml`. The team
   maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. Every apply in MLZ
   waits for a reviewer, which GitHub allows in a private repo only on GitHub Enterprise (`docs/bootstrap.md`).

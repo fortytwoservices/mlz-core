@@ -92,8 +92,8 @@ run "with_a_repo" {
     error_message = "The owning team maintains the repo and approves its applies."
   }
   assert {
-    condition     = github_repository_environment_deployment_policy.main[0].branch_pattern == "main"
-    error_message = "Only main may apply."
+    condition     = github_repository_environment_deployment_policy.main[0].branch_pattern == "main" && github_branch_default.main[0].branch == "main" && github_branch_default.main[0].rename
+    error_message = "The repo's default branch is main, renamed from whatever the organization's default made, and only main may apply."
   }
   assert {
     condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01"
