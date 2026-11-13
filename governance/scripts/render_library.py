@@ -37,6 +37,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# mlz-core's naming rules, in the same checkout (tools/mlz/naming.py): customer.yaml's naming section is checked
+# here, where it is written, though platform and vending are the ones that name things with it.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from mlz import naming  # noqa: E402
+from mlz.merge import ConfigError  # noqa: E402
+
 GOVERNANCE = Path(__file__).resolve().parent.parent
 MERGED_KEY_BY_KEY = ("management_groups", "tags")
 # Written into every output folder, so a later run replaces only a folder this script made.
@@ -74,7 +80,7 @@ OPTIONAL_GROUPS = ("security", "local")
 # otherwise be ignored, and the default it meant to override used.
 SETTINGS = (
     "name", "root_id", "root_display_name", "primary_region", "security_contact", "parent_management_group_id",
-    "subscriptions", "allowed_regions", "management_groups", "tags", "policy_assignments_to_remove",
+    "subscriptions", "allowed_regions", "management_groups", "tags", "policy_assignments_to_remove", "naming",
 )
 # The archetypes in platform/alz; policy_assignments_to_remove may name only these.
 ALZ_ARCHETYPES = (
@@ -169,6 +175,13 @@ def validate(config: dict) -> None:
     problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.fullmatch(r)]
     if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
+    # Checked when written. Without the section nothing is asked of the root ID yet: nothing is named from it
+    # until landing zones are (docs/naming.md).
+    if "naming" in config and isinstance(config.get("root_id"), str):
+        try:
+            naming.settings(config, config["root_id"])
+        except ConfigError as error:
+            problems += [line.strip() for line in str(error).splitlines()[1:]] or [str(error)]
     groups = mapping(config.get("management_groups"), "management_groups", problems)
     for key, value in groups.items():
         if key not in OPTIONAL_GROUPS:
@@ -213,6 +226,8 @@ def normalize(config: dict) -> dict:
         **config,
         "subscriptions": {role: value.lower() for role, value in (config.get("subscriptions") or {}).items()},
         "management_groups": {name: groups.get(name) is True for name in OPTIONAL_GROUPS},
+        # Always a mapping, so the contract carries one: validate() refused anything else.
+        "naming": config.get("naming") or {},
     }
 
 

@@ -17,6 +17,9 @@ output "contract" {
       try(local.config.management_groups.local, false) == true ? { local = "${local.config.root_id}-lz-local" } : {},
     )
     platform_subscriptions = local.subscriptions
+    # customer.yaml's naming section as written, checked by render_library.py, which writes {} when there is
+    # none; mlz-core's defaults fill the rest where names are made (tools/mlz/naming.py).
+    naming = local.config.naming
     monitoring = {
       workspace = module.management.resource_id
     }

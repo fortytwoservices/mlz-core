@@ -175,6 +175,157 @@
           "type": "string"
         }
       }
+    },
+    "naming": {
+      "description": "How mlz-core names what it creates (docs/naming.md).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "org": {
+          "type": "string",
+          "description": "The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).",
+          "pattern": "^[a-z0-9]{2,4}$"
+        },
+        "template": {
+          "type": "string",
+          "description": "How names are made (default: {type}-{org}-{app}-{purpose}-{env}-{region}-{nn}). Tokens in braces, dashes and lower-case text; an empty {purpose} drops out."
+        },
+        "templates": {
+          "description": "A template for one type, for the 24-character ones (storage_account, key_vault).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "application_gateway",
+              "azure_firewall",
+              "bastion_host",
+              "budget",
+              "dns_resolver",
+              "dns_resolver_inbound_endpoint",
+              "dns_resolver_outbound_endpoint",
+              "firewall_policy",
+              "key_vault",
+              "log_analytics_workspace",
+              "network_interface",
+              "network_security_group",
+              "private_endpoint",
+              "public_ip_address",
+              "resource_group",
+              "route_table",
+              "storage_account",
+              "user_assigned_identity",
+              "virtual_network"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "environments": {
+          "description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (dev: dv, test: te, uat: ut, sit: st, qa: qa, preprod: pp, sandbox: sb, dr: dr, prod: pd).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{1,4}$"
+          }
+        },
+        "regions": {
+          "description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "australiacentral",
+              "australiacentral2",
+              "australiaeast",
+              "australiasoutheast",
+              "austriaeast",
+              "belgiumcentral",
+              "brazilsouth",
+              "brazilsoutheast",
+              "canadacentral",
+              "canadaeast",
+              "centralindia",
+              "centralus",
+              "centraluseuap",
+              "chilecentral",
+              "denmarkeast",
+              "eastasia",
+              "eastus",
+              "eastus2",
+              "eastus2euap",
+              "eastus3",
+              "francecentral",
+              "francesouth",
+              "germanynorth",
+              "germanywestcentral",
+              "indiasouthcentral",
+              "indonesiacentral",
+              "israelcentral",
+              "israelnorthwest",
+              "italynorth",
+              "japaneast",
+              "japanwest",
+              "jioindiacentral",
+              "jioindiawest",
+              "koreacentral",
+              "koreasouth",
+              "malaysiasouth",
+              "malaysiawest",
+              "mexicocentral",
+              "newzealandnorth",
+              "northcentralus",
+              "northeastus5",
+              "northeurope",
+              "norwayeast",
+              "norwaywest",
+              "polandcentral",
+              "qatarcentral",
+              "southafricanorth",
+              "southafricawest",
+              "southcentralus",
+              "southcentralus2",
+              "southeastasia",
+              "southeastus",
+              "southeastus3",
+              "southeastus5",
+              "southindia",
+              "southwestus",
+              "spaincentral",
+              "swedencentral",
+              "swedensouth",
+              "switzerlandnorth",
+              "switzerlandwest",
+              "taiwannorth",
+              "taiwannorthwest",
+              "uaecentral",
+              "uaenorth",
+              "uksouth",
+              "ukwest",
+              "westcentralus",
+              "westeurope",
+              "westindia",
+              "westus",
+              "westus2",
+              "westus3"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{2,5}$"
+          }
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false
