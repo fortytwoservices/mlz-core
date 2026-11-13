@@ -430,8 +430,10 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
             raise ConfigError(f"{error}\nIf {org} belongs to an enterprise account, an enterprise owner must first let its organizations make network "
                               "configurations: the enterprise's Settings, Policies, Hosted compute networking (docs/bootstrap.md).") from error
         out(f"runners: network configuration {RUNNER} made, for {settings_name}")
-    elif github_id not in found.get("network_settings_ids", []):
-        raise ConfigError(f"{org} has a network configuration named {RUNNER} for other network settings; delete or rename it, then run this step again.")
+    elif found.get("network_settings_ids") != [github_id] or found.get("failover_network_enabled") or found.get("failover_network_settings_ids"):
+        # Only management's network: a second or failover network would run jobs where the state is out of reach.
+        raise ConfigError(f"{org} has a network configuration named {RUNNER} for other or further network settings; it must name {settings_name} "
+                          "alone, with no failover. Delete or rename it, then run this step again.")
     else:
         out(f"runners: network configuration {RUNNER} is in place")
 

@@ -586,9 +586,12 @@ class InstallTest(unittest.TestCase):
             install.step_runners(RunnersGitHub(), FakeAzure(), self.folder, self.out)
 
     def test_another_network_configuration_named_mlz_is_not_taken_over(self):
-        github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", "network_settings_ids": ["ELSEWHERE"]}])
-        with self.assertRaisesRegex(ConfigError, "a network configuration named mlz for other network settings"):
-            install.step_runners(github, runners_azure(), self.folder, self.out)
+        for found in ({"network_settings_ids": ["ELSEWHERE"]}, {"network_settings_ids": ["ELSEWHERE", "GHID123"]},
+                      {"network_settings_ids": ["GHID123"], "failover_network_enabled": True, "failover_network_settings_ids": ["ELSEWHERE"]}):
+            github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", **found}])
+            with self.assertRaisesRegex(ConfigError, "for other or further network settings; it must name ghns-acme-management-nwe alone"):
+                install.step_runners(github, runners_azure(), self.folder, self.out)
+            self.assertEqual(github.calls, [])
 
     def test_a_refused_network_configuration_names_the_enterprise_policy(self):
         with self.assertRaisesRegex(ConfigError, "Policies, Hosted compute networking"):
