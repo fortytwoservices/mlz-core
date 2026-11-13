@@ -59,10 +59,14 @@ vending on v0.2 fails its check on the new one.
 - **The hub's subnets**, by one fixed layout inside its /22: firewall /26 first, firewall management /26
   second (Basic only), gateway /27, Bastion /26 at the start of the second /24, then the DNS resolver's
   inbound and outbound /28s. Every hub looks the same.
-- **Names**, `<type>-<root>-hub-<region code>` (for example `afw-mlz-hub-nwe`), and the Private Link zones'
-  group `rg-<root>-dns-<region code>`, the one governance's DNS policy points at. The codes are Microsoft's,
-  for every Azure region, in `modules/naming/region-codes.json` (from avm-utl-regions); a hub may be in any
-  of them. A code is in resource names, so one never changes.
+- **Names**, from the customer's naming template (`docs/naming.md`), each part of the platform an app of its
+  own in `prod`: the hub's components `vnet-acme-hub-pd-nwe-01`, `afw-acme-hub-pd-nwe-01`,
+  `pip-acme-hub-afw-pd-nwe-01` and so on, and the Private Link zones' group `rg-acme-dns-pd-nwe-01`, the one
+  governance's DNS policy points at. They are worked out on every run, so a change to `customer.yaml`'s `naming:`
+  renames them, and the plan shows each one replaced for the reviewer to decide. A component can keep a name of
+  its own under `names:` in the hub file (`firewall: afw-legacy`; the components are in `tools/mlz/names.py`'s
+  `HUB`). Region codes are Microsoft's, for every Azure region (`modules/naming/region-codes.json`, from
+  avm-utl-regions); a hub may be in any of them.
 
 `python3 -m mlz platform` reads `hubs/` and `_generated/governance.yaml`, checks both, and writes the
 root's config (JSON, for one run, never committed); the Terraform roots only read that file.
@@ -76,16 +80,16 @@ firewall); and a network security group on every subnet.
 
 | Network | Where | Subnets |
 |---|---|---|
-| Management, `vnet-<root>-management-<region code>` | the management subscription, in the primary region | `snet-github-runners` /25, for GitHub-hosted runners ([below](#github-hosted-runners)); `snet-runners` /26, for self-hosted runners; `snet-private-endpoints` /27, the state account's first; a /27 free |
-| Identity, `vnet-<root>-identity-<region code>` | the identity subscription, in each region whose hub file says `identity: true` | `snet-domain-controllers` /26: the domain controllers will have its .4 and .5 |
+| Management, `vnet-acme-mgt-pd-nwe-01` | the management subscription, in the primary region | `snet-github-runners` /25, for GitHub-hosted runners ([below](#github-hosted-runners)); `snet-runners` /26, for self-hosted runners; `snet-private-endpoints` /27, the state account's first; a /27 free |
+| Identity, `vnet-acme-idn-pd-sdc-01` | the identity subscription, in each region whose hub file says `identity: true` | `snet-domain-controllers` /26: the domain controllers will have its .4 and .5 |
 
 Each is a stack of its own in the platform pipeline, `management` and `identity`, with its own state, so
 a change to one never plans the hub or the other. They apply after the hub, which they peer with. Both run
 every time, so turning `identity` off takes identity's network out of Azure. Identity needs an identity
 subscription in `customer.yaml`.
 
-They are built in a resource group the bootstrap makes in each subscription,
-`rg-<root>-<management|identity>-network-<primary region code>`, which holds the network in every region.
+They are built in a resource group the bootstrap makes in each subscription, `rg-acme-mgt-net-pd-nwe-01` or
+`rg-acme-idn-net-pd-nwe-01`, named for the primary region, which holds the network in every region.
 The platform's pipeline identities have rights on that group only, not on the rest of the subscription:
 governance's monitoring and the state account are in management too. Their outbound traffic is allowed by
 the firewall's rules like a landing zone's ([below](#firewall-rules)): `firewall/management.yaml` and
@@ -98,7 +102,7 @@ Where GitHub runs its hosted runners in the customer's own networks (`GITHUB_RUN
 Norway East, Sweden Central, France Central, Switzerland North and UK South and West in Europe; not West or
 North Europe),
 the management stack delegates `snet-github-runners` to GitHub and creates the `GitHub.Network/networkSettings`
-resource that joins it to the customer's GitHub organization, `ghns-<root>-management-<region code>`. The
+resource that joins it to the customer's GitHub organization, `ghns-acme-mgt-pd-nwe-01`. The
 pipeline names the organization by its ID (`GITHUB_REPOSITORY_OWNER_ID`); a plan by hand takes
 `-var github_business_id=<id>` (`gh api orgs/<organization> --jq .id`). The stack's `networks` output
 holds the resource's ID at GitHub, which the organization's network configuration names. The runners take

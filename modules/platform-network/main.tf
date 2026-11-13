@@ -23,7 +23,7 @@ resource "azapi_resource" "network_security_group" {
   for_each = var.subnets
 
   type      = "Microsoft.Network/networkSecurityGroups@2024-07-01"
-  name      = format(var.names.network_security_group, each.key)
+  name      = var.names.network_security_groups[each.key]
   parent_id = var.parent_id
   location  = var.location
   tags      = var.tags

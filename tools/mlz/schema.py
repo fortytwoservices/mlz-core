@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from . import firewall, install, naming, platform, vending
+from . import firewall, install, names, naming, platform, vending
 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
@@ -131,6 +131,7 @@ def hub() -> dict:
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
         "identity": {"description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.", "type": "boolean", "default": False},
+        "names": {"description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.", "type": "object", "propertyNames": {"enum": list(names.HUB)}, "additionalProperties": {"type": "string"}},
     }
     return {
         "$schema": DRAFT,
@@ -208,6 +209,7 @@ def bootstrap() -> dict:
     properties = {
         "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, reviewers and private runner."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
+        "names": or_empty({"description": "The bootstrap's own name for its resource group or state account, instead of the customer's template's (docs/naming.md): for a storage account name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
     }
     return {
         "$schema": DRAFT,

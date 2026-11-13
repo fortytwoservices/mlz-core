@@ -33,7 +33,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from . import contract, platform
+from . import contract, names, naming, platform
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -61,7 +61,7 @@ MAIN_RULESET = {
     ],
 }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
-BOOTSTRAP_SETTINGS = ("github", "state_operators")
+BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
 GITHUB_SETTINGS = ("organization", "repositories", "reviewers", "runner_size")
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
@@ -77,8 +77,20 @@ def settings(folder: Path) -> tuple[dict, dict]:
     unknown = [str(k) for k in bootstrap if k not in BOOTSTRAP_SETTINGS]
     unknown += [f"github.{k}" for k in github if k not in GITHUB_SETTINGS] if isinstance(github, dict) else []
     if unknown:
-        raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}) and state_operators.")
+        raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}), state_operators and names.")
     return customer, bootstrap
+
+
+def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
+    """The bootstrap's names, and the platform's it points at, from customer.yaml's naming (tools/mlz/names.py), with
+    bootstrap.yaml's names: for its resource group or state account."""
+    try:
+        settings = naming.settings(customer, customer["root_id"])
+        return names.bootstrap(settings, customer["primary_region"], names.bootstrap_explicit(bootstrap.get("names")))
+    except KeyError as error:
+        raise ConfigError(f"customer.yaml: {error} is required.") from None
+    except ConfigError as error:
+        raise ConfigError(f"names: {error}") from None
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:
@@ -163,7 +175,8 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
-    _, bootstrap = settings(folder)
+    customer, bootstrap = settings(folder)
+    out(f"names: the state account will be {bootstrap_names(customer, bootstrap)['storage_account']}")
     problems = []
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
@@ -201,13 +214,13 @@ class Terraform:
         """The root as this mlz-core has it: files from an earlier copy go first, and the checkout's override files
         (a git-ignored backend_override.tf from running the root by hand) are never copied, since either would
         change what the root does. The bootstrap step writes its own override while the state is local."""
-        pairs = ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming"))
+        pairs = ((CORE / "bootstrap" / "terraform", self.root),)
         if any(target.resolve() == source.resolve() for source, target in pairs):
             # The copy's old files go first: in the checkout itself, those are the sources.
             raise ConfigError(f"the work folder {self.work} is mlz-core's own checkout; choose another with --work.")
         for source, target in pairs:
             target.mkdir(parents=True, exist_ok=True)
-            # .json too: modules/naming reads its region codes from one.
+            # .json too, which an earlier mlz-core's copy of modules/naming had.
             for old in [*target.glob("*.tf"), *target.glob("*.json")]:
                 old.unlink()
             for path in [*source.glob("*.tf"), *source.glob("*.json"), *source.glob(".terraform.lock.hcl")]:
@@ -228,7 +241,11 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
                    ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
     """Plans and applies the bootstrap, with a local state the first time; then moves the state into the account
     the bootstrap created, and checks that the identities trust the subjects GitHub issues."""
-    _, bootstrap = settings(folder)
+    customer, bootstrap = settings(folder)
+    # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md).
+    names_file = terraform.work / "names.json"
+    names_file.parent.mkdir(parents=True, exist_ok=True)
+    names_file.write_text(json.dumps(bootstrap_names(customer, bootstrap), indent=2) + "\n")
     terraform.prepare()
     backend, pending = terraform.work / "backend.hcl", terraform.work / "backend.hcl.pending"
     override = terraform.root / "backend_override.tf"
@@ -239,7 +256,8 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     if terraform.run(*init).returncode:
         raise ConfigError("terraform init failed; see above.")
     plan = terraform.work / "bootstrap.tfplan"
-    variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}"]
+    variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
+                 "-var", f"names_file={names_file}"]
     status = terraform.run("plan", "-input=false", "-detailed-exitcode", f"-out={plan}", *variables).returncode
     if status == 1:
         raise ConfigError("terraform plan failed; see above.")
@@ -391,15 +409,15 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
     if region not in platform.GITHUB_RUNNER_REGIONS:
         raise ConfigError(f"GitHub joins its runners to a customer's network only in some regions, not {region} (docs/platform.md, "
                           "GitHub-hosted runners). The pipelines stay on GitHub's public runners.")
-    code = platform.REGION_CODES[region]
+    named = bootstrap_names(customer, bootstrap)
     management = f"/subscriptions/{customer['subscriptions']['management']}"
-    settings_name = f"ghns-{root}-management-{code}"
-    network = azure.resource(f"{management}/resourceGroups/rg-{root}-management-network-{code}/providers/GitHub.Network/networkSettings/{settings_name}", "2024-04-02")
+    settings_name = names.network(naming.settings(customer, root), "management", region, [])["github_network_settings"]
+    network = azure.resource(f"{management}/resourceGroups/{named['network_resource_groups']['management']}/providers/GitHub.Network/networkSettings/{settings_name}", "2024-04-02")
     github_id = ((network or {}).get("tags") or {}).get("GitHubId")
     if not github_id:
         raise ConfigError(f"management's network has no GitHub network settings yet ({settings_name}): the platform's management stack makes it. "
                           "Run the platform's pipeline on main, then this step again.")
-    endpoint = azure.resource(f"{management}/resourceGroups/rg-{root}-bootstrap-{code}/providers/Microsoft.Network/privateEndpoints/pep-{root}-state-{code}", "2024-07-01")
+    endpoint = azure.resource(f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.Network/privateEndpoints/{named['state_endpoint']}", "2024-07-01")
     ready = ((endpoint or {}).get("properties") or {}).get("provisioningState") == "Succeeded"
     waiting = "the state account has no private endpoint yet, and the runner reaches the state only through it: run mlz install bootstrap again"
     repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())

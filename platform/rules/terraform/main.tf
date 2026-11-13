@@ -10,21 +10,8 @@ locals {
     }
   ]...)
 
-  # The hub's policy, by the names the platform root gives it: afwp-<root>-hub-<region code>.
-  policy_id = {
-    for region, naming in module.naming : region => format(
-      "/subscriptions/%s/resourceGroups/rg-%s-hub-%s/providers/Microsoft.Network/firewallPolicies/afwp-%s-hub-%s",
-      local.config.connectivity_subscription_id, local.config.root_id, naming.region_code, local.config.root_id, naming.region_code,
-    )
-  }
-}
-
-module "naming" {
-  for_each = local.config.policies
-  source   = "../../../modules/naming"
-
-  root_id = local.config.root_id
-  region  = each.key
+  # Each hub's policy, by the names the platform root gives it (mlz firewall, from tools/mlz/names.py).
+  policy_id = local.config.policy_ids
 }
 
 module "rule_collection_group" {

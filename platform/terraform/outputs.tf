@@ -36,7 +36,7 @@ output "contract" {
     # For governance's Private Link DNS policy.
     private_dns = {
       subscription   = local.config.connectivity_subscription_id
-      resource_group = module.naming.connectivity.dns_resource_group
+      resource_group = local.config.names.dns_resource_group
       region         = local.config.primary_region
     }
   }

@@ -15,10 +15,15 @@ from pathlib import Path
 from mlz.firewall import PARTITIONS, build, github_actions_domains, partition
 from mlz.merge import ConfigError
 
+# A hub's names, as tools/mlz/names.py gives them: the policy's ID is built from two of them.
+def names(code: str) -> dict:
+    return {"resource_group": f"rg-mlz-hub-pd-{code}-01", "firewall_policy": f"afwp-mlz-hub-pd-{code}-01"}
+
+
 PLATFORM = {
     "root_id": "mlz",
     "connectivity_subscription_id": "00000000-0000-0000-0000-000000000002",
-    "hubs": {"norwayeast": {"landing_zone_ranges": ["10.100.0.0/16"]}},
+    "hubs": {"norwayeast": {"landing_zone_ranges": ["10.100.0.0/16"], "names": names("nwe")}},
     # As tools/mlz/platform.py lays them out, here from a platform address space of 10.99.0.0/21.
     "networks": {
         "management": {"norwayeast": {"address_space": "10.99.4.0/24", "subnets": {
@@ -58,6 +63,12 @@ class FirewallTest(unittest.TestCase):
         path = Path(self.tmp.name) / "meta.json"
         path.write_text(json.dumps({"domains": {"actions": actions}}))
         return path
+
+    def test_each_hub_s_policy_is_found_by_the_names_the_platform_gives_it(self):
+        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"names": names("sdc"), "landing_zone_ranges": ["10.200.0.0/16"]}}}
+        self.assertEqual(build(self.repo, platform, VENDING, GITHUB)["policy_ids"], {
+            region: f"/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-mlz-hub-pd-{code}-01/providers/Microsoft.Network/firewallPolicies/afwp-mlz-hub-pd-{code}-01"
+            for region, code in (("norwayeast", "nwe"), ("swedencentral", "sdc"))})
 
     def test_a_landing_zone_s_rules_come_from_its_range_in_its_partition(self):
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: card-processor\n    to: [api.stripe.com, '*.stripe.com']\n    ports: [https]\n")
@@ -224,7 +235,7 @@ class FirewallTest(unittest.TestCase):
     def test_priorities_count_only_the_hub_s_own_landing_zones(self):
         number = partition("payments-prod")
         other = next(f"aa-{i}" for i in range(10_000) if partition(f"aa-{i}") == number and f"aa-{i}" < "payments-prod")
-        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}}}
+        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"names": names("sdc"), "landing_zone_ranges": ["10.200.0.0/16"]}}}
         vending = {"landing_zones": {**VENDING["landing_zones"], other: {"region": "swedencentral", "range": "10.200.4.0/24"}}}
         self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
         before = build(self.repo, platform, vending, GITHUB)["policies"]["norwayeast"][f"lz-{number:02d}"]
@@ -270,7 +281,7 @@ class FirewallTest(unittest.TestCase):
         basic = {**PLATFORM, "hubs": {"norwayeast": {**PLATFORM["hubs"]["norwayeast"], "firewall": {"sku_tier": "Basic"}}}}
         with self.assertRaisesRegex(ConfigError, "a Basic firewall reaches names only on https and http"):
             build(self.repo, basic, None, GITHUB)
-        mixed = {**PLATFORM, "hubs": {**basic["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"], "firewall": {"sku_tier": "Standard"}}}}
+        mixed = {**PLATFORM, "hubs": {**basic["hubs"], "swedencentral": {"names": names("sdc"), "landing_zone_ranges": ["10.200.0.0/16"], "firewall": {"sku_tier": "Standard"}}}}
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertIsNone(build(self.repo, mixed, None, GITHUB))  # the zone's hub is not known yet: the tier check waits
 
@@ -340,7 +351,7 @@ class FirewallTest(unittest.TestCase):
         self.assertEqual((azure["source_addresses"], azure["destination_ports"]), (["10.99.4.0/25", "10.99.4.128/26"], ["443"]))
 
     def test_the_runners_rules_are_only_where_management_is(self):
-        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}}}
+        platform = {**PLATFORM, "hubs": {**PLATFORM["hubs"], "swedencentral": {"names": names("sdc"), "landing_zone_ranges": ["10.200.0.0/16"]}}}
         policies = build(self.repo, platform, VENDING, GITHUB)["policies"]
         self.assertIn("runners-application", policies["norwayeast"]["platform"]["application"])
         self.assertEqual(policies["swedencentral"]["platform"]["application"], {})
@@ -363,7 +374,7 @@ class FirewallTest(unittest.TestCase):
     def test_identity_s_rules_go_to_every_region_that_builds_it(self):
         platform = {
             **PLATFORM,
-            "hubs": {**PLATFORM["hubs"], "swedencentral": {"landing_zone_ranges": ["10.200.0.0/16"]}},
+            "hubs": {**PLATFORM["hubs"], "swedencentral": {"names": names("sdc"), "landing_zone_ranges": ["10.200.0.0/16"]}},
             "networks": {**PLATFORM["networks"], "identity": {"norwayeast": IDENTITY, "swedencentral": {"address_space": "10.199.5.0/24"}}},
         }
         self.write("firewall/identity.yaml", "outbound:\n  - name: ntp\n    to: [time.windows.com]\n    ports: ['udp:123']\n")

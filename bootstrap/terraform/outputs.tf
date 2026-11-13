@@ -14,7 +14,7 @@ output "contract" {
     identities = {
       for role in local.roles : role => {
         for kind in ["plan", "apply"] : kind => {
-          name         = local.names.identity["${role}-${kind}"]
+          name         = local.names.identities["${role}-${kind}"]
           client_id    = azapi_resource.identity["${role}-${kind}"].output.properties.clientId
           principal_id = azapi_resource.identity["${role}-${kind}"].output.properties.principalId
         }

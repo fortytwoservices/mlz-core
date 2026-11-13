@@ -23,8 +23,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .merge import ConfigError
-from .platform import REGION_CODES
 
+# Every Azure region with Microsoft's code for it (Azure/avm-utl-regions v0.13.0's geo codes). A code is in names, so
+# one never changes once used; customer.yaml's naming.regions replaces any.
+REGION_CODES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "region-codes.json").read_text())
 TEMPLATE = "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}"
 TOKENS = ("type", "org", "app", "purpose", "env", "region", "nn")
 OPTIONAL = {"purpose"}

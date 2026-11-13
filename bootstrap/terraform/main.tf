@@ -2,6 +2,9 @@ locals {
   customer = yamldecode(file(var.customer_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
+  # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
+  # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
+  names = jsondecode(file(var.names_file))
 
   root          = local.customer.root_id
   region        = local.customer.primary_region
@@ -20,23 +23,15 @@ locals {
   network_subscriptions = { for network in ["management", "identity"] : network => local.subscriptions[network] if contains(keys(local.subscriptions), network) }
 
   # Where the state account's private endpoint goes, once the platform has built them: management's
-  # private endpoint subnet, and the hub's zone for blob names (tools/mlz/platform.py, modules/naming).
-  management_network    = module.naming.platform_networks.management
-  management_network_id = "${local.management}/resourceGroups/${local.management_network.resource_group}/providers/Microsoft.Network/virtualNetworks/${local.management_network.virtual_network}"
-  state_endpoint_subnet = "${local.management_network_id}/subnets/${format(local.management_network.subnet, "private-endpoints")}"
-  blob_zone             = "${local.connectivity}/resourceGroups/${module.naming.connectivity.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  # private endpoint subnet, and the hub's zone for blob names (tools/mlz/platform.py, tools/mlz/names.py).
+  management_network_id = "${local.management}/resourceGroups/${local.names.network_resource_groups.management}/providers/Microsoft.Network/virtualNetworks/${local.names.management_network}"
+  state_endpoint_subnet = "${local.management_network_id}/subnets/${local.names.state_endpoint_subnet}"
+  blob_zone             = "${local.connectivity}/resourceGroups/${local.names.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
   state_endpoint        = data.azapi_resource.state_endpoint_subnet.exists && data.azapi_resource.blob_zone.exists
 
   # One read-only identity per role for pull request plans, and one for approved applies.
   roles      = toset(["governance", "platform", "vending"])
   identities = { for pair in setproduct(local.roles, ["plan", "apply"]) : "${pair[0]}-${pair[1]}" => { role = pair[0], kind = pair[1] } }
-
-  names = {
-    resource_group = "rg-${local.root}-bootstrap-${module.naming.region_code}"
-    # Globally unique, at most 24 letters and digits: the first 4 hex characters of a hash keep it stable.
-    storage_account = "st${substr(replace(local.root, "-", ""), 0, 11)}state${substr(sha256("${local.management}/${local.root}"), 0, 4)}"
-    identity        = { for key, _ in local.identities : key => "id-${local.root}-${key}-${module.naming.region_code}" }
-  }
 
   # Built-in roles by ID. Azure stores a role's ID in the form of the assignment's scope: the
   # subscription's own form inside a subscription, the bare form on a management group. role_id below
@@ -79,13 +74,6 @@ locals {
 }
 
 data "azapi_client_config" "current" {}
-
-module "naming" {
-  source = "../../modules/naming"
-
-  root_id = local.root
-  region  = local.region
-}
 
 # The management subscription may be new: the state account and the identities need their providers, and
 # GitHub's hosted runners join management's network through a GitHub.Network resource.
@@ -135,7 +123,7 @@ resource "azapi_resource" "network_resource_group" {
   for_each = local.network_subscriptions
 
   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
-  name      = module.naming.platform_networks[each.key].resource_group
+  name      = local.names.network_resource_groups[each.key]
   parent_id = each.value
   location  = local.region
   tags      = local.tags
@@ -165,6 +153,12 @@ resource "azapi_resource" "state" {
     }
   }
   depends_on = [azapi_resource_action.register]
+
+  # Every role's state is in it. A changed name (customer.yaml's naming) would replace it, and lose them all: the
+  # plan stops here instead. To keep it, set its name in bootstrap.yaml's names.storage_account (docs/naming.md).
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Every storage account comes with its blob service, so this sets it rather than creating it.
@@ -214,14 +208,14 @@ resource "azapi_resource" "state_endpoint" {
   count = local.state_endpoint ? 1 : 0
 
   type      = "Microsoft.Network/privateEndpoints@2024-07-01"
-  name      = "pep-${local.root}-state-${module.naming.region_code}"
+  name      = local.names.state_endpoint
   parent_id = azapi_resource.resource_group.id
   location  = local.region
   tags      = local.tags
   body = {
     properties = {
       subnet                     = { id = local.state_endpoint_subnet }
-      customNetworkInterfaceName = "nic-pep-${local.root}-state-${module.naming.region_code}"
+      customNetworkInterfaceName = local.names.state_endpoint_nic
       privateLinkServiceConnections = [{
         name       = "blob"
         properties = { privateLinkServiceId = azapi_resource.state.id, groupIds = ["blob"] }
@@ -252,7 +246,7 @@ resource "azapi_resource" "state_endpoint_zone_link" {
   count = local.state_endpoint ? 1 : 0
 
   type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01"
-  name      = local.management_network.virtual_network
+  name      = local.names.management_network
   parent_id = local.blob_zone
   location  = "global"
   tags      = local.tags
@@ -269,7 +263,7 @@ resource "azapi_resource" "identity" {
   for_each = local.identities
 
   type                   = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31"
-  name                   = local.names.identity[each.key]
+  name                   = local.names.identities[each.key]
   parent_id              = azapi_resource.resource_group.id
   location               = local.region
   tags                   = local.tags

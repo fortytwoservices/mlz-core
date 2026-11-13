@@ -66,6 +66,29 @@
       "description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.",
       "type": "boolean",
       "default": false
+    },
+    "names": {
+      "description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.",
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "resource_group",
+          "virtual_network",
+          "firewall",
+          "firewall_policy",
+          "firewall_public_ip",
+          "firewall_management_public_ip",
+          "firewall_route_table",
+          "bastion",
+          "bastion_public_ip",
+          "dns_resolver",
+          "dns_resolver_inbound_endpoint",
+          "dns_resolver_outbound_endpoint"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "additionalProperties": false

@@ -38,6 +38,11 @@ class PlatformTest(unittest.TestCase):
     def hub(self, region: str, text: str) -> None:
         (self.repo / "hubs" / f"{region}.yaml").write_text(text)
 
+    def problems(self, governance: dict = GOVERNANCE) -> str:
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, governance)
+        return str(caught.exception)
+
     def test_a_minimal_hub_gets_the_defaults_and_the_fixed_subnet_layout(self):
         self.hub("norwayeast", HUB)
         hub = build(self.repo, GOVERNANCE)["hubs"]["norwayeast"]
@@ -51,6 +56,7 @@ class PlatformTest(unittest.TestCase):
         self.assertEqual(hub["dns_resolver"], {
             "inbound_subnet_address_prefix": "10.100.1.64/28",
             "outbound_subnet_address_prefix": "10.100.1.80/28",
+            "name": "dnspr-demo-hub-pd-nwe-01", "inbound_endpoint_name": "in-demo-hub-pd-nwe-01", "outbound_endpoint_name": "out-demo-hub-pd-nwe-01",
         })
         self.assertIsNone(hub["bastion"])
         self.assertEqual(hub["landing_zone_ranges"], ["10.100.0.0/16"])
@@ -86,6 +92,9 @@ class PlatformTest(unittest.TestCase):
         self.hub("norwayeast", HUB)
         self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
         config = build(self.repo, {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}})
+        for regions in config["networks"].values():  # the names are tested on their own
+            for net in regions.values():
+                net.pop("names")
         self.assertEqual(config["networks"]["management"], {"norwayeast": {
             "address_space": "10.100.4.0/24",
             "subnets": {"github-runners": "10.100.4.0/25", "runners": "10.100.4.128/26", "private-endpoints": "10.100.4.192/27"},
@@ -100,6 +109,43 @@ class PlatformTest(unittest.TestCase):
             "firewall": "10.200.0.4",
         }})
         self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
+
+    def test_every_name_comes_from_the_template_or_the_hub_file(self):
+        self.hub("norwayeast", HUB + "names:\n  firewall: afw-legacy\n")
+        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        governance = {**GOVERNANCE, "naming": {"org": "acme"}, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}}
+        config = build(self.repo, governance)
+        hub = config["hubs"]["norwayeast"]["names"]
+        self.assertEqual((hub["resource_group"], hub["virtual_network"], hub["firewall"], hub["firewall_policy"], hub["firewall_public_ip"]),
+                         ("rg-acme-hub-pd-nwe-01", "vnet-acme-hub-pd-nwe-01", "afw-legacy", "afwp-acme-hub-pd-nwe-01", "pip-acme-hub-afw-pd-nwe-01"))
+        self.assertEqual(config["hubs"]["swedencentral"]["names"]["dns_resolver_inbound_endpoint"], "in-acme-hub-pd-sdc-01")
+        # The resolver's object as the hub module takes it, with its names in.
+        self.assertEqual(config["hubs"]["swedencentral"]["dns_resolver"]["outbound_endpoint_name"], "out-acme-hub-pd-sdc-01")
+        self.assertIsNone(config["hubs"]["norwayeast"]["bastion"])
+        management = config["networks"]["management"]["norwayeast"]["names"]
+        self.assertEqual((management["virtual_network"], management["github_network_settings"], management["network_security_groups"]["private-endpoints"]),
+                         ("vnet-acme-mgt-pd-nwe-01", "ghns-acme-mgt-pd-nwe-01", "nsg-acme-mgt-private-endpoints-pd-nwe-01"))
+        self.assertEqual(config["networks"]["identity"]["swedencentral"]["names"]["virtual_network"], "vnet-acme-idn-pd-sdc-01")
+        self.assertEqual(config["names"], {
+            "dns_resource_group": "rg-acme-dns-pd-nwe-01",
+            # One group for each network, in the primary region, which the bootstrap makes.
+            "network_resource_groups": {"management": "rg-acme-mgt-net-pd-nwe-01", "identity": "rg-acme-idn-net-pd-nwe-01"},
+            "diagnostic_setting": "to-acme-workspace",
+        })
+
+    def test_a_hub_file_s_names_are_checked(self):
+        self.hub("norwayeast", HUB + "names:\n  firewall: 'afw legacy'\n  gateway: vgw-1\n")
+        message = self.problems()
+        self.assertIn("hubs/norwayeast: names.firewall: azure_firewall name afw legacy has characters Azure does not allow", message)
+        self.assertIn("hubs/norwayeast: names.gateway is not a hub component; use resource_group, virtual_network, firewall,", message)
+        self.hub("norwayeast", HUB + "names: [afw-x]\n")
+        self.assertIn("hubs/norwayeast: names maps a hub component", self.problems())
+
+    def test_a_name_azure_would_not_take_is_refused(self):
+        self.hub("norwayeast", HUB)
+        long = {**GOVERNANCE, "naming": {"templates": {"azure_firewall": "{type}-{org}-{app}-" + "x" * 70}}}
+        self.assertIn("names: azure_firewall name afw-demo-hub-xxx", self.problems(long))
+        self.assertIn("more than Azure allows", self.problems(long))
 
     def test_region_codes_are_unique_and_never_change(self):
         # A code is in resource names: the ones customers have used stay as they are.
@@ -170,7 +216,7 @@ class PlatformTest(unittest.TestCase):
         self.hub("norwayeast", HUB + "firewall: Basic\nbastion: true\ndns_resolver: false\n")
         hub = build(self.repo, GOVERNANCE)["hubs"]["norwayeast"]
         self.assertEqual(hub["firewall"]["management_subnet_address_prefix"], "10.100.0.64/26")
-        self.assertEqual(hub["bastion"], {"subnet_address_prefix": "10.100.1.0/26"})
+        self.assertEqual(hub["bastion"], {"subnet_address_prefix": "10.100.1.0/26", "name": "bas-demo-hub-pd-nwe-01", "public_ip_name": "pip-demo-hub-bas-pd-nwe-01"})
         self.assertIsNone(hub["dns_resolver"])
 
     def test_a_hub_split_into_chunks_is_the_same_hub(self):

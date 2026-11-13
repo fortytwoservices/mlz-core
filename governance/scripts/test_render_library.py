@@ -130,13 +130,30 @@ class RenderTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("customer.yaml: naming.org is 'democorp'; it must be 2 to 4 lower-case letters and digits.", message)
         self.assertIn("{name} is not a token", message)
-        # A root ID too long to be the customer's code in names needs naming.org once the section is there; without
-        # it nothing is asked of the root ID yet.
+        # Governance names management's resources from it, so a root ID too long to be the customer's code needs
+        # naming.org, with or without the section.
         long = self.BASE.replace("root_id: demo", "root_id: contoso-prod")
-        self.render(long)
+        for extra in ("", "naming:\n  environments:\n    hotfix: hf\n"):
+            with self.assertRaises(rl.RenderError) as caught:
+                self.render(long + extra)
+            self.assertIn("set naming.org", str(caught.exception))
+        self.render(long + "naming:\n  org: cso\n")
+
+    def test_management_s_names_come_from_the_template(self):
+        config, _ = self.render(self.BASE + "naming:\n  org: dmo\n")
+        self.assertEqual(config["names"], {
+            "management": {
+                "resource_group": "rg-dmo-mgt-pd-nwe-01", "workspace": "log-dmo-mgt-pd-nwe-01", "ama_identity": "id-dmo-mgt-ama-pd-nwe-01",
+                "data_collection_rules": {"change_tracking": "dcr-dmo-mgt-changetracking-pd-nwe-01", "vm_insights": "dcr-dmo-mgt-vminsights-pd-nwe-01",
+                                          "defender_sql": "dcr-dmo-mgt-defendersql-pd-nwe-01"},
+            },
+            "dns_resource_group": "rg-dmo-dns-pd-nwe-01",
+        })
+        config, _ = self.render(self.BASE + "naming:\n  org: dmo\n  platform:\n    management: ops\n")
+        self.assertEqual(config["names"]["management"]["workspace"], "log-dmo-ops-pd-nwe-01")
         with self.assertRaises(rl.RenderError) as caught:
-            self.render(long + "naming:\n  environments:\n    hotfix: hf\n")
-        self.assertIn("set naming.org", str(caught.exception))
+            self.render(self.BASE.replace("primary_region: norwayeast", "primary_region: atlantis").replace("[norwayeast", "[atlantis, norwayeast"))
+        self.assertIn("primary_region 'atlantis' is not an Azure region", str(caught.exception))
 
     def test_an_unknown_top_level_setting_is_refused(self):
         # A typo for allowed_regions, which would otherwise be ignored and the default regions used.

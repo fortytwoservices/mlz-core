@@ -42,8 +42,11 @@ most 24.
 ## Central management and the platform subscriptions
 
 - `az-tf-mlz-management` runs in this root: the Log Analytics workspace, the Azure Monitor Agent's
-  identity and the three data collection rules, in `rg-<root>-management-<region>` in the management
-  subscription. Names come from `modules/naming`, shared by every root.
+  identity and the three data collection rules, in `rg-acme-mgt-pd-nwe-01` in the management subscription:
+  `log-acme-mgt-pd-nwe-01`, `id-acme-mgt-ama-pd-nwe-01`, `dcr-acme-mgt-changetracking-pd-nwe-01` and so on. The
+  names come from `customer.yaml`'s naming template (`docs/naming.md`), worked out by `render_library.py` with
+  `tools/mlz/names.py`, which every root's names come from. So `naming:` is checked on every run, section or
+  not: a root ID that cannot be the customer's code (over four characters, or with a hyphen) needs `naming.org`.
 - The ALZ policies get their IDs as defaults (`log_analytics_workspace_id`, the `ama_*` values,
   `resource_group_location`, `email_security_contact`). The IDs are built from the names, so they are known
   at plan time, and `policy_assignments_dependencies` assigns the policies after the resources exist.
@@ -53,7 +56,7 @@ most 24.
 - `customer.yaml` names the platform subscriptions (`subscriptions.management`, `.connectivity`, and
   optionally `.identity` and `.security`); each one is placed in its management group.
 - **Private Link DNS:** `Deploy-Private-DNS-Zones` points at the zones where the platform makes them,
-  from the first run: the connectivity subscription, `rg-<root>-dns-<region>` (`modules/naming`), the
+  from the first run: the connectivity subscription, `rg-acme-dns-pd-nwe-01` (`tools/mlz/names.py`), the
   primary region. ALZ would give its identity Network Contributor on each zone, which fails while the zones
   do not exist yet (53 role assignments, met in the canary) and needed a second governance run after the
   platform's first. Instead it gets **Private DNS Zone Contributor on the connectivity subscription**, and
