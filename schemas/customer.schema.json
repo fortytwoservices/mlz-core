@@ -326,6 +326,10 @@
             "pattern": "^[a-z0-9]{2,5}$"
           }
         },
+        "repository": {
+          "type": "string",
+          "description": "How a landing zone's workload repo is named (default: {app}-{env}), with long names: {app} the workload's folder, {env} the landing zone's file, {org} the customer's code. Both {app} and {env} are needed."
+        },
         "platform": {
           "description": "A part of the platform to its short name in names, replacing mlz-core's (hub: hub, dns: dns, management: mgt, identity: idn, bootstrap: mlz). The platform's environment is prod.",
           "type": [

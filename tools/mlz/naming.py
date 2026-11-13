@@ -38,7 +38,13 @@ ENVIRONMENTS = {"dev": "dv", "test": "te", "uat": "ut", "sit": "st", "qa": "qa",
 LIMITS = {"org": (2, 4), "app": (2, 5), "purpose": (1, 20), "env": (1, 4), "region": (2, 5)}
 SHORT = re.compile(r"^[a-z0-9]+$")
 PURPOSE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")  # as a subnet's name: hyphens inside, any number
-SETTINGS = {"org", "template", "templates", "environments", "regions", "platform"}
+SETTINGS = {"org", "template", "templates", "environments", "regions", "platform", "repository"}
+# A landing zone's workload repo, in the customer's GitHub organization: long names, readable in a list of repos.
+# {app} is the workload's folder name, {env} the landing zone's file name; both are needed, so every landing zone has
+# its own. GitHub takes letters, digits, '.', '-' and '_', up to 100.
+REPOSITORY = "{app}-{env}"
+REPOSITORY_TOKENS = ("org", "app", "env")
+GITHUB_REPOSITORY = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 # The platform's parts, each named as an app of its own: vnet-acme-hub-pd-nwe-01, rg-acme-mgt-net-pd-nwe-01. Their
 # environment is prod, so its code follows naming.environments. customer.yaml's naming.platform changes any.
 PLATFORM = {"hub": "hub", "dns": "dns", "management": "mgt", "identity": "idn", "bootstrap": "mlz"}
@@ -56,6 +62,7 @@ class Naming:
     environments: dict[str, str] = field(default_factory=lambda: dict(ENVIRONMENTS))
     regions: dict[str, str] = field(default_factory=lambda: dict(REGION_CODES))
     platform: dict[str, str] = field(default_factory=lambda: dict(PLATFORM))
+    repository: str = REPOSITORY
 
 
 def rules_for(kind: str) -> dict:
@@ -144,6 +151,16 @@ def settings(customer: dict, root_id: str) -> Naming:
         if code in parts:
             problems.append(f"customer.yaml: naming.platform gives {part} the short name {code}, which {parts[code]} has too; every part needs its own.")
         parts.setdefault(code, part)
+    repository = given.get("repository", REPOSITORY)
+    if not isinstance(repository, str) or not re.fullmatch(r"(\{[a-z]+\}|[A-Za-z0-9._-])+", repository):
+        problems.append(f"customer.yaml: naming.repository is {repository!r}; it is tokens in braces ({', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}) "
+                        "and letters, digits, '.', '-' and '_'.")
+    else:
+        used = re.findall(r"\{([a-z]+)\}", repository)
+        problems += [f"customer.yaml: naming.repository has {{{t}}}, which is not a token; use {', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}."
+                     for t in used if t not in REPOSITORY_TOKENS]
+        if not {"app", "env"} <= set(used):
+            problems.append(f"customer.yaml: naming.repository {repository!r} needs {{app}} and {{env}}: every landing zone has a repo of its own.")
     taken = {}
     for region, code in sorted(regions.items()):
         if code in taken:
@@ -151,7 +168,8 @@ def settings(customer: dict, root_id: str) -> Naming:
         taken.setdefault(code, region)
     if problems:
         raise ConfigError("naming settings are not valid:\n  " + "\n  ".join(problems))
-    return Naming(org=org, template=template, templates=templates, environments=environments, regions=regions, platform=platform)
+    return Naming(org=org, template=template, templates=templates, environments=environments, regions=regions, platform=platform,
+                  repository=repository if isinstance(repository, str) else REPOSITORY)
 
 
 def short(where: str, token: str, value: object, problems: list[str]) -> bool:
@@ -195,6 +213,14 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
             del parts[index]
     name = "".join(values[v] if k == "token" else ("-" if rules["dashes"] else "") if k == "dash" else v for k, v in parts)
     return check(kind, name.lower() if rules["lowercase"] else name)
+
+
+def repository_name(naming: Naming, workload: str, env: str) -> str:
+    """A landing zone's workload repo, from naming.repository with the long names: payments-prod."""
+    name = naming.repository.replace("{org}", naming.org).replace("{app}", workload).replace("{env}", env)
+    if not GITHUB_REPOSITORY.fullmatch(name) or name in (".", ".."):
+        raise ConfigError(f"repository name {name} is not one GitHub takes: up to 100 letters, digits, '.', '-' and '_'.")
+    return name
 
 
 def platform_name(naming: Naming, part: str, kind: str, region: str, purpose: str | None = None) -> str:

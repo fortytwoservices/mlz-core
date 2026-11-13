@@ -326,6 +326,8 @@ class VendingTest(unittest.TestCase):
             "network_resource_group": "rg-demo-pay-net-pd-nwe-01", "identity_resource_group": "rg-demo-pay-id-pd-nwe-01",
             "virtual_network": "vnet-demo-pay-pd-nwe-01", "route_table": "rt-demo-pay-pd-nwe-01",
             "deploy_identity": "id-demo-pay-pd-nwe-01", "budget": "budget-demo-pay-pd-nwe-01",
+            # The workload repo's identity and state; no repo here, as no github.organization is set.
+            "plan_identity": "id-demo-pay-plan-pd-nwe-01", "state_resource_group": "rg-demo-pay-state-pd-nwe-01", "state_account": "stdemopaystatepdnwe01",
             "subnet": "snet-%s", "peering_to_hub": "peer-payments-prod-to-hub", "peering_from_hub": "peer-hub-to-payments-prod",
         })
         self.assertEqual(names["network_security_groups"], {"default": "nsg-demo-pay-default-pd-nwe-01"})
@@ -489,12 +491,14 @@ class VendingTest(unittest.TestCase):
                       "and Azure needs its resource groups named apart; put {purpose} in the template, or set one under names:.", problems)
         self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe-01", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
-                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe-01\n  network_security_groups:\n    web: nsg-pay-web\n")
+                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe-01\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
+                   "  network_security_groups:\n    web: nsg-pay-web\n")
         problems = self.problems(lambda _: renamed())  # Azure ignores case in a resource group's name
         self.assertIn("would both be RG-demo-pay-pd-nwe-01", problems)
         self.assertNotIn("NSGs", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
-                   "names:\n  identity_resource_group: rg-pay-identity\n  network_security_groups:\n    web: nsg-pay-web\n")
+                   "names:\n  identity_resource_group: rg-pay-identity\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
+                   "  network_security_groups:\n    web: nsg-pay-web\n")
         self.allocate(governance=flat)
         (self.repo / NAMES).unlink()
         self.allocate(governance=flat)
@@ -617,7 +621,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("budget is a group of settings (contacts, monthly), not 500", message)
         self.assertIn("network is a group of settings (size, subnets), not 'big'", message)
         self.assertIn("tags maps each extra tag to its value", message)
-        self.assertIn("github is a group of settings (organization, repo), not 'payments'", message)
+        self.assertIn("github is a group of settings (create, organization, repo, team), not 'payments'", message)
         self.assertIn("location is one value", message)
         self.assertIn("location ['norwayeast'] has no hub", self.problems(allocate, PLATFORM))
 
@@ -626,9 +630,67 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         self.assertIn("github.repo needs github.organization", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.assertIn("payments-dev: _generated/names.yaml has no name for repository yet", self.problems(build, GOVERNANCE, PLATFORM))
+        self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra"})
-        self.assertIsNone(configs["payments-dev"]["github"])
+        # An existing repo, which vending only trusts; and one vending makes, named by naming.repository.
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": None})
+        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": None})
+        self.assertNotIn("repository", configs["payments-prod"]["names"])
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
+        self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
+
+    def test_the_workload_repo_s_settings_are_checked(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n  create: true\n  team: Payments Devs\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: 'no'\n")
+        self.allocate()
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("github.repo names an existing repo, which vending never creates", problems)
+        self.assertIn("github.team 'Payments Devs' is a GitHub team's slug, as in its URL", problems)
+        self.assertIn("landing-zones/payments/dev: github.create is true or false, without quotes.", problems)
+
+    def test_the_workload_repo_takes_customer_yaml_s_template_and_keeps_its_name(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "github:\n  team: payments-devs\n")
+        own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
+        self.allocate(governance=own)
+        configs = build(self.repo, own, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs"})
+        # Recorded, as every landing zone name is: a changed template renames nothing until renewed.
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["github"]["repo"], "demo-payments-prod")
+        record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, {"payments-prod"})
+        self.assertIn("payments-prod: repository demo-payments-prod, now payments-prod", changes)
+        # A pull request's run keeps what its base has, the repo's name too: a changed template renames nothing there either.
+        record, _ = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=recorded_names(self.repo))
+        self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
+
+    def test_no_two_landing_zones_get_one_repo(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        # {app}{env} without a dash: ab/preprod and abpre/prod come out the same.
+        for workload, env, sub in (("ab", "preprod", "55"), ("abpre", "prod", "66")):
+            self.write(f"landing-zones/{workload}/_workload.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))
+            self.write(f"landing-zones/{workload}/{env}.yaml", DEV.replace("44", sub))
+        joined = {**GOVERNANCE, "naming": {"repository": "{app}{env}"}}
+        self.allocate(governance=joined)
+        self.assertIn("landing-zones: ab-preprod, abpre-prod would share the repo demo-org/abpreprod, which vending makes for ab-preprod, abpre-prod",
+                      self.problems(build, joined, PLATFORM))
+        # A repo vending makes, with the name another landing zone's existing repo has, ignoring case. The names given
+        # under the joined template are recorded, so they go first.
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: AB-Preprod\n")
+        self.assertIn("would share the repo demo-org/ab-preprod, which vending makes for ab-preprod", self.problems(build, GOVERNANCE, PLATFORM))
+        # Not text, or empty: reported by the check, not a crash here.
+        for wrong in ("42", "''", "false"):
+            self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + f"github:\n  repo: {wrong}\n")
+            self.assertIn("is a repository name in the organization", self.problems(build, GOVERNANCE, PLATFORM))
+        # Two landing zones naming one existing repo, which vending makes for neither: theirs to share.
+        self.write("landing-zones/ab/preprod.yaml", DEV.replace("44", "55") + "github:\n  repo: shared-infra\n")
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: shared-infra\n")
+        self.allocate()
+        build(self.repo, GOVERNANCE, PLATFORM)
 
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
         self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")

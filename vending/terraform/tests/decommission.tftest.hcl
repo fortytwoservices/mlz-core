@@ -32,6 +32,14 @@ run "live" {
     condition     = azapi_resource.resource_group["network"].name == "rg-acme-pay-net-pd-nwe-01" && azapi_resource.resource_group["identity"].name == "rg-acme-pay-id-pd-nwe-01"
     error_message = "Names come from the config, as python3 -m mlz vending worked them out."
   }
+  assert {
+    condition     = azapi_resource.state.name == "stacmepaystatepdnwe01" && azapi_resource.state_resource_group.name == "rg-acme-pay-state-pd-nwe-01" && azapi_resource.state_container.name == "tfstate"
+    error_message = "The workload repo's state account is in a group of its own, named from the config."
+  }
+  assert {
+    condition     = toset(keys(azapi_resource.state_role)) == toset(["plan", "deploy"])
+    error_message = "The plan identity reads the state and the deploy identity writes it."
+  }
 }
 
 run "decommissioned" {
@@ -44,7 +52,11 @@ run "decommissioned" {
     error_message = "A decommissioned landing zone keeps neither resource group nor its route table."
   }
   assert {
-    condition     = output.landing_zone.decommissioned && output.landing_zone.deploy_identity == null && output.landing_zone.virtual_network_id == null
+    condition     = output.landing_zone.decommissioned && output.landing_zone.deploy_identity == null && output.landing_zone.plan_identity == null && output.landing_zone.virtual_network_id == null
     error_message = "A decommissioned landing zone's output has no identity or network."
+  }
+  assert {
+    condition     = azapi_resource.state.name == "stacmepaystatepdnwe01" && length(azapi_resource.state_role) == 0
+    error_message = "A decommissioned landing zone keeps its state account, without the roles of the identities that went."
   }
 }

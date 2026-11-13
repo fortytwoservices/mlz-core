@@ -48,6 +48,9 @@
     },
     "subnet": "snet-%s",
     "peering_to_hub": "peer-payments-prod-to-hub",
-    "peering_from_hub": "peer-hub-to-payments-prod"
+    "peering_from_hub": "peer-hub-to-payments-prod",
+    "plan_identity": "id-acme-pay-plan-pd-nwe-01",
+    "state_resource_group": "rg-acme-pay-state-pd-nwe-01",
+    "state_account": "stacmepaystatepdnwe01"
   }
 }

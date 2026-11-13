@@ -43,7 +43,7 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 | `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
 | `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
-| `github` | `organization` and `repo`: the landing zone's repo, whose `main` branch signs in as its deploy identity. Set the organization once in `_defaults/all.yaml`. |
+| `github` | The landing zone's workload repo ([below](#the-workload-repo)). `organization`, set once in `_defaults/all.yaml`: from then on every landing zone has one. `repo`: an existing repo to use instead, which vending only trusts. `create: false`: none, for example for a sandbox. `team`: the owning team's GitHub team, by its slug, set once per workload in `_workload.yaml`. |
 | `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. Azure ignores case in tag names, so the checks do too. At most 45, within Azure's limits on names and values. |
 
 Any layer can be a folder of chunks.
@@ -157,7 +157,9 @@ owner: payments@demo.example
 ```
 
 - **Its plan destroys everything vending made:** the network, both peerings, the NSGs, the route table, the
-  deploy identity and its role, the budget, and vending's two resource groups, with anything else in them.
+  deploy and plan identities and their roles, the budget, and vending's network and identity resource groups,
+  with anything else in them. The workload repo's state account stays, in its own group: the team's own
+  resources, which that state describes, may outlive the landing zone.
   The subscription moves to `<root>-decommissioned`, where ALZ's policies deny new resources; the team's own
   resource groups stay. The reviewer approves it as any other apply.
 - **A subnet still in use stops it.** A team's own resource in a subnet, such as a private endpoint or a
@@ -179,6 +181,26 @@ owner: payments@demo.example
   there would stop the platform's check. The job runs after every run on `main` in which the landing zones are
   as `main` says, the daily check included, so each pull request follows within a day of what it waits for.
   An open pull request is left as it is. Both come from the MLZ App, on branches `mlz/decommission-<key>`.
+
+## The workload repo
+
+Once `github.organization` is set, every landing zone has a workload repo of its own for the team's code, in the
+customer's GitHub organization, unless its `github.repo` names an existing one or `github.create` is `false`. What
+it has in Azure, from vending:
+
+- **Its name**, from `customer.yaml`'s `naming.repository` (default `{app}-{env}`, with long names:
+  `payments-prod`), recorded with the landing zone's other names (`docs/naming.md`).
+- **A plan identity**, `id-acme-pay-plan-pd-nwe-01`: Reader on the subscription, for the repo's pull requests' plans,
+  beside the deploy identity, Contributor, for its applies.
+- **Its Terraform state**, in a storage account in the landing zone's own subscription, `stacmepaystatepdnwe01`
+  in `rg-acme-pay-state-pd-nwe-01`: Entra ID only, versioned, 30 days of soft delete, container `tfstate`. The plan
+  identity reads it, the deploy identity writes it. It is never replaced (`prevent_destroy`) and outlives a
+  decommission ([above](#decommissioning-a-landing-zone)). The root's `landing_zone` output names it.
+
+**Where it stands:** vending names and records the repo, and makes its identities and state, but does not make the
+repo itself yet. The next part does: the repo, its `apply` environment with the team as reviewer, its variables,
+and the identities' trust in GitHub's immutable subjects (`docs/bootstrap.md`), which today's trust of the
+`main` branch by name does not match. Then a workload starter, with a pipeline and the naming helper.
 
 ## Operating notes
 
