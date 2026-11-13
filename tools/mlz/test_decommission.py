@@ -7,7 +7,6 @@ import unittest
 from pathlib import Path
 
 from mlz import decommission
-from mlz.firewall import partition
 from mlz.files import read_yaml
 from mlz.test_vending import DEFAULTS, DEV, PLATFORM, PROD, WORKLOAD
 from mlz.vending import IP_PLAN, allocate, render_plan
@@ -18,14 +17,22 @@ POLICY = "/subscriptions/c/resourceGroups/rg-demo-hub-nwe/providers/Microsoft.Ne
 
 
 class FakeAzure:
-    """The hub's rule collection groups, by ID, as Azure answers them."""
+    """The hub's firewall policy's rule collection groups, as Azure lists them."""
 
     def __init__(self, groups=None):
-        self.groups, self.read = groups or {}, []
+        self.groups, self.read = groups or [], []
 
     def resource(self, resource_id, api_version):
         self.read.append((resource_id, api_version))
-        return self.groups.get(resource_id)
+        return {"value": self.groups} if resource_id == f"{POLICY}/ruleCollectionGroups" else None
+
+
+def group(name, *collections, state="Succeeded"):
+    return {"name": name, "properties": {"provisioningState": state, "ruleCollections": list(collections)}}
+
+
+def collection(name, *rules):
+    return {"name": name, "rules": list(rules)}
 
 
 class FakeGitHub:
@@ -120,19 +127,30 @@ class DecommissionTest(unittest.TestCase):
         # From the commit its files were worked out from, not whatever main is now.
         self.assertEqual(github.bases, [(REPOS["vending"], "run-sha")])
 
-    def test_the_range_waits_while_its_rules_are_still_in_azure(self):
+    def wait_reason(self, groups):
+        """What a decommissioned payments-dev's release waits for, with these groups in the hub's policy."""
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
-        group = f"{POLICY}/ruleCollectionGroups/lz-{partition('payments-dev'):02d}"
-        self.azure.groups[group] = {"properties": {"ruleCollections": [{"name": "payments-dev-network"}, {"name": "other-network"}]}}
+        self.azure.groups, self.printed = groups, []
         github = FakeGitHub()
         self.cleanup(github)
-        self.assertEqual((github.commits, github.pulls), ([], []))
-        self.assertEqual(self.azure.read, [(group, "2025-07-01")])
-        self.assertIn("payments-dev's rules are still in Azure", self.printed[0])
-        # Taken out by the platform's apply: another landing zone's rules may stay in the same group.
-        self.azure.groups[group] = {"properties": {"ruleCollections": [{"name": "other-network"}]}}
-        self.cleanup(github)
-        self.assertEqual(github.pulls[0][0], REPOS["vending"])
+        return None if github.pulls else self.printed[0]
+
+    def test_the_range_waits_while_its_rules_may_still_be_in_azure(self):
+        dev = read_yaml(self.repo / IP_PLAN)["payments-dev"]["range"]
+        other = collection("payments-prod-network", {"name": "api", "sourceAddresses": ["10.100.9.0/24"], "destinationAddresses": ["203.0.113.10"]})
+        # Its own collections, still there.
+        self.assertIn("lz-07/payments-dev-network", self.wait_reason([group("lz-07", collection("payments-dev-network"))]))
+        # A rule elsewhere that still names it by key: its range as a destination.
+        named = collection("platform-network", {"name": "to-dev", "sourceAddresses": ["10.100.0.0/16"], "destinationAddresses": [dev]})
+        self.assertIn(f"platform/platform-network/to-dev, from or to {dev}", self.wait_reason([group("platform", named)]))
+        # A group whose change has not finished, or failed.
+        self.assertIn("rule collection group lz-07 is Updating", self.wait_reason([group("lz-07", other, state="Updating")]))
+        self.assertIn("is Failed", self.wait_reason([group("lz-07", other, state="Failed")]))
+        # Gone: other landing zones' rules may stay, and platform rules from the whole landing zone range.
+        broad = collection("platform-network", {"name": "updates", "sourceAddresses": ["10.100.0.0/16"], "destinationAddresses": ["AzureCloud"]})
+        self.assertIsNone(self.wait_reason([group("lz-07", other), group("platform", broad)]))
+        self.assertIsNone(self.wait_reason([]))  # no group left at all
+        self.assertEqual(self.azure.read[-1], (f"{POLICY}/ruleCollectionGroups", "2025-07-01"))
 
     def test_the_workload_s_last_landing_zone_takes_its_workload_file_too(self):
         (self.repo / "landing-zones/payments/prod.yaml").unlink()

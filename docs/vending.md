@@ -168,8 +168,9 @@ owner: payments@demo.example
 - **Then the files go, in pull requests a person merges.** Once the destroy is applied, vending's pipeline
   (its `decommission` job, `python3 -m mlz decommission`) opens one in the platform repo that deletes
   `firewall/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
-  taken the landing zone's rules out of Azure (the job looks at the hub's firewall policy; deleting the file
-  alone does not), it opens one here that deletes the landing zone's file, and `_workload.yaml` when it was
+  taken the landing zone's rules out of Azure (the job reads every rule collection group of the hub's
+  firewall policy: none still changing or failed, none with the landing zone's collections, no rule with its
+  range as source or destination; deleting the file alone does not take them out), it opens one here that deletes the landing zone's file, and `_workload.yaml` when it was
   the workload's last landing zone, and releases its range in the IP plan. In that order: released, the range
   may go to a new landing zone, which must not inherit the old one's rules, and the landing zone leaves
   vending's contract, so a rules file still there would stop the platform's check. The job runs after every
