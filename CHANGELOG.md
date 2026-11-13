@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.6](https://github.com/fortytwoservices/mlz-core/compare/v0.3.5...v0.3.6) (2026-11-13)
+
+
+### Features
+
+* **vending:** pull requests that delete a decommissioned landing zone's files ([#51](https://github.com/fortytwoservices/mlz-core/issues/51)) ([fd3ce4c](https://github.com/fortytwoservices/mlz-core/commit/fd3ce4c9b01b8a700f9c574bd95b90162abe3a46))
+
 ## [0.3.5](https://github.com/fortytwoservices/mlz-core/compare/v0.3.4...v0.3.5) (2026-11-13)
 
 
