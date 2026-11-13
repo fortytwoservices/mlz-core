@@ -179,6 +179,26 @@
       "lowercase": false,
       "global": false,
       "pattern": "^(?:[a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-_]*[a-zA-Z0-9])$"
+    },
+    "data_collection_rule": {
+      "slug": "dcr",
+      "min_length": 1,
+      "max_length": 64,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$",
+      "own_rule": "Microsoft publishes no naming rule for Microsoft.Insights/dataCollectionRules: mlz-core's own"
+    },
+    "github_network_settings": {
+      "slug": "ghns",
+      "min_length": 1,
+      "max_length": 64,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$",
+      "own_rule": "Microsoft publishes no naming rule for GitHub.Network/networkSettings: mlz-core's own"
     }
   }
 }
