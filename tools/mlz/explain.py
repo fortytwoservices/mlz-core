@@ -95,6 +95,8 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
     archetype, location = settings.get("archetype"), settings.get("location")
     if governance is None:
         worked.append(("management group", "not known yet", "waits for governance's contract (_generated/governance.yaml)"))
+    elif vending.decommissioned(lz):
+        worked.append(("management group", f"{governance['root']}-decommissioned", "decommission: true; its plan destroys everything vending made"))
     elif isinstance(archetype, str) and archetype in governance.get("archetypes", {}):
         worked.append(("management group", governance["archetypes"][archetype], f"governance's contract, for archetype {archetype}"))
     tags = {"Owner": (settings.get("owner"), "owner"), "CostCenter": (settings.get("cost_center"), "cost_center"),

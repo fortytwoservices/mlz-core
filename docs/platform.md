@@ -132,7 +132,10 @@ from its network's range, and `firewall/identity.yaml` identity's, from its rang
 builds it (a rule there with no such region stops the check). A rule names only where traffic goes; the
 source is worked out from the vending contract (`_generated/vending.yaml`) and the platform's own layout.
 A file in `firewall/landing-zones/` for a key that contract does not name stops the check, since it is
-usually a typo. Before vending has published anything, on the platform's
+usually a typo. A key the contract lists as held, a landing zone decommissioned or removed whose range is not
+released yet, only warns: its rules leave Azure with that run, before the range can go to another landing
+zone, and the file can be deleted (`docs/vending.md`, decommissioning). A rule elsewhere that still names a
+held landing zone stops the check, saying so. Before vending has published anything, on the platform's
 first deployment, those files wait instead, with a notice, so the hub can be built first. `to` takes:
 
 - names in lower case (`api.example.com`) and wildcards (`*.example.com`)

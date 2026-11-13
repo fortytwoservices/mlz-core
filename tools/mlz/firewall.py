@@ -162,7 +162,7 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     return kept
 
 
-def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
+def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str, problems: list[str], held: dict | None = None) -> tuple[dict | None, dict[str, dict]]:
     """One rule as the firewall module takes it: an application rule for names and FQDN tags on https or
     http, and network rules for addresses, landing zones, service tags and other ports (one for TCP, one
     for UDP). Returns (application rule or None, {suffix: network rule})."""
@@ -178,6 +178,8 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             continue
         if zones is not None and target in zones:
             addresses.append(zones[target]["range"])
+        elif target in (held or {}):
+            problems.append(f"{at}: {target} is decommissioned or removed, and its range is no longer its own; take it out of this rule.")
         elif target in FQDN_TAGS or target.startswith("Office365."):
             tags.append(target)
         elif SERVICE_TAG.fullmatch(target):
@@ -249,11 +251,11 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
     return application, network
 
 
-def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict | None, priority: int, tier: str, problems: list[str]) -> dict:
+def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict | None, priority: int, tier: str, problems: list[str], held: dict | None = None) -> dict:
     """The owner's rules as at most two collections: <owner>-network and <owner>-application."""
     application, network, made_by = {}, {}, {}
     for index, rule in enumerate(rules):
-        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, tier, problems)
+        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, tier, problems, held)
         if app:
             application[rule["name"]] = app
         for suffix, one in net.items():
@@ -280,6 +282,8 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
     problems: list[str] = []
     # None until vending publishes its first contract: then landing zones are not known yet (see below).
     zones = None if vending is None else (vending.get("landing_zones") or {})
+    # Removed or decommissioned landing zones whose ranges are not released yet: their rules no longer apply.
+    held = {} if vending is None else (vending.get("held") or {})
     hubs = platform["hubs"]
     networks = platform["networks"]  # management's and identity's, by region, as the platform builds them
     groups: dict[str, dict] = {region: {} for region in hubs}
@@ -299,8 +303,8 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         if "management" in built:
             subnets = [built["management"]["subnets"][subnet] for subnet in RUNNER_SUBNETS]
             parts.append(collections(runners, subnets, "mlz-core", "runners", zones, 110, tier, problems))
-        parts.append(collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems))
-        parts += [collections(own[name], [net["address_space"]], f"firewall/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems) for name, net in built.items()]
+        parts.append(collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems, held))
+        parts += [collections(own[name], [net["address_space"]], f"firewall/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems, held) for name, net in built.items()]
         groups[region]["platform"] = {
             "priority": PLATFORM_PRIORITY,
             "application": {k: v for part in parts for k, v in part["application"].items()},
@@ -326,6 +330,11 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         keys = []
     for key in keys:
         where = f"firewall/landing-zones/{key}"
+        if key in held:
+            # Its rules leave Azure with this run, before its range can be given to another landing zone; the
+            # file goes in a pull request of its own (docs/vending.md, decommissioning).
+            print(f"mlz firewall: {where}.yaml is for {key}, decommissioned or removed: its rules are no longer applied; delete the file", file=sys.stderr)
+            continue
         if key not in zones:
             problems.append(f"{where}: no landing zone {key} in the vending contract (_generated/vending.yaml).")
             continue
@@ -342,7 +351,7 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         # shift these priorities.
         place = sorted(k for k in keys if k in zones and zones[k]["region"] == region and partition(k) == number).index(key)
         tier = (hubs[region].get("firewall") or {}).get("sku_tier", "Standard")
-        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems)
+        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems, held)
         group["application"].update(found["application"])
         group["network"].update(found["network"])
     if problems:
@@ -360,14 +369,16 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
 
 def vending_contract(zones: dict, plan: dict) -> dict:
     """What the platform needs from vending: each landing zone's region and range, for firewall rules, and
-    the ranges of landing zones removed but not yet released, which the platform must not build over."""
+    the ranges of landing zones removed or decommissioned but not yet released, which the platform must not
+    build over, and whose rules it no longer applies."""
+    live = {key: zone for key, zone in zones.items() if zone["settings"].get("decommission") is not True}
     contract = {
         "landing_zones": {
             key: {"region": zone["settings"]["location"], "range": str(plan[key]["range"])}
-            for key, zone in sorted(zones.items()) if key in plan
+            for key, zone in sorted(live.items()) if key in plan
         }
     }
-    held = {key: str(plan[key]["range"]) for key in sorted(set(plan) - set(zones))}
+    held = {key: str(plan[key]["range"]) for key in sorted(set(plan) - set(live))}
     if held:  # left out when empty, so a contract without removed landing zones reads as before
         contract["held"] = held
     return contract

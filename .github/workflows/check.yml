@@ -66,3 +66,7 @@ jobs:
             terraform -chdir=$root/terraform validate
             echo "::endgroup::"
           done
+
+      # Plans with the providers mocked, so no Azure either: what a root builds for a given config.
+      - name: Test the roots
+        run: terraform -chdir=vending/terraform test

@@ -143,6 +143,35 @@ It reads the contracts in `_generated/` when they are there, and says what waits
 not. It shows what mlz-core's loader decides; what the vending root does the same way for every landing
 zone, such as its NSGs, is in `vending/terraform`.
 
+## Decommissioning a landing zone
+
+A landing zone is retired by one line in its own file, never by deleting the file (a deleted file leaves
+everything vending made in Azure, with no stack left to plan it):
+
+```yaml
+# landing-zones/payments/prod.yaml
+decommission: true
+owner: payments@demo.example
+```
+
+- **Its plan destroys everything vending made:** the network, both peerings, the NSGs, the route table, the
+  deploy identity and its role, the budget, and vending's two resource groups, with anything else in them.
+  The subscription moves to `<root>-decommissioned`, where ALZ's policies deny new resources; the team's own
+  resource groups stay. The reviewer approves it as any other apply.
+- **A subnet still in use stops it.** A team's own resource in a subnet, such as a private endpoint or a
+  VM's network interface, stops the destroy until it is removed; then run the workflow again.
+- **Only in that landing zone's own file**, and `true` or not there at all: in a layer above, it would retire
+  every landing zone below.
+- **Its range stays held:** the IP allocator gives it to no one, and vending's contract lists the landing zone
+  as held. The platform drops its firewall rules from Azure on its next run, before the range can go to
+  another landing zone, and its rules file only warns that it can be deleted (`docs/platform.md`).
+- **Then the files go.** Once the destroy is applied, and the platform's next apply has taken the landing
+  zone's rules out of Azure (its firewall plan shows them removed; deleting the rules file alone does not):
+  delete `firewall/landing-zones/<key>.yaml` in the platform repo, then delete the landing zone's file here
+  and release its range, `python3 -m mlz release --repo . <key>`, in one pull request. In that order:
+  released, the range may go to a new landing zone, which must not inherit the old one's rules, and the
+  landing zone leaves vending's contract, so a rules file still there would stop the platform's check.
+
 ## Operating notes
 
 - **A new landing zone settles on its second run.** Sub-vending records whether the subscription is already

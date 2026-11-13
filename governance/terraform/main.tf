@@ -35,10 +35,11 @@ locals {
   private_dns_subscription = jsondecode(merge(local.private_dns_defaults, var.policy_default_values).private_dns_zone_subscription_id).value
 
   # Vending's rights on the groups landing zone subscriptions go into, for its pipeline identities from
-  # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them.
+  # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them. Decommissioned
+  # too: a decommissioned landing zone's subscription moves there, and its stack still plans and applies.
   bootstrap = var.bootstrap_contract_file == null ? null : yamldecode(file(var.bootstrap_contract_file))
   vending_rights = local.bootstrap == null ? {} : merge([
-    for group in ["landing-zones", "sandboxes"] : {
+    for group in ["landing-zones", "sandboxes", "decommissioned"] : {
       "vending-apply/${group}" = {
         scope     = "/providers/Microsoft.Management/managementGroups/${local.config.root_id}-${group}"
         role      = "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635" # Owner

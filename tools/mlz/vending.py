@@ -25,7 +25,7 @@ from .yamlout import dump
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags", "decommission"}
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 # 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
@@ -127,6 +127,13 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
 
     problems += name_problems(key, lz)
     problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
+    # One landing zone at a time, in its own file: a layer above would retire every landing zone below it. Every
+    # layer is looked at, since the landing zone's own file setting it too would hide one above.
+    for name, data in lz["layers"][:-1]:
+        if "decommission" in data:
+            problems.append(f"{name}: decommission retires one landing zone, so it goes in that landing zone's own file, {where}.")
+    if "decommission" in s and s["decommission"] is not True:
+        problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
@@ -444,7 +451,8 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "key": key,
             "root_id": governance["root"],
             "subscription_id": s["subscription"].lower(),
-            "management_group_id": governance["archetypes"][s["archetype"]],
+            # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
+            "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
             "location": s["location"],
             "tags": {
                 **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
@@ -464,8 +472,15 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 "routes": route_table_routes(region.get("spoke_routes") or []),
             },
             "github": {"organization": github["organization"], "repo": github["repo"]} if github.get("repo") else None,
+            "decommission": decommissioned(lz),
         }
     return configs
+
+
+def decommissioned(lz: dict) -> bool:
+    """decommission: true in the landing zone's file: its plan destroys everything vending made and moves the
+    subscription to Decommissioned. Its range stays held until it is released."""
+    return lz["settings"].get("decommission") is True
 
 
 def route_table_routes(routes: list[dict]) -> dict[str, dict]:

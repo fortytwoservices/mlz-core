@@ -298,6 +298,21 @@ class FirewallTest(unittest.TestCase):
         self.assertEqual(run.returncode, 1)
         self.assertFalse(out.exists())
 
+    def test_a_held_landing_zone_s_rules_wait_to_be_deleted_and_apply_no_more(self):
+        self.write("firewall/landing-zones/payments-prod.yaml", "outbound:\n  - name: api\n    to: [203.0.113.10]\n    ports: [443]\n")
+        held = {"landing_zones": {"website-prod": VENDING["landing_zones"]["website-prod"]}, "held": {"payments-prod": "10.100.4.0/24"}}
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            groups = build(self.repo, PLATFORM, held, GITHUB)["policies"]["norwayeast"]
+        self.assertEqual(list(groups), ["platform"])  # its partition group is gone, so are its rules
+        self.assertIn("firewall/landing-zones/payments-prod.yaml is for payments-prod, decommissioned or removed: its rules are no longer applied; delete the file", stderr.getvalue())
+
+    def test_a_rule_that_still_names_a_held_landing_zone_stops_the_check(self):
+        self.write("firewall/platform.yaml", "outbound:\n  - name: to-payments\n    to: [payments-prod]\n    ports: [443]\n")
+        held = {"landing_zones": {}, "held": {"payments-prod": "10.100.4.0/24"}}
+        with self.assertRaisesRegex(ConfigError, "firewall/platform: outbound\\[0\\]: payments-prod is decommissioned or removed, and its range is no longer its own; take it out of this rule."):
+            build(self.repo, PLATFORM, held, GITHUB)
+
     def test_without_rule_files_only_the_required_rules(self):
         groups = build(self.repo, PLATFORM, {"landing_zones": {}}, GITHUB)["policies"]["norwayeast"]  # vending published, no zones yet
         self.assertEqual(list(groups), ["platform"])

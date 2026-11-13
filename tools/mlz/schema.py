@@ -100,6 +100,7 @@ def landing_zone() -> dict:
             "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
             "repo": text("The landing zone's repo, whose main branch signs in as its deploy identity.", pattern=pattern(vending.GITHUB_REPO)),
         }, "The landing zone's own repo.")),
+        "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},
         "tags": or_empty({
             "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
             "type": "object",
