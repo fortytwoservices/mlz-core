@@ -6,7 +6,7 @@ Each customer repo runs its role from mlz-core with one short workflow, `.github
 ```yaml
 jobs:
   governance:
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.3.2 # x-release-please-version
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.3.3 # x-release-please-version
     with:
       role: governance
     secrets:
@@ -101,7 +101,7 @@ does not run through the pipeline.
 ## Contracts between the repos
 
 After every run on `main` in which nothing failed, governance's contract goes to the platform and vending
-repos, platform's to the governance and vending repos, and vending's to the platform repo, each as a pull
+repos, platform's to the vending repo, and vending's to the platform repo, each as a pull
 request that updates `_generated/<role>.yaml`. If the contract did not change, nothing is opened, and a pull
 request still open from an earlier run is closed: it no longer matches what was deployed. A pull request
 still open with an older contract gets the new one on its branch. Publishing runs even when nothing was
@@ -142,10 +142,8 @@ themselves; what a person does is approve each apply, and hand over landing zone
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
 2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
-   contract to governance and vending.
-3. **Governance again**, with platform's contract: the Private Link DNS policy now points at the real
-   zones.
-4. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
+   contract to vending.
+3. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
    first (`docs/bootstrap.md`).
 
 From then on, each repo's pull requests and merges run on their own.

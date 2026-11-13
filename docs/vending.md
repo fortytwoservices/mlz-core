@@ -167,13 +167,15 @@ owner: payments@demo.example
   another landing zone, and its rules file only warns that it can be deleted (`docs/platform.md`).
 - **Then the files go, in pull requests a person merges.** Once the destroy is applied, vending's pipeline
   (its `decommission` job, `python3 -m mlz decommission`) opens one in the platform repo that deletes
-  `firewall/landing-zones/<key>.yaml`, when there is one. Once that is merged, it opens one here that deletes
-  the landing zone's file, and `_workload.yaml` when it was the workload's last landing zone, and releases its
-  range in the IP plan. In that order: released, the landing zone leaves vending's contract, and a rules file
-  still there would stop the platform's check. The job runs after every run on `main` in which the landing
-  zones are as `main` says, the daily check included, so the second pull request follows within a day of the
-  first one's merge. An open pull request is left as it is. Both come from the MLZ App, on branches
-  `mlz/decommission-<key>`.
+  `firewall/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
+  taken the landing zone's rules out of Azure (the job looks at the hub's firewall policy; deleting the file
+  alone does not), it opens one here that deletes the landing zone's file, and `_workload.yaml` when it was
+  the workload's last landing zone, and releases its range in the IP plan. In that order: released, the range
+  may go to a new landing zone, which must not inherit the old one's rules, and the landing zone leaves
+  vending's contract, so a rules file still there would stop the platform's check. The job runs after every
+  run on `main` in which the landing zones are as `main` says, the daily check included, so each pull request
+  follows within a day of what it waits for. An open pull request is left as it is. Both come from the MLZ
+  App, on branches `mlz/decommission-<key>`.
 
 ## Operating notes
 

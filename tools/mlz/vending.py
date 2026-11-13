@@ -127,12 +127,13 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
 
     problems += name_problems(key, lz)
     problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
-    if "decommission" in s:
-        # One landing zone at a time, in its own file: a layer above would retire every landing zone below it.
-        if at("decommission") != where:
-            problems.append(f"{at('decommission')}: decommission retires one landing zone, so it goes in that landing zone's own file, {where}.")
-        elif s["decommission"] is not True:
-            problems.append(f"{where}: decommission is true or not there at all, not {s['decommission']!r}.")
+    # One landing zone at a time, in its own file: a layer above would retire every landing zone below it. Every
+    # layer is looked at, since the landing zone's own file setting it too would hide one above.
+    for name, data in lz["layers"][:-1]:
+        if "decommission" in data:
+            problems.append(f"{name}: decommission retires one landing zone, so it goes in that landing zone's own file, {where}.")
+    if "decommission" in s and s["decommission"] is not True:
+        problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")

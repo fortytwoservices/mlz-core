@@ -28,6 +28,7 @@ the hub's firewall, and they resolve names through the hub.
 from __future__ import annotations
 
 import ipaddress
+import json
 from pathlib import Path
 
 from .files import preload, read_setting, setting_names, yaml_files
@@ -42,13 +43,17 @@ NETWORKS = {
     "management": (1024, {"github-runners": (0, 25), "runners": (128, 26), "private-endpoints": (192, 27)}),
     "identity": (1280, {"domain-controllers": (0, 26)}),
 }
-# The regions mlz-core supports, with the codes in their names: modules/naming's, which the tests hold this to.
-REGION_CODES = {"norwayeast": "nwe", "norwaywest": "nww", "westeurope": "we", "northeurope": "ne", "swedencentral": "sdc"}
+# The regions mlz-core knows, with the codes in their names: modules/naming's own file, every Azure region.
+REGION_CODES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "region-codes.json").read_text())
 REGIONS = tuple(REGION_CODES)
 # Where GitHub's hosted runners can join a subnet of the customer's (GitHub Docs, "About Azure private
-# networking for GitHub-hosted runners", supported regions): of REGIONS, only these. Elsewhere management's
-# network keeps the subnet, undelegated, for self-hosted runners.
-GITHUB_RUNNER_REGIONS = ("norwayeast", "swedencentral")
+# networking for GitHub-hosted runners", supported regions, read 2026-11-13). Elsewhere management's network
+# keeps the subnet, undelegated, for self-hosted runners.
+GITHUB_RUNNER_REGIONS = (
+    "australiaeast", "brazilsouth", "canadacentral", "canadaeast", "centralus", "eastasia", "eastus", "eastus2",
+    "francecentral", "japanwest", "koreacentral", "northcentralus", "norwayeast", "southcentralus", "southeastasia",
+    "southindia", "swedencentral", "switzerlandnorth", "uksouth", "ukwest", "westus", "westus2", "westus3",
+)
 # Ranges Azure refuses in a virtual network: multicast, broadcast, loopback, link-local, its own DNS.
 AZURE_RESERVED = tuple(ipaddress.ip_network(r) for r in ("224.0.0.0/4", "255.255.255.255/32", "127.0.0.0/8", "169.254.0.0/16", "168.63.129.16/32"))
 
@@ -96,7 +101,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     if "address_space" in settings:
         problems.append(moved(where, settings["address_space"]))
     if region not in REGIONS:
-        problems.append(f"{where}: {region!r} is not a region mlz-core supports yet ({', '.join(REGIONS)}).")
+        problems.append(f"{where}: {region!r} is not an Azure region (modules/naming/region-codes.json names them, for example norwayeast).")
 
     # Settings that do not depend on the address space first, so every problem is reported at once.
     ranges = cidrs(settings.get("landing_zone_ranges", []), f"{where}: landing_zone_ranges", problems)

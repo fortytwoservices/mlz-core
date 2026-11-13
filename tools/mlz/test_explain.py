@@ -53,6 +53,10 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(rows["network.subnets.default"][0], "26")
         self.assertEqual(rows["github"], ("not set", "no repo of its own"))
 
+    def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
+        self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
+        self.assertEqual(self.rows()["management group"], ("demo-decommissioned", "decommission: true; its plan destroys everything vending made"))
+
     def test_the_rest_comes_from_the_contracts_and_the_ip_plan(self):
         rows = self.rows()
         self.assertEqual(rows["management group"], ("demo-lz-corp", "governance's contract, for archetype corp"))
