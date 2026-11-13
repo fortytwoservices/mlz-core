@@ -5,23 +5,25 @@ locals {
   subscriptions = local.config.subscriptions
   region        = local.config.primary_region
   tags          = { ManagedBy = "mlz-core" }
+  # From the customer's naming template, worked out by render_library.py (tools/mlz/names.py).
+  names = local.config.names
 
   # Resource IDs built from names, so the policies know them at plan time, before management is applied.
-  management_resource_group_id = "/subscriptions/${local.subscriptions.management}/resourceGroups/${module.naming.management.resource_group}"
+  management_resource_group_id = "/subscriptions/${local.subscriptions.management}/resourceGroups/${local.names.management.resource_group}"
   management_ids = {
-    workspace = "${local.management_resource_group_id}/providers/Microsoft.OperationalInsights/workspaces/${module.naming.management.workspace}"
-    identity  = "${local.management_resource_group_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${module.naming.management.ama_identity}"
+    workspace = "${local.management_resource_group_id}/providers/Microsoft.OperationalInsights/workspaces/${local.names.management.workspace}"
+    identity  = "${local.management_resource_group_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${local.names.management.ama_identity}"
     rules = {
-      for kind, name in module.naming.management.data_collection_rules :
+      for kind, name in local.names.management.data_collection_rules :
       kind => "${local.management_resource_group_id}/providers/Microsoft.Insights/dataCollectionRules/${name}"
     }
   }
 
   # The Private Link DNS zones, where the platform makes them: the connectivity subscription and the group
-  # modules/naming names there, in the primary region. Known from the first run, before the zones exist.
+  # tools/mlz/names.py names there, in the primary region. Known from the first run, before the zones exist.
   private_dns_defaults = {
     private_dns_zone_subscription_id     = jsonencode({ value = local.subscriptions.connectivity })
-    private_dns_zone_resource_group_name = jsonencode({ value = module.naming.connectivity.dns_resource_group })
+    private_dns_zone_resource_group_name = jsonencode({ value = local.names.dns_resource_group })
     private_dns_zone_region              = jsonencode({ value = local.region })
   }
   # The policy that links landing zones' private endpoints to those zones needs rights on them. ALZ would give its
@@ -65,18 +67,11 @@ locals {
 
 data "azapi_client_config" "current" {}
 
-module "naming" {
-  source = "../../modules/naming"
-
-  root_id = local.config.root_id
-  region  = local.region
-}
-
 # Central management: the Log Analytics workspace, the Azure Monitor Agent's identity and the data
 # collection rules the ALZ policies point machines at.
 resource "azapi_resource" "management_resource_group" {
   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
-  name      = module.naming.management.resource_group
+  name      = local.names.management.resource_group
   parent_id = "/subscriptions/${local.subscriptions.management}"
   location  = local.region
   tags      = local.tags
@@ -87,15 +82,15 @@ resource "azapi_resource" "management_resource_group" {
 module "management" {
   source = "git::https://github.com/fortytwoservices/az-tf-mlz-management.git?ref=v0.2.0"
 
-  name      = module.naming.management.workspace
+  name      = local.names.management.workspace
   parent_id = azapi_resource.management_resource_group.id
   location  = local.region
   data_collection_rules = {
-    change_tracking = { name = module.naming.management.data_collection_rules.change_tracking }
-    vm_insights     = { name = module.naming.management.data_collection_rules.vm_insights }
-    defender_sql    = { name = module.naming.management.data_collection_rules.defender_sql }
+    change_tracking = { name = local.names.management.data_collection_rules.change_tracking }
+    vm_insights     = { name = local.names.management.data_collection_rules.vm_insights }
+    defender_sql    = { name = local.names.management.data_collection_rules.defender_sql }
   }
-  user_assigned_identity = { name = module.naming.management.ama_identity }
+  user_assigned_identity = { name = local.names.management.ama_identity }
   tags                   = local.tags
 }
 
@@ -114,7 +109,7 @@ module "alz" {
       allowed_locations                           = jsonencode({ value = local.config.allowed_regions })
       log_analytics_workspace_id                  = jsonencode({ value = local.management_ids.workspace })
       ama_user_assigned_managed_identity_id       = jsonencode({ value = local.management_ids.identity })
-      ama_user_assigned_managed_identity_name     = jsonencode({ value = module.naming.management.ama_identity })
+      ama_user_assigned_managed_identity_name     = jsonencode({ value = local.names.management.ama_identity })
       ama_change_tracking_data_collection_rule_id = jsonencode({ value = local.management_ids.rules.change_tracking })
       ama_vm_insights_data_collection_rule_id     = jsonencode({ value = local.management_ids.rules.vm_insights })
       ama_mdfc_sql_data_collection_rule_id        = jsonencode({ value = local.management_ids.rules.defender_sql })

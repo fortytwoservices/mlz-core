@@ -37,10 +37,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-# mlz-core's naming rules, in the same checkout (tools/mlz/naming.py): customer.yaml's naming section is checked
-# here, where it is written, though platform and vending are the ones that name things with it.
+# mlz-core's naming, in the same checkout (tools/mlz/naming.py, names.py): customer.yaml's naming section is checked
+# here, where it is written, and names management's resources; platform, vending and the bootstrap name theirs with it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from mlz import naming  # noqa: E402
+from mlz.names import governance as governance_names  # noqa: E402
 from mlz.merge import ConfigError  # noqa: E402
 
 GOVERNANCE = Path(__file__).resolve().parent.parent
@@ -175,11 +176,15 @@ def validate(config: dict) -> None:
     problems += [f"allowed_regions: {r!r} is not a region name." for r in regions if not REGION.fullmatch(r)]
     if isinstance(config.get("primary_region"), str) and regions and config["primary_region"] not in regions:
         problems.append(f"primary_region {config['primary_region']!r} is not in allowed_regions.")
-    # Checked when written. Without the section nothing is asked of the root ID yet: nothing is named from it
-    # until landing zones are (docs/naming.md).
-    if "naming" in config and isinstance(config.get("root_id"), str):
+    # Checked when written, with or without the section: governance names management's resources from it, so a
+    # root ID that cannot be the customer's code needs naming.org (docs/naming.md).
+    if isinstance(config.get("root_id"), str):
         try:
-            naming.settings(config, config["root_id"])
+            settings = naming.settings(config, config["root_id"])
+            if isinstance(config.get("primary_region"), str) and config["primary_region"] not in settings.regions:
+                problems.append(f"primary_region {config['primary_region']!r} is not an Azure region (modules/naming/region-codes.json names them).")
+            elif isinstance(config.get("primary_region"), str):
+                governance_names(settings, config["primary_region"])
         except ConfigError as error:
             problems += [line.strip() for line in str(error).splitlines()[1:]] or [str(error)]
     groups = mapping(config.get("management_groups"), "management_groups", problems)
@@ -228,6 +233,8 @@ def normalize(config: dict) -> dict:
         "management_groups": {name: groups.get(name) is True for name in OPTIONAL_GROUPS},
         # Always a mapping, so the contract carries one: validate() refused anything else.
         "naming": config.get("naming") or {},
+        # What the governance root names, worked out on every run from the template (tools/mlz/names.py).
+        "names": governance_names(naming.settings(config, config["root_id"]), config["primary_region"]),
     }
 
 

@@ -63,6 +63,22 @@
         "description": "An Entra object ID.",
         "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
       }
+    },
+    "names": {
+      "description": "The bootstrap's own name for its resource group or state account, instead of the customer's template's (docs/naming.md): for a storage account name taken elsewhere in Azure, or one to keep.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "propertyNames": {
+        "enum": [
+          "resource_group",
+          "storage_account"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "additionalProperties": false

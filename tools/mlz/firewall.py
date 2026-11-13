@@ -363,6 +363,9 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
     return {
         "root_id": platform["root_id"],
         "connectivity_subscription_id": platform["connectivity_subscription_id"],
+        # Each hub's policy, by the names the platform root gives it (tools/mlz/names.py).
+        "policy_ids": {region: f"/subscriptions/{platform['connectivity_subscription_id']}/resourceGroups/{hub['names']['resource_group']}"
+                                f"/providers/Microsoft.Network/firewallPolicies/{hub['names']['firewall_policy']}" for region, hub in platform["hubs"].items()},
         "policies": {region: {name: group for name, group in found.items() if group["application"] or group["network"]} for region, found in groups.items()},
     }
 

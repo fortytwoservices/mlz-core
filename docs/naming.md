@@ -4,8 +4,8 @@ Every name mlz-core gives comes from one template per customer, filled with shor
 and checked against Azure's rules for that kind of resource before anything is planned. An explicit name for
 one resource always wins.
 
-**Where it stands:** landing zones are named from it. The platform, governance and the bootstrap keep
-mlz-core's fixed names until they move onto it too.
+**Where it stands:** everything mlz-core makes is named from it: landing zones, the platform, governance and the
+bootstrap. Subnets, peerings and other parts named inside a resource keep their own patterns.
 
 ## The template
 
@@ -118,6 +118,32 @@ To rename:
 before it is released, it is the same resource under the same name. `python3 -m mlz release` frees both, and a
 decommissioned landing zone's names go with its file and range, in the same pull request.
 
+## The platform, governance and the bootstrap
+
+Each part of the platform is an app of its own, in `prod` (the platform's names, below, are for a customer whose
+code is `acme`, with its primary region Norway East):
+
+| Part | Its names |
+|---|---|
+| `hub`, in each region | `rg-acme-hub-pd-nwe-01`, `vnet-acme-hub-pd-nwe-01`, `afw-acme-hub-pd-nwe-01`, `afwp-acme-hub-pd-nwe-01`, `pip-acme-hub-afw-pd-nwe-01` (and `-afwmgmt-` behind a Basic firewall), `rt-acme-hub-afw-pd-nwe-01`, `bas-acme-hub-pd-nwe-01` with `pip-acme-hub-bas-pd-nwe-01`, `dnspr-acme-hub-pd-nwe-01` with `in-` and `out-acme-hub-pd-nwe-01` |
+| `dns` | `rg-acme-dns-pd-nwe-01`, the Private Link zones' group |
+| `mgt`, management | governance's `rg-acme-mgt-pd-nwe-01`, `log-acme-mgt-pd-nwe-01`, `id-acme-mgt-ama-pd-nwe-01`, `dcr-acme-mgt-changetracking-pd-nwe-01` (`vminsights`, `defendersql`); the network's `rg-acme-mgt-net-pd-nwe-01`, `vnet-`, `rt-`, `ghns-acme-mgt-pd-nwe-01` and an NSG per subnet, `nsg-acme-mgt-private-endpoints-pd-nwe-01` |
+| `idn`, identity | `rg-acme-idn-net-pd-nwe-01`, and in each region with identity's network `vnet-acme-idn-pd-sdc-01` and the rest |
+| `mlz`, the bootstrap | `rg-acme-mlz-pd-nwe-01`, `stacmemlzstatepdnwe01`, `id-acme-mlz-govplan-pd-nwe-01` (`govapply`, `platplan`, `platapply`, `vendplan`, `vendapply`), `pep-` and `nic-acme-mlz-state-pd-nwe-01` |
+
+`tools/mlz/names.py` works them all out, and each root's loader puts its own in its config (`render_library.py`
+for governance, `mlz platform` for the platform's roots, `mlz install` for the bootstrap). A name two roots share,
+such as the DNS zones' group or management's network, comes from one place, so they always agree.
+
+Unlike a landing zone's, these are **worked out on every run** and not recorded: they change only with a reviewed
+change to `customer.yaml`, whose plans show every renamed resource replaced. Two ways to keep a name:
+
+- **A hub component**: under `names:` in its hub file (`docs/platform.md`).
+- **The bootstrap's state account or resource group**: under `names:` in `bootstrap.yaml`. The state account
+  holds every role's state, so it has `prevent_destroy`: a change that would rename it stops the plan instead
+  (`docs/bootstrap.md`). A storage account's name is global, so this is also the way out when another tenant
+  has taken it.
+
 ## customer.yaml
 
 ```yaml
@@ -145,8 +171,8 @@ may not take one of them as its short name: a landing zone named `hub` would nam
 
 The section is checked where it is written, in governance's run (`governance/scripts/render_library.py`), and
 governance's contract carries it as written to the repos that name things with it. A root ID longer than four
-characters, or with a hyphen, cannot be the customer's code, so it needs `naming.org`: governance's check asks for it
-once the section is there, and vending's, which names every landing zone, asks for it either way.
+characters, or with a hyphen, cannot be the customer's code, so it needs `naming.org`, with or without the section:
+every root names things with it.
 
 The design and the decisions behind it, 13 November 2026: recorded names, `mlz names --renew`, the platform's
 app names and child resources, are in the managed landing zone's design notes.

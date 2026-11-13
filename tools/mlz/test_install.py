@@ -221,8 +221,9 @@ class RunnersGitHub(FakeGitHub):
 
 
 MANAGEMENT = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups"
-NETWORK_SETTINGS = f"{MANAGEMENT}/rg-acme-management-network-nwe/providers/GitHub.Network/networkSettings/ghns-acme-management-nwe"
-STATE_ENDPOINT = f"{MANAGEMENT}/rg-acme-bootstrap-nwe/providers/Microsoft.Network/privateEndpoints/pep-acme-state-nwe"
+# By the names tools/mlz/names.py gives them, from the customer's template.
+NETWORK_SETTINGS = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/GitHub.Network/networkSettings/ghns-acme-mgt-pd-nwe-01"
+STATE_ENDPOINT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.Network/privateEndpoints/pep-acme-mlz-state-pd-nwe-01"
 
 
 def runners_azure(endpoint=True):
@@ -276,6 +277,27 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         self.assertEqual(github.renamed, [(repo, "master", "main") for repo in REPOS.values()])
         self.assertEqual({branch for _, branch, _, _, _ in github.commits}, {"main"})
+
+    def test_the_bootstrap_s_names_come_from_the_template_or_bootstrap_yaml(self):
+        customer, bootstrap = install.settings(self.folder)
+        named = install.bootstrap_names(customer, bootstrap)
+        self.assertEqual((named["resource_group"], named["storage_account"], named["identities"]["governance-plan"], named["state_endpoint"]),
+                         ("rg-acme-mlz-pd-nwe-01", "stacmemlzstatepdnwe01", "id-acme-mlz-govplan-pd-nwe-01", "pep-acme-mlz-state-pd-nwe-01"))
+        self.assertEqual(sorted(named["identities"]), sorted(f"{role}-{kind}" for role in install.ROLES for kind in ("plan", "apply")))
+        # The platform's it points at, as the platform names them.
+        self.assertEqual(named["network_resource_groups"], {"management": "rg-acme-mgt-net-pd-nwe-01", "identity": "rg-acme-idn-net-pd-nwe-01"})
+        self.assertEqual((named["management_network"], named["state_endpoint_subnet"], named["dns_resource_group"]),
+                         ("vnet-acme-mgt-pd-nwe-01", "snet-private-endpoints", "rg-acme-dns-pd-nwe-01"))
+        # A name taken elsewhere in Azure, or one to keep: bootstrap.yaml's names:.
+        named = install.bootstrap_names(customer, {**bootstrap, "names": {"storage_account": "stacmestate1234"}})
+        self.assertEqual(named["storage_account"], "stacmestate1234")
+        for wrong, message in (({"storage_account": "st-acme"}, "names.storage_account: storage_account name st-acme"),
+                               ({"identity": "id-x"}, "names.identity is not one the bootstrap takes; use resource_group, storage_account"),
+                               (["st"], "names maps resource_group or storage_account")):
+            with self.assertRaisesRegex(ConfigError, message):
+                install.bootstrap_names(customer, {**bootstrap, "names": wrong})
+        with self.assertRaisesRegex(ConfigError, "set naming.org"):
+            install.bootstrap_names({**customer, "root_id": "acme-corp"}, bootstrap)
 
     def test_an_unknown_bootstrap_setting_is_refused(self):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "state_operator: {}\n")
@@ -343,7 +365,8 @@ class InstallTest(unittest.TestCase):
         github = FakeGitHub(existing=REPOS.values(),
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         install.step_check(github, self.folder, self.out)
-        self.assertEqual(len(self.printed), 3)
+        self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
+        self.assertEqual(len(self.printed), 4)
 
     def test_check_lists_every_missing_piece(self):
         github = FakeGitHub(existing=["acme/mlz-governance", "acme/mlz-platform"],
@@ -376,6 +399,10 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((self.work / "backend.hcl").exists())
         self.assertFalse((self.work / "backend.hcl.pending").exists())
         self.assertFalse((terraform.root / "backend_override.tf").exists())
+        # The names, worked out on this run, go to the root in a file of their own.
+        plan = next(call for call in terraform.calls if call[0] == "plan")
+        self.assertIn(f"names_file={self.work / 'names.json'}", plan)
+        self.assertEqual(json.loads((self.work / "names.json").read_text())["storage_account"], "stacmemlzstatepdnwe01")
         self.assertIn("bootstrap: all 3 subjects match what GitHub issues", self.printed)
 
     def test_a_state_that_will_not_move_stays_local_and_the_next_run_moves_it(self):
@@ -582,14 +609,14 @@ class InstallTest(unittest.TestCase):
             install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
 
     def test_the_network_settings_come_first(self):
-        with self.assertRaisesRegex(ConfigError, "no GitHub network settings yet \\(ghns-acme-management-nwe\\)"):
+        with self.assertRaisesRegex(ConfigError, "no GitHub network settings yet \\(ghns-acme-mgt-pd-nwe-01\\)"):
             install.step_runners(RunnersGitHub(), FakeAzure(), self.folder, self.out)
 
     def test_another_network_configuration_named_mlz_is_not_taken_over(self):
         for found in ({"network_settings_ids": ["ELSEWHERE"]}, {"network_settings_ids": ["ELSEWHERE", "GHID123"]},
                       {"network_settings_ids": ["GHID123"], "failover_network_enabled": True, "failover_network_settings_ids": ["ELSEWHERE"]}):
             github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", **found}])
-            with self.assertRaisesRegex(ConfigError, "for other or further network settings; it must name ghns-acme-management-nwe alone"):
+            with self.assertRaisesRegex(ConfigError, "for other or further network settings; it must name ghns-acme-mgt-pd-nwe-01 alone"):
                 install.step_runners(github, runners_azure(), self.folder, self.out)
             self.assertEqual(github.calls, [])
 
@@ -604,33 +631,27 @@ class PrepareTest(unittest.TestCase):
     def test_the_copy_is_the_checkouts_root_without_its_override_files_or_older_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             core, work = Path(tmp) / "core", Path(tmp) / "work"
-            for folder in ("bootstrap/terraform", "modules/naming"):
-                (core / folder).mkdir(parents=True)
-                (core / folder / "main.tf").write_text("# main\n")
+            (core / "bootstrap/terraform").mkdir(parents=True)
+            (core / "bootstrap/terraform/main.tf").write_text("# main\n")
             (core / "bootstrap/terraform/backend_override.tf").write_text('terraform {\n  backend "local" {}\n}\n')
             (core / "bootstrap/terraform/.terraform.lock.hcl").write_text("# lock\n")
-            (core / "modules/naming/region-codes.json").write_text("{}\n")
             (work / "bootstrap/terraform").mkdir(parents=True)
             (work / "bootstrap/terraform/removed.tf").write_text("# from an older mlz-core\n")
-            (work / "modules/naming").mkdir(parents=True)
-            (work / "modules/naming/removed.json").write_text("{}\n")
             with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
                 install.Terraform(work, "tenant").prepare()
             root = work / "bootstrap/terraform"
             self.assertEqual(sorted(p.name for p in root.iterdir()), [".terraform.lock.hcl", "main.tf"])
-            self.assertEqual(sorted(p.name for p in (work / "modules/naming").iterdir()), ["main.tf", "region-codes.json"])
+            self.assertFalse((work / "modules").exists())  # the names come in names.json, worked out by mlz install
 
     def test_the_checkout_itself_is_refused_as_the_work_folder_and_keeps_its_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             core = Path(tmp) / "core"
-            for folder in ("bootstrap/terraform", "modules/naming"):
-                (core / folder).mkdir(parents=True)
-                (core / folder / "main.tf").write_text("# main\n")
+            (core / "bootstrap/terraform").mkdir(parents=True)
+            (core / "bootstrap/terraform/main.tf").write_text("# main\n")
             with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
                 with self.assertRaisesRegex(ConfigError, "own checkout"):
                     install.Terraform(core / "bootstrap" / "..", "tenant").prepare()
             self.assertTrue((core / "bootstrap/terraform/main.tf").exists())
-            self.assertTrue((core / "modules/naming/main.tf").exists())
 
 
 class PagedGitHub(GitHub):

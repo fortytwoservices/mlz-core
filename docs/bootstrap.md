@@ -25,17 +25,37 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Where | What |
 |---|---|
 | Tenant | The top management group, `<root>`, below the tenant root or `parent_management_group_id`. Governance builds everything below it, so its pipeline never needs rights at the tenant root. |
-| Management subscription | `rg-<root>-bootstrap-<region>`, holding the state account and the six pipeline identities. `rg-<root>-management-network-<region>`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub's hosted runners in that network. |
-| Identity subscription | `rg-<root>-identity-network-<region>`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
-| State account | `st<root>state<4 hex>`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners use the private endpoint. |
-| State account's private endpoint | `pep-<root>-state-<region>`, beside the account, in management's `snet-private-endpoints`, with its name in the hub's `privatelink.blob.core.windows.net` zone, and that zone linked to management's network, so the name resolves there whether management asks the hub or, behind a Basic firewall without a resolver, Azure's own DNS. Made on the first run after the platform has built that network and zone ([below](#running-it-again)); until then there is none. |
+| Management subscription | `rg-acme-mlz-pd-nwe-01`, holding the state account and the six pipeline identities. `rg-acme-mgt-net-pd-nwe-01`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub's hosted runners in that network. |
+| Identity subscription | `rg-acme-idn-net-pd-nwe-01`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
+| State account | `stacmemlzstatepdnwe01`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners use the private endpoint. Never replaced: see [names](#names). |
+| State account's private endpoint | `pep-acme-mlz-state-pd-nwe-01`, beside the account, in management's `snet-private-endpoints`, with its name in the hub's `privatelink.blob.core.windows.net` zone, and that zone linked to management's network, so the name resolves there whether management asks the hub or, behind a Basic firewall without a resolver, Azure's own DNS. Made on the first run after the platform has built that network and zone ([below](#running-it-again)); until then there is none. |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
 | GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
+
+## Names
+
+Every name here comes from the customer's naming template, worked out by `mlz install` on every run from
+`customer.yaml`'s `naming:` (`docs/naming.md`): the bootstrap is the platform's `mlz` part, in `prod`, in the primary
+region. The examples above are for a customer whose code is `acme`. `mlz install bootstrap` writes them to
+`names.json` in its work folder, and the root reads them from there; `mlz install check` shows the state account's.
+
+- **The state account is never replaced.** Every role's state is in it, so it has `prevent_destroy`: a changed
+  template, or a changed customer code, that would rename it stops the plan with an error instead. To keep the
+  account it has, set its name in `bootstrap.yaml`:
+
+  ```yaml
+  names:
+    storage_account: stacmemlzstatepdnwe01   # also for a name another tenant already took: they are global
+  ```
+
+- **`names.resource_group`** does the same for the bootstrap's resource group.
+- The identities and the networks' groups follow the template: renamed, they are replaced on the next run, which
+  shows them in its plan for the person running it to approve.
 
 ## The pipeline identities
 
 One read-only identity per role for pull request plans, and one for approved applies, named
-`id-<root>-<role>-<plan|apply>-<region>`. A plan identity trusts the repo's pull requests, and `main` for
+`id-acme-mlz-govplan-pd-nwe-01`, `id-acme-mlz-govapply-pd-nwe-01` and so on (`plat`, `vend`). A plan identity trusts the repo's pull requests, and `main` for
 the scheduled drift check; an apply identity trusts only its role's environment. An unmerged branch can
 never change Azure.
 
@@ -150,7 +170,7 @@ state account's private endpoint ([below](#running-it-again)), `mlz install runn
 --tenant <id>` moves the pipelines' Azure jobs onto a GitHub-hosted runner in that network:
 
 - In the customer's organization it makes a network configuration `mlz`, naming the network settings
-  resource the platform made (`ghns-<root>-management-<region>`), a runner group `mlz` that only the three
+  resource the platform made (`ghns-acme-mgt-pd-nwe-01`), a runner group `mlz` that only the three
   repos may use, and a runner `mlz` in it: Ubuntu, `runner_size` from `bootstrap.yaml` (2-core unless set),
   at most 10 at a time. A run again changes only what is missing, and narrows the group back to the three
   repos if it was widened.

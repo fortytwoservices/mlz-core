@@ -11,38 +11,24 @@ locals {
   tags         = { ManagedBy = "mlz-core" }
 }
 
-module "naming" {
-  for_each = local.networks
-  source   = "../../../modules/naming"
-
-  root_id = local.config.root_id
-  region  = each.key
-}
-
-# The resource group the bootstrap made for this network, named for the primary region.
-module "primary" {
-  source = "../../../modules/naming"
-
-  root_id = local.config.root_id
-  region  = local.config.primary_region
-}
-
+# Names from the customer's template (tools/mlz/names.py): each region's network, its hub's, and the one resource
+# group the bootstrap made for this network, named for the primary region.
 module "network" {
   for_each = local.networks
   source   = "../../../modules/platform-network"
 
-  names                  = module.naming[each.key].platform_networks[var.network]
+  names                  = each.value.names
   location               = each.key
-  parent_id              = "/subscriptions/${local.subscription}/resourceGroups/${module.primary.platform_networks[var.network].resource_group}"
+  parent_id              = "/subscriptions/${local.subscription}/resourceGroups/${local.config.names.network_resource_groups[var.network]}"
   address_space          = each.value.address_space
   subnets                = each.value.subnets
   dns_servers            = each.value.dns_servers
   firewall               = each.value.firewall
-  hub_virtual_network_id = "/subscriptions/${local.config.connectivity_subscription_id}/resourceGroups/${module.naming[each.key].connectivity.hub_resource_group}/providers/Microsoft.Network/virtualNetworks/${module.naming[each.key].connectivity.hub_virtual_network}"
+  hub_virtual_network_id = "/subscriptions/${local.config.connectivity_subscription_id}/resourceGroups/${local.config.hubs[each.key].names.resource_group}/providers/Microsoft.Network/virtualNetworks/${local.config.hubs[each.key].names.virtual_network}"
   # Management's, where GitHub supports the region (tools/mlz/platform.py).
   github_runners = try(each.value.github_runners, false) ? {
     subnet      = "github-runners"
-    name        = module.naming[each.key].platform_networks[var.network].github_network_settings
+    name        = each.value.names.github_network_settings
     business_id = var.github_business_id
   } : null
   tags = local.tags

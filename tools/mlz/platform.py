@@ -28,14 +28,15 @@ the hub's firewall, and they resolve names through the hub.
 from __future__ import annotations
 
 import ipaddress
-import json
 from pathlib import Path
 
+from . import names, naming
 from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError
+from .naming import REGION_CODES
 
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
-HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion", "identity"}
+HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion", "identity", "names"}
 # The size of a region's platform_address_space, and the hub's share of it: its first /22.
 PLATFORM_PREFIX, HUB_PREFIX = 21, 22
 # Management's and identity's /24 in it, by offset, and each one's subnets, by offset and size.
@@ -43,8 +44,7 @@ NETWORKS = {
     "management": (1024, {"github-runners": (0, 25), "runners": (128, 26), "private-endpoints": (192, 27)}),
     "identity": (1280, {"domain-controllers": (0, 26)}),
 }
-# The regions mlz-core knows, with the codes in their names: modules/naming's own file, every Azure region.
-REGION_CODES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "region-codes.json").read_text())
+# The regions mlz-core knows: every Azure region, with the code in its names (tools/mlz/naming.py).
 REGIONS = tuple(REGION_CODES)
 # Where GitHub's hosted runners can join a subnet of the customer's (GitHub Docs, "About Azure private
 # networking for GitHub-hosted runners", supported regions, read 2026-11-13). Elsewhere management's network
@@ -114,6 +114,8 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
     for flag in ("dns_resolver", "bastion", "identity"):
         if flag in settings and not isinstance(settings[flag], bool):
             problems.append(f"{where}: {flag} must be true or false, without quotes.")
+    # The hub's own names, for a component to keep one the template would not give it (tools/mlz/names.py).
+    explicit = names.hub_explicit(where, settings.get("names"), problems)
 
     value = settings.get("platform_address_space")
     if value in (None, "", []):
@@ -154,6 +156,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
         "bastion": {"subnet_address_prefix": layout["bastion"]} if settings.get("bastion", False) else None,
         "gateway_subnet_address_prefix": layout["gateway"],
         "identity": settings.get("identity", False) is True,
+        "names": explicit,  # build() fills in the template's for the rest
     }
 
 
@@ -224,6 +227,11 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
         f"hubs/{a}: platform address space {net} overlaps {pool}, a landing zone range of hubs/{b}."
         for a, net in spaces for b, pool in pools if a != b and net.overlaps(pool)
     ]
+    try:
+        # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
+        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+    except ConfigError as error:
+        problems.append(f"_generated/governance.yaml: {error}")
     subscriptions = governance["platform_subscriptions"]
     problems += [
         f"hubs/{region}: identity: true builds identity's network in the identity subscription, and customer.yaml names none; add subscriptions.identity in the governance repo."
@@ -250,8 +258,28 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
     if problems:
         raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(problems))
 
-    for region, settings in hubs.items():
-        settings["is_primary"] = region == primary
+    # Every name the platform's roots give, from the customer's template, worked out on every run (tools/mlz/names.py).
+    for region, settings_ in hubs.items():
+        settings_["is_primary"] = region == primary
+        settings_["names"] = named(lambda: names.hub(settings, region, settings_["names"]), problems)
+        # The resolver's and Bastion's objects as the hub module takes them, names in: passed as they are, they keep
+        # one type with or without the component (a null merged in Terraform would not).
+        if settings_["names"] and settings_["dns_resolver"]:
+            settings_["dns_resolver"].update({"name": settings_["names"]["dns_resolver"],
+                                              "inbound_endpoint_name": settings_["names"]["dns_resolver_inbound_endpoint"],
+                                              "outbound_endpoint_name": settings_["names"]["dns_resolver_outbound_endpoint"]})
+        if settings_["names"] and settings_["bastion"]:
+            settings_["bastion"].update({"name": settings_["names"]["bastion"], "public_ip_name": settings_["names"]["bastion_public_ip"]})
+    for network, regions_ in networks.items():
+        for region, net in regions_.items():
+            net["names"] = named(lambda: names.network(settings, network, region, list(net["subnets"])), problems)
+    shared = named(lambda: {
+        "dns_resource_group": names.dns_resource_group(settings, primary),
+        "network_resource_groups": {network: names.network_resource_group(settings, network, primary) for network in networks},
+        "diagnostic_setting": f"to-{settings.org}-workspace",
+    }, problems)
+    if problems:
+        raise ConfigError("platform settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
     return {
         "root_id": governance["root"],
         "primary_region": primary,
@@ -261,4 +289,14 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
         "workspace_resource_id": governance["monitoring"]["workspace"],
         "hubs": hubs,
         "networks": networks,
+        "names": shared,
     }
+
+
+def named(work, problems: list[str]) -> dict:
+    """What work() names, or {} with its problem: a name Azure would not take."""
+    try:
+        return work()
+    except ConfigError as error:
+        problems.append(f"names: {error}")
+        return {}

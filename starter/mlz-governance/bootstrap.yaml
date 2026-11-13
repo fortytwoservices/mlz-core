@@ -13,3 +13,8 @@ github:
 # by name: their Entra object IDs.
 state_operators:
   platform-lead: 00000000-0000-0000-0000-000000000010
+
+# The bootstrap's names come from customer.yaml's naming template (docs/naming.md). To keep a name, or when a
+# storage account's name is taken in another tenant (they are global), set it here:
+# names:
+#   storage_account: stdemomlzstatepdnwe01
