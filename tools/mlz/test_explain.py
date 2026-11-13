@@ -109,6 +109,12 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(rows["name subscription"], ("sub-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
         lz = vending.landing_zones(self.repo)["payments-prod"]
         self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), GOVERNANCE, PLATFORM, vending.recorded_names(self.repo)), [])
+        # Without the contracts too: no subscription is asked for.
+        self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None, vending.recorded_names(self.repo)), [])
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
+        lz = vending.landing_zones(self.repo)["payments-prod"]
+        self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None),
+                         ["landing-zones/payments/prod: subscription is required, or billing_scope for vending to make one (set either here or in a layer above)."])
 
     def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)

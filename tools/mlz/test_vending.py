@@ -752,6 +752,11 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["subscription"], {"billing_scope": mca, "name": "payments_dev"})
         self.assertNotIn("  subscription: ", (self.repo / NAMES).read_text())
+        # Two landing zones making one under the same name would get one subscription between them.
+        self.write("landing-zones/payments/prod.yaml", f"billing_scope: {mca}\nnames:\n  subscription: PAYMENTS_DEV\n")
+        self.allocate()
+        self.assertIn("landing-zones: payments-dev, payments-prod would all make the subscription payments_dev, and an alias names one "
+                      "subscription in the tenant; set names.subscription apart in their files.", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_a_billing_scope_is_an_enrollment_account_or_an_invoice_section(self):
         self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"), "EA")

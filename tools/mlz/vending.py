@@ -179,12 +179,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     problems += short_name_problems(lz)
     if "decommission" in s and s["decommission"] is not True:
         problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
-    for required in ("owner", "cost_center", "archetype", "location"):
-        if s.get(required) in (None, ""):
-            problems.append(f"{where}: {required} is required (set it here or in a layer above).")
-    # A subscription handed over, or one vending makes where it is billed (docs/vending.md).
-    if s.get("subscription") in (None, "") and s.get("billing_scope") in (None, ""):
-        problems.append(f"{where}: subscription is required, or billing_scope for vending to make one (set either here or in a layer above).")
+    problems += required_problems(lz)
     billing = s.get("billing_scope")
     if billing not in (None, "") and agreement(billing) is None:
         problems.append(f"{at('billing_scope')}: billing_scope {billing!r} is an EA enrollment account "
@@ -556,6 +551,15 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 problems.append(f"{lz['where']}: its workload repo's values: {error}")
     subscriptions = [str(z["settings"].get("subscription") or "").lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
+    # An alias names one subscription in the whole tenant: two landing zones making one under the same name would get
+    # one subscription between them. Azure ignores case in it.
+    aliases: dict[str, list[str]] = {}
+    for key, lz in zones.items():
+        if makes_subscription(lz) and isinstance((names.get(key) or {}).get(SUBSCRIPTION), str):
+            aliases.setdefault(names[key][SUBSCRIPTION].lower(), []).append(key)
+    problems += [f"landing-zones: {', '.join(sorted(keys))} would all make the subscription {names[keys[0]][SUBSCRIPTION]}, and an alias "
+                 "names one subscription in the tenant; set names.subscription apart in their files."
+                 for keys in aliases.values() if len(keys) > 1]
     if problems:
         raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
 
@@ -608,6 +612,17 @@ def short_name_problems(lz: dict) -> list[str]:
         return [f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
                 "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md)."]
     return []
+
+
+def required_problems(lz: dict) -> list[str]:
+    """The settings every landing zone needs, which the layers alone decide: a subscription handed over, or a
+    billing_scope for vending to make one (docs/vending.md)."""
+    where, s = lz["where"], lz["settings"]
+    found = [f"{where}: {k} is required (set it here or in a layer above)." for k in ("owner", "cost_center", "archetype", "location")
+             if s.get(k) in (None, "")]
+    if s.get("subscription") in (None, "") and s.get("billing_scope") in (None, ""):
+        found.append(f"{where}: subscription is required, or billing_scope for vending to make one (set either here or in a layer above).")
+    return found
 
 
 def agreement(billing_scope: object) -> str | None:

@@ -168,7 +168,7 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
         vending.check(key, lz, governance, platform, found)
     else:
         # The rest of check() needs the contracts; a required setting set nowhere needs nothing but the layers.
-        found += [f"{lz['where']}: {k} is required (set it here or in a layer above)." for k in REQUIRED if lz["settings"].get(k) in (None, "")]
+        found += vending.required_problems(lz)
     wanted = vending.wanted_network(lz, found)
     if key in plan and wanted:
         if set(plan[key]["subnets"]) != set(wanted[1]):
