@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.7](https://github.com/fortytwoservices/mlz-core/compare/v0.3.6...v0.3.7) (2026-11-13)
+
+
+### Features
+
+* **naming:** names from a customer template, checked against Azure's rules ([#55](https://github.com/fortytwoservices/mlz-core/issues/55)) ([1f1ce3d](https://github.com/fortytwoservices/mlz-core/commit/1f1ce3d006f8499fb8aaa88d7a1bb107b63066ba))
+
 ## [0.3.6](https://github.com/fortytwoservices/mlz-core/compare/v0.3.5...v0.3.6) (2026-11-13)
 
 
