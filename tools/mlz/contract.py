@@ -48,7 +48,7 @@ CONTRACTS = {
     },
     "platform": {
         "header": (
-            "What the platform built, for the governance and vending repos.\n"
+            "What the platform built, for the vending repo.\n"
             "Written by CI from mlz-platform after every apply: do not edit here."
         ),
         "comments": {

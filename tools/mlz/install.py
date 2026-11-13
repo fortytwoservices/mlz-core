@@ -501,7 +501,7 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
         "The pipeline identities and the state account from the bootstrap. Governance's run merges it once it has "
         "checked and planned it, and the run on main that starts is governance's first deployment, which waits for "
         "its reviewer.\n\nFrom there the contracts go between the repos by themselves, each run on main waiting for "
-        "its reviewer: platform, governance again (its Private Link DNS policy then points at the zones), and vending. "
+        "its reviewer: platform, then vending. "
         "Hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
     out(f"publish: {url} merges itself once governance's run has checked and planned it; its apply then waits for the reviewer")
     return url
