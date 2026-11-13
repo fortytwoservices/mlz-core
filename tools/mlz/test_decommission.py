@@ -140,6 +140,10 @@ class DecommissionTest(unittest.TestCase):
         self.assertEqual(sorted(read_yaml(self.repo / IP_PLAN)), ["payments-prod"])
         self.write(NAMES, files[NAMES])  # its names go with it
         self.assertEqual(sorted(read_yaml(self.repo / NAMES)), ["payments-prod"])
+        # Merged, the files are as the allocator writes them: its check on main passes.
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        plan, _, retired = allocate(self.repo, PLATFORM)
+        self.assertEqual((files[IP_PLAN], files[NAMES]), (render_plan(plan, retired), render_names(give_names(self.repo, plan, GOVERNANCE)[0])))
         self.assertIn(f"releases its range, {dev_range},", github.pulls[0][3])
         # From the commit its files were worked out from, not whatever main is now.
         self.assertEqual(github.bases, [(REPOS["vending"], "run-sha")])

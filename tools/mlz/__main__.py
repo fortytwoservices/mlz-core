@@ -258,6 +258,8 @@ def main() -> int:
         elif args.role == "release":
             plan, retired, freed = vending.release(args.repo, args.key)
             write_file(args.repo / vending.IP_PLAN, vending.render_plan(plan, retired))
+            if (args.repo / vending.NAMES).exists():  # what is released takes its names with it
+                write_file(args.repo / vending.NAMES, vending.render_names(vending.held_names(vending.recorded_names(args.repo), plan)))
             print(f"mlz release: freed {freed}")
         else:
             configs = vending.build(args.repo, published("governance"), published("platform"))

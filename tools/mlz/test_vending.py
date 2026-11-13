@@ -394,7 +394,44 @@ class VendingTest(unittest.TestCase):
         record, _ = give_names(self.repo, plan, {**GOVERNANCE, "naming": {"environments": {"hotfix": "hf"}}})
         self.assertEqual(record["payments-hotfix"]["virtual_network"], "vnet-demo-pay-hf-nwe-01")
 
+    def test_a_removed_subnet_or_landing_zone_keeps_its_names_until_released(self):
+        two = PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n"
+        self.write("landing-zones/payments/prod.yaml", two)
+        self.allocate()
+        named = {**GOVERNANCE, "naming": {"org": "acme"}}  # the template changes meanwhile
+        # The web subnet and payments-dev are removed: their blocks are held, and so are their names.
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.allocate(governance=named)
+        record = recorded_names(self.repo)
+        self.assertEqual(record["payments-prod"]["network_security_groups"]["web"], "nsg-demo-pay-web-pd-nwe-01")
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        # Asked for again before they are released: the same resources, under the same names.
+        self.write("landing-zones/payments/prod.yaml", two)
+        self.write("landing-zones/payments/dev.yaml", DEV)
+        self.allocate(governance=named)
+        configs = build(self.repo, named, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["names"]["network_security_groups"]["web"], "nsg-demo-pay-web-pd-nwe-01")
+        self.assertEqual(configs["payments-dev"]["names"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        # Released, through the command: the names go with the addresses.
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", named))
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.allocate(governance=named)
+        for key in ("payments-prod", "payments-dev"):
+            self.assertEqual(self.cli("release", "--repo", str(self.repo), key), 0)
+        record = recorded_names(self.repo)
+        self.assertEqual(sorted(record), ["payments-prod"])
+        self.assertNotIn("web", record["payments-prod"]["network_security_groups"])
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)
+
     def test_a_recorded_name_is_checked_and_a_missing_one_asked_for(self):
+        self.allocate()
+        for wrong in ("null", "false", "[]"):  # the allocator writes {} for an entry without names, never these
+            self.write(NAMES, f"payments-prod: {wrong}\n")
+            self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
         self.allocate()
         self.write(NAMES, (self.repo / NAMES).read_text().replace("vnet-demo-pay-pd-nwe-01", "vnet demo"))
         self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it; restore the file from git.", self.problems(build, GOVERNANCE, PLATFORM))

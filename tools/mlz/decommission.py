@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Callable
 
 from .files import read_yaml
-from .vending import IP_PLAN, NAMES, decommissioned, ip_plan, landing_zones, recorded_names, render_names, render_plan
+from .vending import IP_PLAN, NAMES, decommissioned, held_names, ip_plan, landing_zones, recorded_names, render_names, render_plan
 
 RULES = "firewall/landing-zones"
 RULE_COLLECTION_GROUPS = "2025-07-01"  # the API version the platform's rules root writes them with
@@ -108,8 +108,9 @@ def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: st
         files: dict[str, str | None] = {path: None for path in own_files(repo, zone["where"])}
         if not any(z["workload"] == zone["workload"] for k, z in zones.items() if k != key):
             files.update({path: None for path in own_files(repo, f"landing-zones/{zone['workload']}/_workload")})
-        files[IP_PLAN] = render_plan({k: v for k, v in plan.items() if k != key}, retired)
-        files[NAMES] = render_names({k: v for k, v in recorded_names(repo).items() if k != key})
+        rest = {k: v for k, v in plan.items() if k != key}
+        files[IP_PLAN] = render_plan(rest, retired)
+        files[NAMES] = render_names(held_names(recorded_names(repo), rest))
         url = offer(github, repositories["vending"], branch, files,
                     f"chore: remove decommissioned {key} and release its range",
                     f"{key} is decommissioned: its network is destroyed and its subscription is in Decommissioned ({run_url}). "

@@ -108,7 +108,9 @@ To rename:
   changed until the reviewer approves the apply. `mlz explain <key>` shows, beside each recorded name, what the
   template would give now.
 
-A decommissioned landing zone's names go with its file and range, in the same pull request.
+**A removed landing zone or subnet keeps its names while it holds its addresses** in the IP plan: asked for again
+before it is released, it is the same resource under the same name. `python3 -m mlz release` frees both, and a
+decommissioned landing zone's names go with its file and range, in the same pull request.
 
 ## customer.yaml
 

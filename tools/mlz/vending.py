@@ -61,7 +61,8 @@ NAMES_HEADER = (
     "The names vending gave each landing zone from the naming template (docs/naming.md), kept as first given.\n"
     "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
     "A name here stays when the template or a short name changes. To give a landing zone the template's names\n"
-    "again, run python3 -m mlz names --renew <key>; to change one name, set it under names: in its file."
+    "again, run python3 -m mlz names --renew <key>; to change one name, set it under names: in its file.\n"
+    "A removed landing zone or subnet keeps its names while it holds its addresses in the IP plan."
 )
 
 
@@ -607,13 +608,13 @@ def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
     parsed = {}
     for key, entry in recorded.items():
         try:
-            entry = entry or {}
-            if set(entry) - set(NAMED) - {"network_security_groups"}:
-                raise ValueError
-            parsed[str(key)] = {item: naming.check(NAMED[item][0], value) for item, value in entry.items() if item in NAMED}
+            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {"network_security_groups"}:
+                raise ValueError  # the allocator writes {} for a landing zone without names, never null or a list
+            # In the order the allocator writes them, whatever order the file was read in.
+            parsed[str(key)] = {item: naming.check(kind, entry[item]) for item, (kind, _) in NAMED.items() if item in entry}
             if entry.get("network_security_groups"):
                 parsed[str(key)]["network_security_groups"] = {str(subnet): naming.check("network_security_group", value)
-                                                                for subnet, value in entry["network_security_groups"].items()}
+                                                                for subnet, value in sorted(entry["network_security_groups"].items())}
         except (AttributeError, TypeError, ValueError, ConfigError):
             raise ConfigError(f"{NAMES}: {key} is not as the IP allocator writes it; restore the file from git.") from None
     return parsed
@@ -652,15 +653,41 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
                 "network_security_groups": {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items()
                                             if subnet in (on_base.get("network_security_groups") or {})}}
 
+    # A removed landing zone or subnet keeps its names while it holds its addresses: asked for again, before it
+    # is released, it is the same resource, under the same name.
+    held = held_names({key: kept(key) for key in recorded}, plan)
     record, changes, problems = {}, [], []
-    for key in sorted(set(zones) & set(plan)):
+    for key in sorted(plan):
+        if key not in zones:
+            if key in held:
+                record[key] = held[key]
+            continue
         before = flat(recorded.get(key, {}))
-        _, record[key] = landing_zone_names(key, zones[key], sorted(plan[key]["subnets"]), kept(key), settings, problems)
+        _, record[key] = landing_zone_names(key, zones[key], sorted(plan[key]["subnets"]), held.get(key, {}), settings, problems)
+        removed = {subnet: name for subnet, name in (held.get(key, {}).get("network_security_groups") or {}).items()
+                   if subnet in plan[key]["removed_subnets"]}
+        if removed:
+            record[key]["network_security_groups"] = dict(sorted({**record[key].get("network_security_groups", {}), **removed}.items()))
         changes += [f"{key}: {item} {value}" if item not in before else f"{key}: {item} {before[item]}, now {value}"
                     for item, value in flat(record[key]).items() if before.get(item) != value]
     if problems:
         raise ConfigError("cannot name:\n  " + "\n  ".join(dict.fromkeys(problems)))
     return record, changes
+
+
+def held_names(record: dict[str, dict], plan: dict[str, dict]) -> dict[str, dict]:
+    """The record without the names whose addresses are released: a landing zone's while plan holds its range, a
+    subnet's NSG while plan holds its block, given or removed."""
+    held = {}
+    for key, entry in record.items():
+        if key not in plan:
+            continue
+        blocks = set(plan[key]["subnets"]) | set(plan[key]["removed_subnets"])
+        held[key] = {item: value for item, value in entry.items() if item != "network_security_groups"}
+        nsgs = {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items() if subnet in blocks}
+        if nsgs:
+            held[key]["network_security_groups"] = nsgs
+    return held
 
 
 def render_names(record: dict[str, dict]) -> str:
