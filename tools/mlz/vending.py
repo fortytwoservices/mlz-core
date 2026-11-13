@@ -712,7 +712,7 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
         if base is None:
             return entry
         on_base = base.get(key, {})
-        return {**{item: value for item, value in entry.items() if item in NAMED and item in on_base},
+        return {**{item: value for item, value in entry.items() if (item in NAMED or item == REPOSITORY) and item in on_base},
                 "network_security_groups": {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items()
                                             if subnet in (on_base.get("network_security_groups") or {})}}
 

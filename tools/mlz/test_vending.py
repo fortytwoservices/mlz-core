@@ -662,6 +662,9 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["github"]["repo"], "demo-payments-prod")
         record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, {"payments-prod"})
         self.assertIn("payments-prod: repository demo-payments-prod, now payments-prod", changes)
+        # A pull request's run keeps what its base has, the repo's name too: a changed template renames nothing there either.
+        record, _ = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=recorded_names(self.repo))
+        self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
 
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
         self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
