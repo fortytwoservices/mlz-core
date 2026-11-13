@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/fortytwoservices/mlz-core/compare/v0.5.0...v0.6.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **vending:** a landing zone's deploy identity trusts its repo's apply environment by GitHub's immutable subject, no longer its main branch by name, so a workflow applies from an environment named apply; a repo vending makes needs github.team; and MLZ needs GitHub Enterprise: mlz install check refuses another plan (docs/bootstrap.md).
+
+### Features
+
+* **vending:** a workload repo's name, plan identity and state in each landing zone ([#66](https://github.com/fortytwoservices/mlz-core/issues/66)) ([371eda0](https://github.com/fortytwoservices/mlz-core/commit/371eda063b42fca2beccaf27c345efd7a6c16fd3))
+* **vending:** vending makes each landing zone's workload repo ([#68](https://github.com/fortytwoservices/mlz-core/issues/68)) ([0171a87](https://github.com/fortytwoservices/mlz-core/commit/0171a87f9bc48af33b1fcf7b2b6f713d30025ae3))
+
 ## [0.5.0](https://github.com/fortytwoservices/mlz-core/compare/v0.4.0...v0.5.0) (2026-11-13)
 
 
