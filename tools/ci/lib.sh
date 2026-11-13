@@ -24,7 +24,6 @@ vars_for() {
   case $role in
     governance)
       echo "-var rendered_library_path=$WORK/rendered"
-      [[ -f _generated/platform.yaml ]] && echo "-var platform_contract_file=$PWD/_generated/platform.yaml"
       [[ -f _generated/bootstrap.yaml ]] && echo "-var bootstrap_contract_file=$PWD/_generated/bootstrap.yaml"
       ;;
     platform)

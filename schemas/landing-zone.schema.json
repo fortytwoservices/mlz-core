@@ -34,9 +34,6 @@
       "pattern": "^[a-z0-9]+$",
       "examples": [
         "norwayeast",
-        "norwaywest",
-        "westeurope",
-        "northeurope",
         "swedencentral"
       ]
     },

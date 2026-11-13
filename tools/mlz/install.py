@@ -207,9 +207,10 @@ class Terraform:
             raise ConfigError(f"the work folder {self.work} is mlz-core's own checkout; choose another with --work.")
         for source, target in pairs:
             target.mkdir(parents=True, exist_ok=True)
-            for old in target.glob("*.tf"):
+            # .json too: modules/naming reads its region codes from one.
+            for old in [*target.glob("*.tf"), *target.glob("*.json")]:
                 old.unlink()
-            for path in [*source.glob("*.tf"), *source.glob(".terraform.lock.hcl")]:
+            for path in [*source.glob("*.tf"), *source.glob("*.json"), *source.glob(".terraform.lock.hcl")]:
                 if not path.name.endswith("override.tf"):
                     shutil.copy2(path, target / path.name)
 
@@ -388,8 +389,8 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
     org, repos = bootstrap["github"]["organization"], repositories(bootstrap)
     root, region = customer["root_id"], customer["primary_region"]
     if region not in platform.GITHUB_RUNNER_REGIONS:
-        raise ConfigError(f"GitHub joins its runners to a customer's network only in some regions; of mlz-core's, {' and '.join(platform.GITHUB_RUNNER_REGIONS)}, "
-                          f"not {region}. The pipelines stay on GitHub's public runners.")
+        raise ConfigError(f"GitHub joins its runners to a customer's network only in some regions, not {region} (docs/platform.md, "
+                          "GitHub-hosted runners). The pipelines stay on GitHub's public runners.")
     code = platform.REGION_CODES[region]
     management = f"/subscriptions/{customer['subscriptions']['management']}"
     settings_name = f"ghns-{root}-management-{code}"
@@ -501,7 +502,7 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
         "The pipeline identities and the state account from the bootstrap. Governance's run merges it once it has "
         "checked and planned it, and the run on main that starts is governance's first deployment, which waits for "
         "its reviewer.\n\nFrom there the contracts go between the repos by themselves, each run on main waiting for "
-        "its reviewer: platform, governance again (its Private Link DNS policy then points at the zones), and vending. "
+        "its reviewer: platform, then vending. "
         "Hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
     out(f"publish: {url} merges itself once governance's run has checked and planned it; its apply then waits for the reviewer")
     return url

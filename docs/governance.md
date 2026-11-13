@@ -52,11 +52,14 @@ most 24.
   (its default `actionGroupRoleIds`); a dedicated recipient is a later choice.
 - `customer.yaml` names the platform subscriptions (`subscriptions.management`, `.connectivity`, and
   optionally `.identity` and `.security`); each one is placed in its management group.
-- **Private Link DNS:** the policy's defaults come from the platform's published contract
-  (`platform_contract_file`), not from `customer.yaml`. Until the platform has created the zones, the
-  library's placeholders stay, and the ALZ module grants no rights on zones; the run after the platform
-  publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
-  that do not exist yet (met in the canary).
+- **Private Link DNS:** `Deploy-Private-DNS-Zones` points at the zones where the platform makes them,
+  from the first run: the connectivity subscription, `rg-<root>-dns-<region>` (`modules/naming`), the
+  primary region. ALZ would give its identity Network Contributor on each zone, which fails while the zones
+  do not exist yet (53 role assignments, met in the canary) and needed a second governance run after the
+  platform's first. Instead it gets **Private DNS Zone Contributor on the connectivity subscription**, and
+  no role on each zone: a narrower role, over every zone there. The zone parameters it leaves out are in
+  `governance/terraform/private-dns-zone-parameters.json`, every one of the ALZ set's 57; check them again
+  when the ALZ library changes.
 - **Vending's rights:** with the bootstrap's contract (`bootstrap_contract_file`, `_generated/bootstrap.yaml`),
   governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones,
   Sandboxes and Decommissioned, the groups it creates (a decommissioned landing zone's subscription moves to

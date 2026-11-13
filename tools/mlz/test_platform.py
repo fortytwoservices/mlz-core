@@ -101,10 +101,21 @@ class PlatformTest(unittest.TestCase):
         }})
         self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
 
-    def test_region_codes_are_the_naming_module_s(self):
+    def test_region_codes_are_unique_and_never_change(self):
+        # A code is in resource names: the ones customers have used stay as they are.
+        for region, code in {"norwayeast": "nwe", "norwaywest": "nww", "westeurope": "we", "northeurope": "ne", "swedencentral": "sdc"}.items():
+            self.assertEqual(platform.REGION_CODES[region], code)
+        self.assertEqual(len(set(platform.REGION_CODES.values())), len(platform.REGION_CODES))
+        self.assertLessEqual(set(platform.GITHUB_RUNNER_REGIONS), set(platform.REGIONS))
         naming = (Path(__file__).resolve().parents[2] / "modules" / "naming" / "main.tf").read_text()
-        block = re.search(r"region_codes = \{(.*?)\}", naming, re.S).group(1)
-        self.assertEqual(dict(re.findall(r"(\w+)\s*=\s*\"(\w+)\"", block)), platform.REGION_CODES)
+        self.assertIn('jsondecode(file("${path.module}/region-codes.json"))', naming)  # the same file as Python's
+
+    def test_a_hub_in_any_azure_region(self):
+        self.hub("germanywestcentral", HUB)
+        config = build(self.repo, {**GOVERNANCE, "primary_region": "germanywestcentral"})
+        self.assertFalse(config["networks"]["management"]["germanywestcentral"]["github_runners"])
+        self.hub("francecentral", HUB.replace("10.100.", "10.150."))
+        self.assertIn("francecentral", build(self.repo, {**GOVERNANCE, "primary_region": "germanywestcentral"})["hubs"])
 
     def test_github_s_runners_join_management_s_network_only_where_github_supports_the_region(self):
         self.hub("westeurope", HUB)
