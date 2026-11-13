@@ -22,7 +22,8 @@ locals {
   # Where the state account's private endpoint goes, once the platform has built them: management's
   # private endpoint subnet, and the hub's zone for blob names (tools/mlz/platform.py, modules/naming).
   management_network    = module.naming.platform_networks.management
-  state_endpoint_subnet = "${local.management}/resourceGroups/${local.management_network.resource_group}/providers/Microsoft.Network/virtualNetworks/${local.management_network.virtual_network}/subnets/${format(local.management_network.subnet, "private-endpoints")}"
+  management_network_id = "${local.management}/resourceGroups/${local.management_network.resource_group}/providers/Microsoft.Network/virtualNetworks/${local.management_network.virtual_network}"
+  state_endpoint_subnet = "${local.management_network_id}/subnets/${format(local.management_network.subnet, "private-endpoints")}"
   blob_zone             = "${local.connectivity}/resourceGroups/${module.naming.connectivity.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
   state_endpoint        = data.azapi_resource.state_endpoint_subnet.exists && data.azapi_resource.blob_zone.exists
 
@@ -241,6 +242,27 @@ resource "azapi_resource" "state_endpoint_dns" {
       privateDnsZoneConfigs = [{ name = "blob", properties = { privateDnsZoneId = local.blob_zone } }]
     }
   }
+}
+
+# The zone answers only networks linked to it, and the hub links it to the hubs. Management resolves through
+# the hub (its firewall's DNS proxy, or its resolver) except behind a Basic firewall without a resolver, where
+# it asks Azure's own DNS from its own network: this link makes the endpoint's name resolve there too, and
+# changes nothing when management resolves through the hub.
+resource "azapi_resource" "state_endpoint_zone_link" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01"
+  name      = local.management_network.virtual_network
+  parent_id = local.blob_zone
+  location  = "global"
+  tags      = local.tags
+  body = {
+    properties = {
+      virtualNetwork      = { id = local.management_network_id }
+      registrationEnabled = false
+    }
+  }
+  response_export_values = []
 }
 
 resource "azapi_resource" "identity" {
