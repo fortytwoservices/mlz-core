@@ -42,7 +42,7 @@ resource "github_repository" "workload" {
   for_each = local.repo_made ? { made = true } : {}
 
   name                   = local.github.repo
-  description            = "Workload repo of landing zone ${local.lz.key}, made by mlz-core's vending."
+  description            = local.github.description # from the config: tools/mlz/workload.py knows GitHub's first README by it
   visibility             = "private"
   auto_init              = true # a main branch, which the apply environment's policy names
   allow_merge_commit     = false
@@ -320,10 +320,16 @@ module "vending" {
       role_assignments = {
         reader = { definition = "Reader" }
       }
+      # Its pull requests, and main, where every run plans too before the apply (.github/workflows/workload.yml).
       federated_credentials_advanced = local.subject == null ? {} : {
         pull_request = {
           name               = "github-pull-request"
           subject_identifier = "${local.subject}:pull_request"
+          issuer_url         = "https://token.actions.githubusercontent.com"
+        }
+        main = {
+          name               = "github-main"
+          subject_identifier = "${local.subject}:ref:refs/heads/main"
           issuer_url         = "https://token.actions.githubusercontent.com"
         }
       }

@@ -220,6 +220,21 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
     return check(kind, name.lower() if rules["lowercase"] else name)
 
 
+def template_text(parts: list[tuple[str, str]]) -> str:
+    """A parsed template as it was written: {type}-{org}-{app}-..."""
+    return "".join("{" + value + "}" if kind == "token" else value for kind, value in parts)
+
+
+def helper_values(naming: Naming, env: str, region: str) -> dict:
+    """What modules/naming takes for one landing zone, codes resolved: org, env, region, the templates as written."""
+    if env not in naming.environments:
+        raise ConfigError(f"the environment {env!r} has no short name; add it under naming.environments in customer.yaml.")
+    if region not in naming.regions:
+        raise ConfigError(f"the region {region!r} has no short name (modules/naming/region-codes.json).")
+    return {"org": naming.org, "env": naming.environments[env], "region": naming.regions[region], "template": template_text(naming.template),
+            "templates": {kind: template_text(parts) for kind, parts in naming.templates.items()}}
+
+
 def repository_name(naming: Naming, workload: str, env: str) -> str:
     """A landing zone's workload repo, from naming.repository with the long names: payments-prod."""
     name = naming.repository.replace("{org}", naming.org).replace("{app}", workload).replace("{env}", env)

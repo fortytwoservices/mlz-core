@@ -1,0 +1,23 @@
+# This repo's pipeline: mlz-core's workload workflow, at the release pinned below. Pull requests plan; main plans,
+# then applies once the owning team approves the apply environment. Variables come from vending (docs/vending.md).
+name: mlz
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A new push to a pull request cancels its older run; runs on main queue, so each plans after the last applied.
+concurrency:
+  group: mlz-${{ github.event.pull_request.number || (github.ref == 'refs/heads/main' && 'main') || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write
+  pull-requests: write
+
+jobs:
+  workload:
+    uses: fortytwoservices/mlz-core/.github/workflows/workload.yml@v0.6.0 # x-release-please-version

@@ -22,6 +22,14 @@
         },
         {
           "type": "generic",
+          "path": "starter/mlz-workload/.github/workflows/mlz.yml"
+        },
+        {
+          "type": "generic",
+          "path": "starter/mlz-workload/main.tf"
+        },
+        {
+          "type": "generic",
           "path": "starter/mlz-governance/.vscode/settings.json"
         },
         {

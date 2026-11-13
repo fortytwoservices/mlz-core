@@ -549,6 +549,54 @@ jobs:
           PYTHONPATH: .mlz-core/tools
         run: python3 -m mlz decommission --repo .
 
+  # Each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values whenever they
+  # change (tools/mlz/workload.py): after every run on main in which nothing failed, so a repo the apply just made
+  # gets its files in the same run.
+  workload-repos:
+    if: >-
+      always() && inputs.role == 'vending' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+      && needs.check.result == 'success' && needs.check.outputs.stacks != '[]'
+      && contains(fromJSON('["success", "skipped"]'), needs.plan.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.changed.result)
+      && contains(fromJSON('["success", "skipped"]'), needs.apply.result)
+    needs: [check, plan, changed, apply]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: mlz-workload-repos
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # The landing zones' configs, as the check worked them out.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-${{ inputs.role }}
+          path: .mlz/
+
+      # Writing a workflow file needs Workflows as well as Contents.
+      - id: writer
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: write
+          permission-workflows: write
+
+      - name: Give the workload repos their files
+        env:
+          GH_TOKEN: ${{ steps.writer.outputs.token }}
+          PYTHONPATH: .mlz-core/tools
+        run: python3 -m mlz workload-repos --configs .mlz/vending
+
   # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's
   # merge would add no control. One that fails here stays open, and main never gets it.

@@ -66,6 +66,7 @@ engineer's own GitHub login, which needs write access to the repos and the `work
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. A job per landing zone; the platform's changed stacks in one job, one after the other (hub, management, identity, rules), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 | `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
+| `workload-repos` | vending's `main`, and daily | After every run in which nothing failed: each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values (`mlz.auto.tfvars.json`) whenever they change, by the MLZ App (`docs/vending.md`). |
 | `decommission` | vending's `main`, and daily | After a landing zone's decommission is applied, offers the pull requests that delete its files: the platform's rules file for it first, then, once its rules are out of Azure, its own file with its range released (`docs/vending.md`). Signs in as vending's plan identity to look at the hubs' firewall policies. A person merges them. |
 | `drift` | daily | Keeps one issue in the repo, "Daily check: Azure differs from main": opened, or commented on, when the check fails, or a stack's plan differs from `main` or did not finish (refused, or stopped before planning); closed by the first daily check that finds every stack as `main` says. An issue of that title opened by a person is left alone. |
 
@@ -126,7 +127,7 @@ App that may write to the three repos, and the App merges them.
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments and Variables read and write, and Members read |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in

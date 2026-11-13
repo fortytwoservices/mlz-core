@@ -634,11 +634,30 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         # An existing repo, which vending only trusts; and one vending makes, named by naming.repository.
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": "demo-devs"})
-        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs"})
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": "demo-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."})
+        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs", "description": "Workload repo of landing zone payments-dev, made by mlz-core's vending."})
         self.assertNotIn("repository", configs["payments-prod"]["names"])
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
+
+    def test_a_repo_vending_makes_gets_the_landing_zone_s_values(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
+        own = {**GOVERNANCE, "naming": {"org": "dmo", "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"}}}
+        self.allocate(governance=own)
+        configs = build(self.repo, own, PLATFORM)
+        # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written.
+        self.assertEqual(configs["payments-prod"]["workload"], {
+            "landing_zone": "payments-prod", "subscription_id": "33333333-3333-3333-3333-333333333333", "location": "norwayeast",
+            "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
+            "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
+        })
+        self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
+        # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
+        self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
+        self.allocate(governance={**own, "naming": {**own["naming"], "environments": {"hotfix": "hf"}}})
+        self.assertIn("landing-zones/payments/hotfix: its workload repo's values: the environment 'hotfix' has no short name; add it under "
+                      "naming.environments in customer.yaml.", self.problems(build, own, PLATFORM))
 
     def test_a_repo_vending_makes_needs_its_team(self):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team.
@@ -664,7 +683,7 @@ class VendingTest(unittest.TestCase):
         own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
         self.allocate(governance=own)
         configs = build(self.repo, own, PLATFORM)
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs"})
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."})
         # Recorded, as every landing zone name is: a changed template renames nothing until renewed.
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["github"]["repo"], "demo-payments-prod")

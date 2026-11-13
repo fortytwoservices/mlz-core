@@ -31,11 +31,8 @@ CASES = {
 
 
 def values(settings: naming.Naming, env: str, region: str) -> dict:
-    """What vending writes to a workload repo for the helper: codes resolved, templates as written."""
-    def text(parts):
-        return "".join("{" + v + "}" if k == "token" else v for k, v in parts)
-    return {"org": settings.org, "app": None, "env": settings.environments[env], "region": settings.regions[region],
-            "template": text(settings.template), "templates": {kind: text(parts) for kind, parts in settings.templates.items()}}
+    """What vending writes to a workload repo for the helper (naming.helper_values), the app filled in by each case."""
+    return {**naming.helper_values(settings, env, region), "app": None}
 
 
 def apply(cases: dict[str, dict]) -> tuple[subprocess.CompletedProcess, dict | None]:

@@ -517,6 +517,22 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     problems += [f"landing-zones: {', '.join(k for k, _ in sorted(users))} would share the repo {org}/{repo}, which vending makes for "
                  f"{', '.join(k for k, made in sorted(users) if made)}; give naming.repository {{app}} and {{env}} apart, or name one under github.repo."
                  for (org, repo), users in sorted(repos.items()) if len(users) > 1 and any(made for _, made in users)]
+    # The naming values a workload repo vending makes gets in mlz.auto.tfvars.json, for modules/naming.
+    settings = None
+    if any(creates_repo(lz) for lz in zones.values()):
+        try:
+            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+        except ConfigError as error:
+            problems.append(f"_generated/governance.yaml: {error}")
+    workloads = {}
+    for key, lz in zones.items():
+        if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("location"), str):
+            try:
+                workloads[key] = {"landing_zone": key, "subscription_id": str(lz["settings"].get("subscription", "")).lower(),
+                                  "location": lz["settings"]["location"], "app": short_name(lz),
+                                  **naming.helper_values(settings, lz["environment"], lz["settings"]["location"])}
+            except ConfigError as error:
+                problems.append(f"{lz['where']}: its workload repo's values: {error}")
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -554,6 +570,8 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "github": github_config(lz, names[key]),
             "decommission": decommissioned(lz),
             "names": names[key],
+            # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
+            "workload": workloads.get(key),
         }
     return configs
 
@@ -582,7 +600,8 @@ def github_config(lz: dict, names: dict) -> dict | None:
     if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
         return None  # check() reports a github that is not a group of settings
     repo = github["repo"] if github.get("repo") is not None else names.get(REPOSITORY)  # '' or false: check() reports it
-    return {"organization": github["organization"], "repo": repo, "create": creates_repo(lz), "team": github.get("team")}
+    return {"organization": github["organization"], "repo": repo, "create": creates_repo(lz), "team": github.get("team"),
+            "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending."}
 
 
 def short_name(lz: dict) -> str:
