@@ -17,13 +17,20 @@ locals {
     }
   }
 
-  # The Private Link DNS zones, from the platform's contract once they exist.
-  platform = var.platform_contract_file == null ? null : yamldecode(file(var.platform_contract_file))
-  private_dns_defaults = local.platform == null ? {} : {
-    private_dns_zone_subscription_id     = jsonencode({ value = local.platform.private_dns.subscription })
-    private_dns_zone_resource_group_name = jsonencode({ value = local.platform.private_dns.resource_group })
-    private_dns_zone_region              = jsonencode({ value = local.platform.private_dns.region })
+  # The Private Link DNS zones, where the platform makes them: the connectivity subscription and the group
+  # modules/naming names there, in the primary region. Known from the first run, before the zones exist.
+  private_dns_defaults = {
+    private_dns_zone_subscription_id     = jsonencode({ value = local.subscriptions.connectivity })
+    private_dns_zone_resource_group_name = jsonencode({ value = module.naming.connectivity.dns_resource_group })
+    private_dns_zone_region              = jsonencode({ value = local.region })
   }
+  # The policy that links landing zones' private endpoints to those zones needs rights on them. ALZ would give its
+  # identity Network Contributor on each zone, which fails while the zones do not exist yet (53 role assignments,
+  # met in the canary), and forced a second governance run after the platform's first. Instead it gets Private
+  # DNS Zone Contributor on the connectivity subscription, below, and none on each zone: every zone parameter of
+  # ALZ's Deploy-Private-DNS-Zones set, worked out from that set in the ALZ library (57; avm-ptn-alz's own list
+  # has only some of them). Check it again when the library changes.
+  private_dns_zone_parameters = jsondecode(file("${path.module}/private-dns-zone-parameters.json"))
 
   # Vending's rights on the groups landing zone subscriptions go into, for its pipeline identities from
   # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them.
@@ -115,6 +122,9 @@ module "alz" {
     var.policy_default_values,
   )
 
+  # No role assignment on each Private Link zone: private_dns_zone_role below covers them all.
+  override_policy_definition_parameter_assign_permissions_unset = local.private_dns_zone_parameters
+
   # The policies point at management's resources, so they are assigned after those exist.
   policy_assignments_dependencies = [
     module.management.resource_id,
@@ -123,6 +133,29 @@ module "alz" {
   ]
 
   subscription_placement = local.placement
+}
+
+# Deploy-Private-DNS-Zones' identity may manage every Private Link zone in the connectivity subscription, the
+# zones the platform builds there included, before and after they exist (see private_dns_zone_parameters).
+resource "azapi_resource" "private_dns_zone_role" {
+  for_each = { for key, id in module.alz.policy_assignment_resource_ids : key => id if endswith(key, "/Deploy-Private-DNS-Zones") }
+
+  type = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  # Azure cannot change an assignment's principal, so a new identity (a policy assignment made again) makes a new one.
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/private-dns-zone-role/${each.key}/${module.alz.policy_assignment_identity_ids[each.key]}")
+  parent_id = "/subscriptions/${local.subscriptions.connectivity}"
+  body = {
+    properties = {
+      roleDefinitionId = "/subscriptions/${local.subscriptions.connectivity}/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f" # Private DNS Zone Contributor
+      principalId      = module.alz.policy_assignment_identity_ids[each.key]
+      principalType    = "ServicePrincipal"
+      description      = "mlz-core governance: ${each.key} links private endpoints to the Private Link zones."
+    }
+  }
+  # A policy assignment's new identity can take a minute to reach every Entra ID replica.
+  retry = { error_message_regex = ["PrincipalNotFound"] }
+
+  response_export_values = []
 }
 
 # Diagnostic settings need the Microsoft.Insights provider registered in their subscription, and a new

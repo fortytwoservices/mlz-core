@@ -9,7 +9,7 @@ source "$(dirname "$0")/lib.sh"
 role=$1
 case $role in
   governance) readers="platform vending" ;;
-  platform) readers="governance vending" ;;
+  platform) readers="vending" ;;
   vending) readers="platform" ;;
   *) exit 0 ;;
 esac

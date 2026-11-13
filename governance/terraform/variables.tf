@@ -14,16 +14,6 @@ variable "bootstrap_contract_file" {
   EOT
 }
 
-variable "platform_contract_file" {
-  type        = string
-  default     = null
-  description = <<-EOT
-    The platform's published contract, `_generated/platform.yaml`, once the platform has been applied. Until then the
-    Private Link DNS policy keeps the library's placeholders, so no rights are granted on zones that do
-    not exist yet; the next run after the platform publishes its contract points it at the real zones.
-  EOT
-}
-
 variable "policy_default_values" {
   type        = map(string)
   default     = {}
