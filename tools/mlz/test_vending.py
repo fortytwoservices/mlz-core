@@ -334,6 +334,9 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/payments/prod: names.vnet is not a name vending gives", problems)
         self.assertIn("landing-zones/payments/prod: route_table name rt bad has characters Azure does not allow", problems)
         self.assertIn("landing-zones/payments/prod: names.network_security_groups.web is not one of its subnets (default)", problems)
+        for wrong in ("false", "[]", "''"):
+            self.write("landing-zones/payments/prod.yaml", PROD + f"names:\n  network_security_groups: {wrong}\n")
+            self.assertIn("landing-zones/payments/prod: names.network_security_groups maps a subnet to its NSG's name.", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/prod.yaml", PROD)
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
         self.assertIn("landing-zones/payments/_workload: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
