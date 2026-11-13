@@ -93,6 +93,8 @@ class HubApartTest(unittest.TestCase):
         message = self.problems({**governance, "naming": no_region})
         self.assertIn("norwayeast and swedencentral would both be vnet-demo-idn-pd-01, and Azure needs identity's networks in its regions named apart", message)
         self.assertIn("norwayeast/domain-controllers and swedencentral/domain-controllers would both be nsg-demo-idn-domain-controllers-pd-01", message)
+        # Identity makes no GitHub network settings: one name for them in both regions is no clash.
+        build(self.repo, {**governance, "naming": {"templates": {"github_network_settings": "{type}-{org}-{app}-{env}-{nn}"}}})
 
     def test_the_connectivity_subscription_s_groups(self):
         (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB)

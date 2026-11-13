@@ -287,8 +287,11 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
     # Each network's regions share one resource group: a template without {region} would give two regions one name.
     for network, regions_ in networks.items():
         named_ = {region: net["names"] for region, net in regions_.items() if net["names"]}
-        for kind, what in (("virtual_network", "networks"), ("route_table", "route tables"), ("github_network_settings", "GitHub network settings")):
+        for kind, what in (("virtual_network", "networks"), ("route_table", "route tables")):
             named(lambda: names.apart(f"{network}'s {what} in its regions", {region: n[kind] for region, n in named_.items()}), problems)
+        # GitHub's network settings only where they are made: management's, where GitHub supports the region.
+        named(lambda: names.apart(f"{network}'s GitHub network settings in its regions", {
+            region: n["github_network_settings"] for region, n in named_.items() if regions_[region].get("github_runners")}), problems)
         named(lambda: names.apart(f"{network}'s network security groups in its regions",
                                   {f"{region}/{subnet}": nsg for region, n in named_.items() for subnet, nsg in n["network_security_groups"].items()}), problems)
     named(lambda: names.apart("resource groups in the connectivity subscription", {
