@@ -182,9 +182,7 @@ jobs:
         run: |
           set +e
           .mlz-core/tools/ci/plan.sh "$ROLE" "$STACK"
-          status=$?
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-          echo "$status" > ".mlz/status-$STACK.txt"
+          echo "status=$?" >> "$GITHUB_OUTPUT"
 
       - name: Show the plan on the run page
         if: steps.plan.outputs.status != '1'
@@ -203,10 +201,19 @@ jobs:
           include-hidden-files: true
           retention-days: 30
 
-      # For the drift job: what the daily check's plan of this stack found. A job that stops before planning
-      # leaves none, which the drift job reports as a plan that did not finish.
+      # For the drift job: what the daily check's plan of this stack found, or none when the job stopped before
+      # planning. Always written, so a re-run's never leaves an earlier attempt's in place.
+      - name: Record the plan's status
+        if: always() && github.event_name == 'schedule'
+        env:
+          STACK: ${{ matrix.stack }}
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: |
+          mkdir -p .mlz
+          echo "${STATUS:-none}" > ".mlz/status-$STACK.txt"
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always() && github.event_name == 'schedule' && steps.plan.outputs.status != ''
+        if: always() && github.event_name == 'schedule'
         with:
           name: mlz-${{ inputs.role }}-status-${{ matrix.stack }}
           path: .mlz/status-${{ matrix.stack }}.txt
