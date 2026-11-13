@@ -39,13 +39,13 @@ class DriftTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_drift(self, statuses: dict[str, int | None], open_issue: str = "") -> str:
+    def run_drift(self, statuses: dict[str, int | None], open_issue: str = "", check: str = "success") -> str:
         for stack, status in statuses.items():
             if status is not None:
                 (self.dir / ".mlz" / f"status-{stack}.txt").write_text(f"{status}\n")
         env = {**os.environ, "PATH": f"{self.dir / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(self.log), "FAKE_OPEN": open_issue,
                "STACKS": json.dumps(list(statuses)), "GH_REPO": "acme/mlz-platform", "RUN_URL": "https://example/run/1",
-               "RUNNER_TEMP": str(self.dir), "ROLE": "platform"}
+               "RUNNER_TEMP": str(self.dir), "ROLE": "platform", "CHECK": check}
         subprocess.run(["bash", str(DRIFT)], cwd=self.dir, env=env, check=True, capture_output=True, text=True)
         return self.log.read_text() if self.log.exists() else ""
 
@@ -62,6 +62,16 @@ class DriftTest(unittest.TestCase):
         log = self.run_drift({"platform": 3})
         self.assertIn("- **No plan:** `platform`, refused: it deletes or replaces a firewall policy", log)
         self.assertNotIn("Azure differs from main:**", log)
+
+    def test_a_failed_check_is_never_a_clean_one(self):
+        log = self.run_drift({}, open_issue="12", check="failure")
+        self.assertIn("issue comment 12 --body-file", log)
+        self.assertIn("- **No plan:** every stack: the check failed (`failure`), so nothing was planned", log)
+        self.assertNotIn("issue close 12", log)
+
+    def test_nothing_to_plan_is_a_clean_check(self):
+        log = self.run_drift({}, open_issue="12")
+        self.assertIn("issue close 12", log)
 
     def test_drift_again_comments_on_the_open_issue(self):
         log = self.run_drift({"platform": 2}, open_issue="12")

@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# drift.sh: after the daily check's plans, one issue in the repo says which stacks are not as main says. It is
-# opened, or commented on, while any stack's plan differs from main or did not finish, and closed by the first
-# daily check that finds every stack as main says. Reads .mlz/status-<stack>.txt (plan.sh's exit status, from
-# each plan job) for the stacks in STACKS (JSON, from check); a stack without one never got to plan. Needs
-# GH_TOKEN with issues: write, GH_REPO, RUN_URL and ROLE.
+# drift.sh: after the daily check's plans, one issue in the repo says what is not as main says. It is opened, or
+# commented on, while the check fails or any stack's plan differs from main or did not finish, and closed by the
+# first daily check that finds every stack as main says. Reads CHECK (the check job's result) and, after a check
+# that passed, .mlz/status-<stack>.txt (plan.sh's exit status, from each plan job) for the stacks in STACKS
+# (JSON, from check); a stack without one never got to plan. Needs GH_TOKEN with issues: write, GH_REPO, RUN_URL
+# and ROLE.
 set -euo pipefail
 title="Daily check: Azure differs from main"
 drifted=() unplanned=()
-for stack in $(jq -r '.[]' <<<"$STACKS"); do
+if [[ ${CHECK:-} != success ]]; then
+  # No stacks to go by: the YAML, the contracts or GitHub's domain list stopped the check, and nothing was planned.
+  unplanned+=("every stack: the check failed (\`${CHECK:-unknown}\`), so nothing was planned")
+  STACKS='[]'
+fi
+for stack in $(jq -r '.[]' <<<"${STACKS:-[]}"); do
   status=$(cat ".mlz/status-$stack.txt" 2>/dev/null || echo none)
   case $status in
     0) ;;

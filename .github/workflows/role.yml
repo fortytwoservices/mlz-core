@@ -211,6 +211,7 @@ jobs:
           name: mlz-${{ inputs.role }}-status-${{ matrix.stack }}
           path: .mlz/status-${{ matrix.stack }}.txt
           include-hidden-files: true
+          overwrite: true # a re-run's plan replaces the failed one's
           retention-days: 7
 
       - name: Put the plan on the pull request
@@ -237,13 +238,18 @@ jobs:
             exit 1
           fi
 
-  # The daily check's result as one issue in the repo (tools/ci/drift.sh): opened or commented on while a
-  # stack differs from main or its plan did not finish, closed by the first daily check that finds none.
+  # The daily check's result as one issue in the repo (tools/ci/drift.sh): opened or commented on while the
+  # check fails or a stack differs from main or its plan did not finish, closed by the first daily check that
+  # finds none. Only once check has found mlz-core's commit, which it does first: drift.sh comes from there.
   drift:
-    if: always() && github.event_name == 'schedule' && needs.check.result == 'success' && needs.check.outputs.stacks != '[]'
+    if: always() && github.event_name == 'schedule' && needs.check.outputs.core-ref != ''
     needs: [check, plan]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # One at a time per role, so two daily runs (one of them re-run) never both find no issue and open one.
+    concurrency:
+      group: mlz-drift-${{ inputs.role }}
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
@@ -267,6 +273,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          CHECK: ${{ needs.check.result }}
           STACKS: ${{ needs.check.outputs.stacks }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: .mlz-core/tools/ci/drift.sh
