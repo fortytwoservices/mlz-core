@@ -4,10 +4,13 @@
       -> the approved apply destroys what vending made and moves the subscription to Decommissioned
       -> vending's contract lists it as held, and the platform stops applying its firewall rules
       -> this: first a pull request in the platform repo deleting firewall/landing-zones/<key>.yaml, then, once
-         that is merged, one here deleting the landing zone's file and releasing its range in the IP plan
+         that is merged and the platform's apply has taken its rules out of Azure, one here deleting the landing
+         zone's file and releasing its range in the IP plan
 
-That order matters: released, the landing zone leaves vending's contract altogether, and a rules file still in
-the platform repo would stop the platform's check. Run by vending's pipeline (the decommission job in
+That order matters: released, the range may go to a new landing zone, which must not inherit the old one's
+rules, so they must be out of Azure first (deleting the file does not do that, the platform's apply does). And
+the landing zone leaves vending's contract altogether, so a rules file still in the platform repo would stop
+the platform's check. Run by vending's pipeline (the decommission job in
 role.yml) after every run on main in which the landing zones are as main says, with the MLZ App's token. Each
 run does what is due and leaves an open pull request as it is.
 """
@@ -17,9 +20,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
+from .files import read_yaml
+from .firewall import partition
 from .vending import IP_PLAN, decommissioned, ip_plan, landing_zones, render_plan
 
 RULES = "firewall/landing-zones"
+RULE_COLLECTION_GROUPS = "2025-07-01"  # the API version the platform's rules root writes them with
+
+
+def rules_in_azure(azure, platform: dict, region: str, key: str) -> str | None:
+    """The hub's rule collection group that still holds the landing zone's rules, or None once they are gone.
+    The hub's firewall policy is named as its network is, afwp- for vnet- (the platform root's naming); the
+    landing zone's rules are <key>-network and <key>-application in group lz-<nn>, nn its key's partition."""
+    hub = platform["regions"][region]["hub_network"]
+    prefix, _, network = hub.rpartition("/providers/Microsoft.Network/virtualNetworks/")
+    group = f"{prefix}/providers/Microsoft.Network/firewallPolicies/{network.replace('vnet-', 'afwp-', 1)}/ruleCollectionGroups/lz-{partition(key):02d}"
+    found = azure.resource(group, RULE_COLLECTION_GROUPS) or {}
+    names = {c.get("name") for c in (found.get("properties") or {}).get("ruleCollections") or []}
+    return group if names & {f"{key}-network", f"{key}-application"} else None
 
 
 def own_files(repo: Path, where: str) -> list[str]:
@@ -47,8 +65,9 @@ def offer(github, repo: str, branch: str, files: dict[str, str | None], title: s
     return github.create_pull(repo, branch, "main", title, body)
 
 
-def cleanup(github, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print) -> None:
+def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print) -> None:
     zones, plan = landing_zones(repo), ip_plan(repo)
+    platform = read_yaml(repo / "_generated" / "platform.yaml")
     retired = sorted(set(plan) - set(zones))
     for key in sorted(k for k, zone in zones.items() if decommissioned(zone)):
         branch = f"mlz/decommission-{key}"
@@ -62,6 +81,10 @@ def cleanup(github, repo: Path, repositories: dict[str, str], run_url: str, out:
             out(f"decommission: {key}'s firewall rules go first, in {url}; its own pull request follows once that is merged")
             continue
         zone = zones[key]
+        still = rules_in_azure(azure, platform, zone["settings"]["location"], key)
+        if still:
+            out(f"decommission: {key}'s rules are still in Azure ({still}): its file and range go once the platform's apply has taken them out")
+            continue
         files: dict[str, str | None] = {path: None for path in own_files(repo, zone["where"])}
         if not any(z["workload"] == zone["workload"] for k, z in zones.items() if k != key):
             files.update({path: None for path in own_files(repo, f"landing-zones/{zone['workload']}/_workload")})

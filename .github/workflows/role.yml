@@ -471,6 +471,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      id-token: write # signs in as vending's plan identity, to see the hubs' firewall policies
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -489,6 +490,13 @@ jobs:
           terraform_version: 1.17.0
           terraform_wrapper: false
 
+      # Read-only: the range is released only once the platform's apply has taken the rules out of Azure.
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       - id: writer
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -502,6 +510,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           PYTHONPATH: .mlz-core/tools
         run: python3 -m mlz decommission --repo .
 
