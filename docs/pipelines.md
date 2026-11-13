@@ -78,6 +78,12 @@ backend. Only the apply job uses the backend itself.
 
 Applies of the same stack never run at the same time, and one is never cancelled halfway.
 
+`plan`, `apply` and `publish` reach Azure and the state. They run on the repo variable `MLZ_RUNS_ON` when it is
+set: the private runner in management's network, which `mlz install runners` sets up and switches the
+repos to ([bootstrap](bootstrap.md#private-runners)). Until then, and once it is deleted again, they run on
+GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
+runners.
+
 ## A plan that deletes a firewall policy is refused
 
 A hub's firewall policy holds the rules, and the rules are a stack of their own (`firewall`), planned before
@@ -120,6 +126,7 @@ App that may write to the three repos, and the App merges them.
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests and commits the IP plan to vending pull requests; installed on the three repos |
+| Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions

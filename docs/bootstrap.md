@@ -14,6 +14,7 @@ github:
     platform: mlz-platform
     vending: mlz-vending
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+  # runner_size: 4-core            # the private runner's size at GitHub (mlz install runners); 2-core if unset
 
 state_operators:                   # people who may run Terraform by hand, by Entra object ID
   platform-lead: 00000000-0000-0000-0000-000000000010
@@ -141,6 +142,36 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 
 Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
 command in `terraform output -raw handover`).
+
+### Private runners
+
+Once the platform's first apply has built management's network, and the bootstrap has run again for the
+state account's private endpoint ([below](#running-it-again)), `mlz install runners --settings <dir>
+--tenant <id>` moves the pipelines' Azure jobs onto a GitHub-hosted runner in that network:
+
+- In the customer's organization it makes a network configuration `mlz`, naming the network settings
+  resource the platform made (`ghns-<root>-management-<region>`), a runner group `mlz` that only the three
+  repos may use, and a runner `mlz` in it: Ubuntu, `runner_size` from `bootstrap.yaml` (2-core unless set),
+  at most 10 at a time. A run again changes only what is missing, and narrows the group back to the three
+  repos if it was widened.
+- Then, once the state account has its private endpoint, it sets `MLZ_RUNS_ON` to `mlz` in the three repos,
+  and their next runs plan, apply and publish on the runner ([pipelines](pipelines.md#what-runs-when)).
+  Without the endpoint the runner could not reach the state, so the repos stay on GitHub's public runners.
+- Only an owner of the organization may make the three, and their `gh` login needs the `admin:org`
+  (runner groups), `manage_runners:org` (runners), and `read:network_configurations` and
+  `write:network_configurations` scopes. Run by anyone else, the step changes
+  nothing and prints the commands to send to an owner, filled in, and then the three commands that switch
+  the repos, which an admin on them runs.
+
+GitHub runs these runners in customers' networks only in some regions: of mlz-core's, Norway East and
+Sweden Central. Elsewhere the step stops, and the pipelines stay on GitHub's public runners.
+
+If the organization belongs to a GitHub Enterprise account, organizations cannot make network
+configurations until an enterprise owner allows it, once: the enterprise's Settings, Policies, Hosted
+compute networking, then Enable. An organization on GitHub Team needs nothing from anyone. The runners
+are GitHub's larger runners, which need GitHub Team or Enterprise Cloud.
+
+To go back to GitHub's public runners, delete the variable: `gh variable delete MLZ_RUNS_ON --repo <repo>`.
 
 ### Running it again
 

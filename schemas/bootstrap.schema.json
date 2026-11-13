@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "github": {
-      "description": "The customer's GitHub organization, repos and reviewers.",
+      "description": "The customer's GitHub organization, repos, reviewers and private runner.",
       "type": "object",
       "properties": {
         "organization": {
@@ -39,6 +39,15 @@
             "type": "string"
           },
           "minItems": 1
+        },
+        "runner_size": {
+          "type": "string",
+          "description": "The private runner's machine size at GitHub, for mlz install runners.",
+          "default": "2-core",
+          "examples": [
+            "2-core",
+            "4-core"
+          ]
         }
       },
       "additionalProperties": false

@@ -12,6 +12,11 @@ import subprocess
 
 from .merge import ConfigError
 
+# What an owner's gh login needs for the organization's network configuration, runner group and runner: runner
+# groups take admin:org, runners manage_runners:org, network configurations read: to list and write: to make
+# (GitHub's REST docs, each endpoint's classic token scope).
+RUNNER_SCOPES = "admin:org,manage_runners:org,read:network_configurations,write:network_configurations"
+
 
 class GitHub:
     def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
@@ -20,15 +25,19 @@ class GitHub:
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
                 return None
-            hint = " Add the scope with: gh auth refresh -h github.com -s workflow" if "workflow" in run.stderr and "scope" in run.stderr else ""
+            runner_scope = any(word in run.stderr for word in ("admin:org", "manage_runners", "network_configurations"))
+            scopes = "workflow" if "workflow" in run.stderr else RUNNER_SCOPES if runner_scope else None
+            hint = f" Add the scope with: gh auth refresh -h github.com -s {scopes}" if scopes and "scope" in run.stderr else ""
             raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
         return json.loads(run.stdout) if run.stdout.strip() else None
 
-    def _pages(self, path: str) -> list:
-        """Every item of a listing, not only its first page."""
+    def _pages(self, path: str, key: str | None = None) -> list:
+        """Every item of a listing, not only its first page: the answer itself, or its `key` for a listing that
+        comes wrapped in an object (network configurations, runner groups, runners)."""
         found, page = [], 1
         while True:
-            batch = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or []
+            answer = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or ({} if key else [])
+            batch = (answer.get(key) or []) if key else answer
             found += batch
             if len(batch) < 100:
                 return found
@@ -129,3 +138,48 @@ class GitHub:
         """The start of the subject GitHub issues to this repo's workflows."""
         found = self._api(f"repos/{repo}/actions/oidc/customization/sub")
         return found.get("sub_claim_prefix") or f"repo:{repo}"
+
+    # Runners: the organization's network configuration, runner group and GitHub-hosted runner, which only its
+    # owners may make (mlz install runners).
+
+    def is_owner(self, org: str) -> bool:
+        login = self._api("user")["login"]
+        found = self._api(f"orgs/{org}/memberships/{login}", missing_ok=True) or {}
+        return found.get("state") == "active" and found.get("role") == "admin"
+
+    def network_configuration(self, org: str, name: str) -> dict | None:
+        return next((c for c in self._pages(f"orgs/{org}/settings/network-configurations", "network_configurations") if c["name"] == name), None)
+
+    def create_network_configuration(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/settings/network-configurations", "POST", body)
+
+    def runner_group(self, org: str, name: str) -> dict | None:
+        return next((g for g in self._pages(f"orgs/{org}/actions/runner-groups", "runner_groups") if g["name"] == name), None)
+
+    def create_runner_group(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/actions/runner-groups", "POST", body)
+
+    def update_runner_group(self, org: str, group: int, body: dict) -> None:
+        self._api(f"orgs/{org}/actions/runner-groups/{group}", "PATCH", body)
+
+    def runner_group_repositories(self, org: str, group: int) -> set[int]:
+        return {r["id"] for r in self._pages(f"orgs/{org}/actions/runner-groups/{group}/repositories", "repositories")}
+
+    def set_runner_group_repositories(self, org: str, group: int, repositories: list[int]) -> None:
+        self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories", "PUT", {"selected_repository_ids": repositories})
+
+    def hosted_runner(self, org: str, name: str) -> dict | None:
+        return next((r for r in self._pages(f"orgs/{org}/actions/hosted-runners", "runners") if r["name"] == name), None)
+
+    def create_hosted_runner(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/actions/hosted-runners", "POST", body)
+
+    def variable(self, repo: str, name: str) -> str | None:
+        found = self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True)
+        return None if found is None else found["value"]
+
+    def set_variable(self, repo: str, name: str, value: str) -> None:
+        if self.has_variable(repo, name):
+            self._api(f"repos/{repo}/actions/variables/{name}", "PATCH", {"name": name, "value": value})
+        else:
+            self._api(f"repos/{repo}/actions/variables", "POST", {"name": name, "value": value})

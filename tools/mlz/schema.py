@@ -189,9 +189,10 @@ def bootstrap() -> dict:
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
         "repositories": mapping({role: text(f"The {role} repo's name.") for role in install.ROLES}, "The three repos, by role."),
         "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
+        "runner_size": text("The private runner's machine size at GitHub, for mlz install runners.", default="2-core", examples=["2-core", "4-core"]),
     }
     properties = {
-        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos and reviewers."),
+        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, reviewers and private runner."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
     }
     return {

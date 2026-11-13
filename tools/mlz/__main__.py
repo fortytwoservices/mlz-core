@@ -84,9 +84,9 @@ def main() -> int:
     sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
-    i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish"])
+    i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
-    i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish)")
+    i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish, runners)")
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, or move the subscriptions, without asking")
     args = parser.parse_args()
@@ -106,6 +106,8 @@ def main() -> int:
                     raise ConfigError(f"install {args.step} needs --tenant <the customer's Entra tenant ID>.")
                 if args.step == "handover":
                     install.step_handover(install.Azure(args.tenant), args.settings, args.yes)
+                elif args.step == "runners":
+                    install.step_runners(GitHub(), install.Azure(args.tenant), args.settings)
                 else:
                     customer, _ = install.settings(args.settings)
                     # A root ID is unique only within its tenant: two customers may both be "mlz".

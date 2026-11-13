@@ -42,7 +42,9 @@ NETWORKS = {
     "management": (1024, {"github-runners": (0, 25), "runners": (128, 26), "private-endpoints": (192, 27)}),
     "identity": (1280, {"domain-controllers": (0, 26)}),
 }
-REGIONS = ("norwayeast", "norwaywest", "westeurope", "northeurope", "swedencentral")
+# The regions mlz-core supports, with the codes in their names: modules/naming's, which the tests hold this to.
+REGION_CODES = {"norwayeast": "nwe", "norwaywest": "nww", "westeurope": "we", "northeurope": "ne", "swedencentral": "sdc"}
+REGIONS = tuple(REGION_CODES)
 # Where GitHub's hosted runners can join a subnet of the customer's (GitHub Docs, "About Azure private
 # networking for GitHub-hosted runners", supported regions): of REGIONS, only these. Elsewhere management's
 # network keeps the subnet, undelegated, for self-hosted runners.

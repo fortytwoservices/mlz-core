@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
+from mlz import platform
 from mlz.__main__ import main
 from mlz.contract import render
 from mlz.merge import ConfigError
@@ -98,6 +100,11 @@ class PlatformTest(unittest.TestCase):
             "firewall": "10.200.0.4",
         }})
         self.assertEqual((config["management_subscription_id"], config["identity_subscription_id"]), ("m", "i"))
+
+    def test_region_codes_are_the_naming_module_s(self):
+        naming = (Path(__file__).resolve().parents[2] / "modules" / "naming" / "main.tf").read_text()
+        block = re.search(r"region_codes = \{(.*?)\}", naming, re.S).group(1)
+        self.assertEqual(dict(re.findall(r"(\w+)\s*=\s*\"(\w+)\"", block)), platform.REGION_CODES)
 
     def test_github_s_runners_join_management_s_network_only_where_github_supports_the_region(self):
         self.hub("westeurope", HUB)
