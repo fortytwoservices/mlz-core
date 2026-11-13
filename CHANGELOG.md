@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/fortytwoservices/mlz-core/compare/v0.3.1...v0.3.2) (2026-11-13)
+
+
+### Features
+
+* **platform:** GitHub's network settings in management's network, and the state's private endpoint ([#43](https://github.com/fortytwoservices/mlz-core/issues/43)) ([0f59fdc](https://github.com/fortytwoservices/mlz-core/commit/0f59fdc7116cc06d0dcb6c0d9658be35bf184c1f))
+
 ## [0.3.1](https://github.com/fortytwoservices/mlz-core/compare/v0.3.0...v0.3.1) (2026-11-12)
 
 
