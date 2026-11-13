@@ -28,6 +28,10 @@ run "live" {
     condition     = output.landing_zone.decommissioned == false && output.landing_zone.address_space == "10.100.8.0/24"
     error_message = "A live landing zone's output names its network."
   }
+  assert {
+    condition     = azapi_resource.resource_group["network"].name == "rg-acme-pay-net-pd-nwe-01" && azapi_resource.resource_group["identity"].name == "rg-acme-pay-id-pd-nwe-01"
+    error_message = "Names come from the config, as python3 -m mlz vending worked them out."
+  }
 }
 
 run "decommissioned" {

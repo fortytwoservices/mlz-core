@@ -40,7 +40,7 @@ PLATFORM = {
 }
 
 DEFAULTS = "location: norwayeast\nbudget:\n  monthly: 500\n  contacts: [platform@demo.example]\n"
-WORKLOAD = "owner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
+WORKLOAD = "short_name: pay\nowner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
 PROD = "subscription: 33333333-3333-3333-3333-333333333333\nbudget:\n  monthly: 2000\n"
 DEV = "subscription: 44444444-4444-4444-4444-444444444444\n"
 
@@ -267,7 +267,7 @@ class VendingTest(unittest.TestCase):
     def test_a_removed_landing_zone_keeps_its_range_until_released(self):
         self.allocate()
         (self.repo / "landing-zones/payments/dev.yaml").unlink()
-        self.write("landing-zones/website/_workload.yaml", WORKLOAD.replace("Payments", "Website"))
+        self.write("landing-zones/website/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.write("landing-zones/website/prod.yaml", DEV)
         self.allocate()
         self.assertEqual(self.plan()["website-prod"]["range"], "10.100.10.0/24")  # not dev's 10.100.8.0/24
@@ -309,6 +309,47 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
         self.write("landing-zones/payments/dev.yaml", "decommission: false\n" + DEV)
         self.assertIn("landing-zones/payments/dev: decommission is true or not there at all, not False.", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_names_come_from_the_template(self):
+        self.allocate()
+        names = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual({k: v for k, v in names.items() if k != "network_security_groups"}, {
+            "network_resource_group": "rg-demo-pay-net-pd-nwe-01", "identity_resource_group": "rg-demo-pay-id-pd-nwe-01",
+            "virtual_network": "vnet-demo-pay-pd-nwe-01", "route_table": "rt-demo-pay-pd-nwe-01",
+            "deploy_identity": "id-demo-pay-pd-nwe-01", "budget": "budget-demo-pay-pd-nwe-01",
+            "subnet": "snet-%s", "peering_to_hub": "peer-payments-prod-to-hub", "peering_from_hub": "peer-hub-to-payments-prod",
+        })
+        self.assertEqual(names["network_security_groups"], {"default": "nsg-demo-pay-default-pd-nwe-01"})
+        # customer.yaml's naming, through governance's contract.
+        named = {**GOVERNANCE, "naming": {"org": "acme", "environments": {"prod": "pr"}}}
+        self.assertEqual(build(self.repo, named, PLATFORM)["payments-prod"]["names"]["virtual_network"], "vnet-acme-pay-pr-nwe-01")
+
+    def test_explicit_names_win_and_are_checked(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-payments-legacy\n  network_security_groups:\n    default: nsg-legacy\n")
+        names = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual((names["virtual_network"], names["network_security_groups"]["default"], names["route_table"]), ("vnet-payments-legacy", "nsg-legacy", "rt-demo-pay-pd-nwe-01"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  vnet: x\n  route_table: 'rt bad'\n  network_security_groups:\n    web: nsg-web\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: names.vnet is not a name vending gives", problems)
+        self.assertIn("landing-zones/payments/prod: route_table name rt bad has characters Azure does not allow", problems)
+        self.assertIn("landing-zones/payments/prod: names.network_security_groups.web is not one of its subnets (default)", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
+        self.assertIn("landing-zones/payments/_workload: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_the_short_name_is_the_workload_s_own_when_it_fits(self):
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
+        self.allocate()
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/_workload.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5", problems)
+        self.assertNotIn("landing-zones/web", problems)
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
+        self.assertIn("workloads payments, web share the short name web", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["web-prod"]["names"]["virtual_network"], "vnet-demo-web-pd-nwe-01")
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()

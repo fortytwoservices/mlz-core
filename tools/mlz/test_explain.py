@@ -53,6 +53,13 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(rows["network.subnets.default"][0], "26")
         self.assertEqual(rows["github"], ("not set", "no repo of its own"))
 
+    def test_names_and_where_they_come_from(self):
+        rows = self.rows()
+        self.assertEqual(rows["name virtual_network"], ("vnet-demo-pay-pd-nwe-01", "the naming template (docs/naming.md)"))
+        self.assertEqual(rows["name NSG of default"], ("nsg-demo-pay-default-pd-nwe-01", "the naming template (docs/naming.md)"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-legacy\n")
+        self.assertEqual(self.rows()["name virtual_network"], ("vnet-legacy", "names: in landing-zones/payments/prod.yaml"))
+
     def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
         self.assertEqual(self.rows()["management group"], ("demo-decommissioned", "decommission: true; its plan destroys everything vending made"))

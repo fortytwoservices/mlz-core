@@ -1,10 +1,10 @@
 locals {
   # Checked and worked out by `python3 -m mlz vending`: layers merged, the address range and subnets,
-  # the hub to peer with.
+  # the hub to peer with, and every name, from the customer's template or the landing zone's own (docs/naming.md).
   lz = jsondecode(file(var.config_file))
 
   subscription = "/subscriptions/${local.lz.subscription_id}"
-  names        = module.naming.landing_zone
+  names        = local.lz.names
   github       = local.lz.github # {organization, repo} when the landing zone has a repo, else null
 
   # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
@@ -13,14 +13,6 @@ locals {
   # comes from the config), where ALZ's policies deny new resources.
   decommission = try(local.lz.decommission, false)
   live         = local.decommission ? {} : { live = true } # for_each over what only a live landing zone has
-}
-
-module "naming" {
-  source = "../../modules/naming"
-
-  root_id      = local.lz.root_id
-  region       = local.lz.location
-  landing_zone = local.lz.key
 }
 
 resource "azapi_resource" "resource_group" {
@@ -78,7 +70,7 @@ module "vending" {
   network_security_group_enabled = !local.decommission
   network_security_groups = local.decommission ? {} : {
     for name, _ in local.lz.network.subnets : name => {
-      name                         = format(local.names.network_security_group, name)
+      name                         = local.names.network_security_groups[name]
       resource_group_name_existing = azapi_resource.resource_group["network"].name
       location                     = local.lz.location
       tags                         = local.lz.tags

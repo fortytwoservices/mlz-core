@@ -65,7 +65,8 @@ def main() -> int:
     nl.add_argument("workload", help="the workload: its folder in landing-zones/")
     nl.add_argument("env", help="the environment: its file in the workload's folder")
     for flag, what in (("subscription", "the landing zone's subscription ID"), ("owner", "the owning team's email address"),
-                       ("cost-center", "the cost center"), ("archetype", "corp, online or sandbox"), ("location", "the region")):
+                       ("cost-center", "the cost center"), ("archetype", "corp, online or sandbox"), ("location", "the region"),
+                       ("short-name", "a new workload's short name in names, 2 to 5 (docs/naming.md)")):
         nl.add_argument(f"--{flag}", help=what)
     f = roles.add_parser("firewall", help="firewall/ into the rules root's config")
     f.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
@@ -200,7 +201,7 @@ def main() -> int:
             found = explain.problems(args.key, lz, plan, governance, platform_contract)
             print(explain.render(args.repo, args.key, lz, parts, found, None not in (governance, platform_contract)), end="")
         elif args.role == "new":
-            given = {k: getattr(args, k) for k in ("owner", "cost_center", "archetype", "location", "subscription")}
+            given = {k: getattr(args, k) for k in ("owner", "cost_center", "archetype", "location", "subscription", "short_name")}
             for path in new.landing_zone(args.repo, args.workload, args.env, given):
                 print(f"mlz new: wrote {path}")
             key = f"{args.workload}-{args.env}"

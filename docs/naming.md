@@ -4,9 +4,8 @@ Every name mlz-core gives comes from one template per customer, filled with shor
 and checked against Azure's rules for that kind of resource before anything is planned. An explicit name for
 one resource always wins.
 
-**Where it stands:** `customer.yaml`'s `naming:` section is checked by governance and published in its
-contract. Nothing is named from it yet: landing zones take their names from it next, then the platform. Until
-then mlz-core's fixed names stay as they are.
+**Where it stands:** landing zones are named from it. The platform, governance and the bootstrap keep
+mlz-core's fixed names until they move onto it too.
 
 ## The template
 
@@ -44,7 +43,39 @@ names from CAF. `tools/dev/name_rules.py` writes the file from the catalog.
 **A name that does not fit is refused, never cut**: two long names cut short can come out the same. The
 message gives the name, its length and how far over it is. The way out is a shorter short name, a template of
 its own for that type, or an explicit name. Storage accounts and key vaults allow only 24 characters, so the
-short names are kept short: the customer's code 2 to 4, an app 2 to 5, a purpose up to 8.
+short names are kept short: the customer's code 2 to 4, an app 2 to 5. A purpose takes up to 20, with hyphens inside (an NSG's is its subnet's name), but the type's length is the real limit.
+
+## Landing zones
+
+Vending names everything it makes in a landing zone from the template, with the workload's short name, the
+landing zone's environment (its file name) and its region:
+
+| What | Purpose | For example |
+|---|---|---|
+| The network's resource group | `net` | `rg-acme-pay-net-pd-nwe-01` |
+| The identity's resource group | `id` | `rg-acme-pay-id-pd-nwe-01` |
+| The virtual network, the route table, the deploy identity, the budget | none | `vnet-acme-pay-pd-nwe-01` |
+| Each subnet's NSG | the subnet's name | `nsg-acme-pay-default-pd-nwe-01` |
+
+Subnets (`snet-<name>`) and peerings (`peer-<key>-to-hub`, `peer-hub-to-<key>`) are named inside their network,
+so they keep that pattern.
+
+- **`short_name`**, in `_workload.yaml`: the workload's short name, 2 to 5 lower-case letters and digits, one
+  per workload. A workload whose folder name fits (`web`) needs none: that is its short name. Two workloads may
+  not share one. `python3 -m mlz new landing-zone` writes it for a new workload (`--short-name`), or leaves it to
+  fill in.
+- **`names:`**, in the landing zone's own file only: an explicit name for any of these, which wins over the
+  template and is checked against the same rules.
+
+  ```yaml
+  names:
+    virtual_network: vnet-payments-legacy
+    network_security_groups:
+      default: nsg-payments-web
+  ```
+
+  A changed name replaces the resource: the plan shows it deleted and created again.
+- `python3 -m mlz explain <key>` shows every name and where it came from.
 
 ## customer.yaml
 
@@ -66,7 +97,8 @@ may not share one.
 
 The section is checked where it is written, in governance's run (`governance/scripts/render_library.py`), and
 governance's contract carries it as written to the repos that name things with it. A root ID longer than four
-characters, or with a hyphen, needs `naming.org` once the section is there.
+characters, or with a hyphen, cannot be the customer's code, so it needs `naming.org`: governance's check asks for it
+once the section is there, and vending's, which names every landing zone, asks for it either way.
 
 The design and the decisions behind it, 13 November 2026: recorded names, `mlz names --renew`, the platform's
 app names and child resources, in the managed landing zone's design notes.

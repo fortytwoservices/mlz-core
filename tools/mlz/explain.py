@@ -14,8 +14,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import vending
+from . import naming, vending
 from .files import SUFFIXES
+from .merge import ConfigError
 
 ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags")
 REQUIRED = ("owner", "cost_center", "archetype", "subscription", "location")
@@ -118,6 +119,21 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         worked.append(("hub network", region["hub_network"], source))
         worked.append(("DNS servers", show(region["dns_servers"]), source))
         worked += [(f"route {r['name']}", f"{r['to']} via {r['via']}", source) for r in region.get("spoke_routes") or []]
+    if governance is not None and entry is not None:
+        # Names, as vending gives them: the landing zone's own under names:, or the customer's template.
+        try:
+            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+        except ConfigError:
+            settings = None  # problems() reports it, as the vending check does
+        named = vending.landing_zone_names(key, lz, settings, sorted(entry["subnets"]), []) if settings else {}
+        own = lz["settings"].get("names") if isinstance(lz["settings"].get("names"), dict) else {}
+        for item, value in named.items():
+            if item in vending.NAMED and value:
+                worked.append((f"name {item}", value, f"names: in {lz['where']}.yaml" if item in own else "the naming template (docs/naming.md)"))
+        for subnet, value in (named.get("network_security_groups") or {}).items():
+            if value:
+                given = subnet in (own.get("network_security_groups") or {}) if isinstance(own.get("network_security_groups"), dict) else False
+                worked.append((f"name NSG of {subnet}", value, f"names: in {lz['where']}.yaml" if given else "the naming template (docs/naming.md)"))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
 
 

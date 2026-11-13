@@ -89,7 +89,8 @@ Any layer can be a folder of chunks.
   were merged before either was brought up to date. 500 landing zones take about a second.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
-- **Names**, `<type>-<key>-<region code>`, for example `vnet-payments-prod-nwe`.
+- **Names** from the customer's template, with the workload's `short_name`: for example `vnet-acme-pay-pd-nwe-01`,
+  or an explicit one under `names:` in the landing zone's file (`docs/naming.md`).
 
 `python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
 the value (a mistake in `_defaults/all.yaml` is reported once, against that file, not once per landing zone),
