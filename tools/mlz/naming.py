@@ -93,8 +93,10 @@ def parse(template: object, where: str, problems: list[str]) -> list[tuple[str, 
 
 def settings(customer: dict, root_id: str) -> Naming:
     """customer.yaml's naming section, checked, with mlz-core's defaults for what it leaves out."""
-    given = customer.get("naming") or {}
+    given = customer.get("naming")
     problems: list[str] = []
+    if given is None:  # absent, or written with nothing under it: mlz-core's defaults
+        given = {}
     if not isinstance(given, dict):
         raise ConfigError("customer.yaml: naming is a group of settings (org, template, templates, environments, regions).")
     problems += [f"customer.yaml: naming.{k} is not a setting; use {', '.join(sorted(SETTINGS))}." for k in sorted(set(given) - SETTINGS, key=str)]

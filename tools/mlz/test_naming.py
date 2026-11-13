@@ -93,6 +93,12 @@ class SettingsTest(unittest.TestCase):
             naming.settings({"naming": given}, root_id)
         return str(caught.exception)
 
+    def test_a_naming_section_that_is_not_one_is_refused_not_ignored(self):
+        for odd in (False, 0, "", [], "acme"):
+            with self.assertRaisesRegex(ConfigError, "customer.yaml: naming is a group of settings"):
+                naming.settings({"naming": odd}, "mlz")
+        self.assertEqual(naming.settings({"naming": None}, "mlz").org, "mlz")  # naming: with nothing under it
+
     def test_what_customer_yaml_may_not_say(self):
         self.assertIn("naming.prefix is not a setting", self.problems(prefix="az"))
         self.assertIn("naming.org is 'acmecorp'; it must be 2 to 4", self.problems(org="acmecorp"))
