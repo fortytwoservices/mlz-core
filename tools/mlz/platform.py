@@ -284,6 +284,13 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
             if settings_["bastion"]:
                 used["bastion_public_ip"] = hub_names["bastion_public_ip"]
             named(lambda: names.apart(f"hubs/{region}'s public IP addresses", used), problems)
+    # Each network's regions share one resource group: a template without {region} would give two regions one name.
+    for network, regions_ in networks.items():
+        named_ = {region: net["names"] for region, net in regions_.items() if net["names"]}
+        for kind, what in (("virtual_network", "networks"), ("route_table", "route tables"), ("github_network_settings", "GitHub network settings")):
+            named(lambda: names.apart(f"{network}'s {what} in its regions", {region: n[kind] for region, n in named_.items()}), problems)
+        named(lambda: names.apart(f"{network}'s network security groups in its regions",
+                                  {f"{region}/{subnet}": nsg for region, n in named_.items() for subnet, nsg in n["network_security_groups"].items()}), problems)
     named(lambda: names.apart("resource groups in the connectivity subscription", {
         **{f"hubs/{region}'s": h["names"]["resource_group"] for region, h in hubs.items() if h["names"]},
         "the DNS zones'": names.dns_resource_group(settings, primary)}), problems)

@@ -47,14 +47,15 @@ def apart(what: str, named: dict[str, str]) -> dict[str, str]:
     return named
 
 
-def management_groups(naming: Naming, primary: str, bootstrap_group: str) -> None:
+def management_groups(naming: Naming, primary: str, bootstrap_group: str | None = None) -> None:
     """The resource groups governance, the platform and the bootstrap each make in the management subscription: one name
-    for two would merge what each manages, and the rights each pipeline has on its own."""
-    apart("resource groups in the management subscription", {
+    for two would merge what each manages, and the rights each pipeline has on its own. The bootstrap's only where it is
+    known: bootstrap.yaml may name it, which governance never reads."""
+    groups = {
         "governance's management group": platform_name(naming, "management", "resource_group", primary),
         "management's network group": network_resource_group(naming, "management", primary),
-        "the bootstrap's group": bootstrap_group,
-    })
+    }
+    apart("resource groups in the management subscription", groups if bootstrap_group is None else {**groups, "the bootstrap's group": bootstrap_group})
 
 
 def dns_resource_group(naming: Naming, primary: str) -> str:
@@ -83,7 +84,7 @@ def network(naming: Naming, network: str, region: str, subnets: list[str]) -> di
 
 def governance(naming: Naming, primary: str) -> dict:
     """Governance's: management's monitoring, and the DNS zones' group its policy points at."""
-    management_groups(naming, primary, platform_name(naming, "bootstrap", "resource_group", primary))
+    management_groups(naming, primary)
     return {
         "management": {
             "resource_group": platform_name(naming, "management", "resource_group", primary),

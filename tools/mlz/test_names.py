@@ -21,6 +21,15 @@ def settings(**given) -> naming.Naming:
 class ApartTest(unittest.TestCase):
     """Two of a type in one place need names apart, which a template without {app} or {purpose} would not give."""
 
+    def test_governance_checks_only_the_groups_it_knows(self):
+        # Without {app}, governance's group and the bootstrap's default would meet; bootstrap.yaml names the bootstrap's
+        # elsewhere, which governance never reads, so governance takes it, and the bootstrap's own check decides.
+        no_app = settings(templates={"resource_group": "{type}-{org}-{purpose}-{env}-{region}-{nn}"})
+        names.governance(no_app, "norwayeast")
+        names.bootstrap(no_app, "norwayeast", {"resource_group": "rg-bootstrap-legacy"})
+        with self.assertRaisesRegex(ConfigError, "governance's management group and the bootstrap's group would both be rg-acme-pd-nwe-01"):
+            names.bootstrap(no_app, "norwayeast")
+
     def test_governance_s_and_the_bootstrap_s_groups_in_the_management_subscription(self):
         for call in (lambda: names.governance(settings(template=FLAT), "norwayeast"), lambda: names.bootstrap(settings(template=FLAT), "norwayeast")):
             with self.assertRaisesRegex(ConfigError, "governance's management group and management's network group would both be rg-acme-mgt-pd-nwe-01, "
@@ -74,6 +83,16 @@ class HubApartTest(unittest.TestCase):
         # Named explicitly onto another: refused as well.
         (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "bastion: true\nnames:\n  bastion_public_ip: pip-demo-hub-afw-pd-nwe-01\n")
         self.assertIn("firewall_public_ip and bastion_public_ip would both be pip-demo-hub-afw-pd-nwe-01", self.problems(GOVERNANCE))
+
+    def test_a_network_s_regions_share_its_group(self):
+        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "identity: true\n")
+        (self.repo / "hubs" / "swedencentral.yaml").write_text("platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        governance = {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}}
+        build(self.repo, governance)
+        no_region = {"templates": {kind: "{type}-{org}-{app}-{purpose}-{env}-{nn}" for kind in ("virtual_network", "network_security_group")}}
+        message = self.problems({**governance, "naming": no_region})
+        self.assertIn("norwayeast and swedencentral would both be vnet-demo-idn-pd-01, and Azure needs identity's networks in its regions named apart", message)
+        self.assertIn("norwayeast/domain-controllers and swedencentral/domain-controllers would both be nsg-demo-idn-domain-controllers-pd-01", message)
 
     def test_the_connectivity_subscription_s_groups(self):
         (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB)
