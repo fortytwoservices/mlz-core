@@ -8,8 +8,8 @@ from pathlib import Path
 
 from mlz import decommission
 from mlz.files import read_yaml
-from mlz.test_vending import DEFAULTS, DEV, PLATFORM, PROD, WORKLOAD
-from mlz.vending import IP_PLAN, allocate, render_plan
+from mlz.test_vending import DEFAULTS, DEV, GOVERNANCE, PLATFORM, PROD, WORKLOAD
+from mlz.vending import IP_PLAN, NAMES, allocate, give_names, render_names, render_plan
 
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
 HUB = "/subscriptions/c/resourceGroups/rg-demo-hub-nwe/providers/Microsoft.Network/virtualNetworks/vnet-demo-hub-nwe"
@@ -90,6 +90,7 @@ class DecommissionTest(unittest.TestCase):
         self.write("landing-zones/payments/dev.yaml", DEV)
         plan, _, retired = allocate(self.repo, PLATFORM)
         self.write(IP_PLAN, render_plan(plan, retired))
+        self.write(NAMES, render_names(give_names(self.repo, plan, GOVERNANCE)[0]))
         self.write("_generated/platform.yaml", f"regions:\n  norwayeast:\n    hub_network: {HUB}\n  swedencentral:\n    hub_network: {OTHER_HUB}\n")
         self.azure = FakeAzure()
         self.printed = []
@@ -137,6 +138,8 @@ class DecommissionTest(unittest.TestCase):
         self.assertNotIn("landing-zones/payments/_workload.yaml", files)  # payments-prod still uses it
         self.write(IP_PLAN, files[IP_PLAN])
         self.assertEqual(sorted(read_yaml(self.repo / IP_PLAN)), ["payments-prod"])
+        self.write(NAMES, files[NAMES])  # its names go with it
+        self.assertEqual(sorted(read_yaml(self.repo / NAMES)), ["payments-prod"])
         self.assertIn(f"releases its range, {dev_range},", github.pulls[0][3])
         # From the commit its files were worked out from, not whatever main is now.
         self.assertEqual(github.bases, [(REPOS["vending"], "run-sha")])

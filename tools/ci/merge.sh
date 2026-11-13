@@ -8,7 +8,7 @@
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
 
-# Contracts only, and the IP plan that vending's run commits to them: anything else waits for a person. A
+# Contracts only, and the IP plan and names that vending's run commits to them: anything else waits for a person. A
 # renamed file counts by both names, so a file moved into _generated/ is not taken from elsewhere unseen.
 others=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty) | select(test("^_generated/[a-z-]+\\.yaml$") | not)')
 if [[ -n $others ]]; then

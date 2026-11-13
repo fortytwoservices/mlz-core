@@ -18,7 +18,7 @@ from mlz.__main__ import MARKER, main, own_folder
 from mlz import files
 from mlz.contract import render
 from mlz.firewall import vending_contract
-from mlz.vending import IP_PLAN, NAMES, allocate, build, give_names, ip_plan, landing_zones, place, release, render_names, render_plan
+from mlz.vending import IP_PLAN, NAMES, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -229,12 +229,18 @@ class VendingTest(unittest.TestCase):
 
     def test_check_mode_fails_when_the_plan_is_stale_and_writes_nothing(self):
         self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
         run = lambda *extra: self.cli("allocate", "--repo", str(self.repo), *extra)
         self.assertEqual(run("--check"), 1)
         self.assertFalse((self.repo / IP_PLAN).exists())
+        self.assertFalse((self.repo / NAMES).exists())
         self.assertEqual(run(), 0)
         self.assertEqual(run("--check"), 0)
         self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.assertEqual(run("--check"), 1)
+        self.assertEqual(run(), 0)
+        # The names alone out of date: a subnet's NSG not recorded yet.
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("    default: nsg-demo-pay-default-te-nwe-01\n", ""))
         self.assertEqual(run("--check"), 1)
 
     def test_a_command_starts_terraform_once(self):
@@ -323,9 +329,71 @@ class VendingTest(unittest.TestCase):
             "subnet": "snet-%s", "peering_to_hub": "peer-payments-prod-to-hub", "peering_from_hub": "peer-hub-to-payments-prod",
         })
         self.assertEqual(names["network_security_groups"], {"default": "nsg-demo-pay-default-pd-nwe-01"})
-        # customer.yaml's naming, through governance's contract.
+        text = (self.repo / NAMES).read_text()
+        self.assertTrue(text.startswith("# The names vending gave each landing zone"))
+        self.assertIn("payments-prod:\n  network_resource_group: rg-demo-pay-net-pd-nwe-01\n", text)
+        self.assertIn("  network_security_groups:\n    default: nsg-demo-pay-default-pd-nwe-01\n", text)
+
+    def test_a_name_once_given_stays_until_renewed(self):
+        self.allocate()
+        # customer.yaml's naming changes, through governance's contract: what has names keeps them; a new
+        # landing zone, and a new subnet's NSG, take the new template.
         named = {**GOVERNANCE, "naming": {"org": "acme", "environments": {"prod": "pr"}}}
-        self.assertEqual(build(self.repo, named, PLATFORM)["payments-prod"]["names"]["virtual_network"], "vnet-acme-pay-pr-nwe-01")
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n")
+        self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.allocate(governance=named)
+        configs = build(self.repo, named, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["names"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
+        self.assertEqual(configs["payments-prod"]["names"]["network_security_groups"], {
+            "default": "nsg-demo-pay-default-pd-nwe-01", "web": "nsg-acme-pay-web-pr-nwe-01"})
+        self.assertEqual(configs["payments-test"]["names"]["virtual_network"], "vnet-acme-pay-te-nwe-01")
+        # Renewed: the template's names, all of them.
+        record, changes = give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
+        self.assertIn("payments-prod: virtual_network vnet-demo-pay-pd-nwe-01, now vnet-acme-pay-pr-nwe-01", changes)
+        self.assertNotIn("payments-prod: network_security_groups.web", "\n".join(changes))  # the template's already
+        self.assertFalse([c for c in changes if c.startswith(("payments-dev", "payments-test"))])
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        with self.assertRaisesRegex(ConfigError, "no landing zone payments-uat; the landing zones are payments-dev, payments-prod, payments-test"):
+            give_names(self.repo, ip_plan(self.repo), named, {"payments-uat"})
+
+    def test_a_pull_request_keeps_only_the_names_its_base_has(self):
+        self.allocate()
+        base = {k: v for k, v in recorded_names(self.repo).items() if k != "payments-dev"}
+        # payments-dev came with this pull request: a short name changed in review still counts.
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=base)
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pm-dv-nwe-01")
+        self.assertEqual(record["payments-prod"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
+        self.assertEqual([c for c in changes if c.startswith("payments-prod")], [])
+        # Without a base, as on main and with --check: everything recorded stays.
+        self.assertEqual(give_names(self.repo, ip_plan(self.repo), GOVERNANCE)[0]["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+
+    def test_the_names_command_renews_a_landing_zone(self):
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo)), 0)
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # a short name changed renames nothing
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "names", "--repo", str(self.repo), "--renew", "payments-prod"]), redirect_stdout(out):
+            self.assertEqual(main(), 0)
+        self.assertIn("payments-prod: virtual_network vnet-demo-pay-pd-nwe-01, now vnet-demo-pm-pd-nwe-01", out.getvalue())
+        self.assertIn("vnet-demo-pm-pd-nwe-01", (self.repo / NAMES).read_text())
+        self.assertIn("vnet-demo-pay-dv-nwe-01", (self.repo / NAMES).read_text())
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # the allocator keeps what was renewed
+
+    def test_a_recorded_name_is_checked_and_a_missing_one_asked_for(self):
+        self.allocate()
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("vnet-demo-pay-pd-nwe-01", "vnet demo"))
+        self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it; restore the file from git.", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n")
+        plan, _, retired = allocate(self.repo, PLATFORM)
+        self.write(IP_PLAN, render_plan(plan, retired))
+        self.assertIn("payments-prod: _generated/names.yaml has no name for web yet; run the IP allocator", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
+        self.assertIn("payments-prod: no names yet; run the IP allocator (python3 -m mlz allocate).", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_explicit_names_win_and_are_checked(self):
         self.allocate()
@@ -347,17 +415,21 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         # A template without {purpose} gives both resource groups, and both NSGs, one name.
         flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
-        problems = self.problems(build, flat, PLATFORM)
+        renamed = lambda: give_names(self.repo, ip_plan(self.repo), flat, {"payments-prod"})
+        problems = self.problems(lambda _: renamed())
         self.assertIn("landing-zones/payments/prod: network_resource_group and identity_resource_group would both be rg-demo-pay-pd-nwe-01, "
                       "and Azure needs its resource groups named apart; put {purpose} in the template, or set one under names:.", problems)
         self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe-01", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
                    "names:\n  identity_resource_group: RG-demo-pay-pd-nwe-01\n  network_security_groups:\n    web: nsg-pay-web\n")
-        problems = self.problems(build, flat, PLATFORM)  # Azure ignores case in a resource group's name
+        problems = self.problems(lambda _: renamed())  # Azure ignores case in a resource group's name
         self.assertIn("would both be RG-demo-pay-pd-nwe-01", problems)
         self.assertNotIn("NSGs", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
                    "names:\n  identity_resource_group: rg-pay-identity\n  network_security_groups:\n    web: nsg-pay-web\n")
+        self.allocate(governance=flat)
+        (self.repo / NAMES).unlink()
+        self.allocate(governance=flat)
         names = build(self.repo, flat, PLATFORM)["payments-prod"]["names"]
         self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe-01", "rg-pay-identity"))
 
@@ -390,7 +462,10 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.assertIn("workloads payments, web share the short name web", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
-        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["web-prod"]["names"]["virtual_network"], "vnet-demo-web-pd-nwe-01")
+        self.allocate()  # payments' names, now that it has a short name
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual(configs["web-prod"]["names"]["virtual_network"], "vnet-demo-web-pd-nwe-01")
+        self.assertEqual(configs["payments-prod"]["names"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()

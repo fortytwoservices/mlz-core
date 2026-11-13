@@ -60,7 +60,7 @@ engineer's own GitHub login, which needs write access to the repos and the `work
 
 | Job | When | What it does |
 |---|---|---|
-| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan up to date: when a new landing zone or subnet needs addresses, it commits the new plan to the pull request and stops, and the run of that commit plans with them. On `main` a plan that is not up to date fails the check (`mlz allocate --check`). |
+| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). |
 | `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. A job per landing zone; the platform's changed stacks in one job, one after the other (hub, management, identity, rules), stopping at the first that fails. |
@@ -111,8 +111,8 @@ The reading repo's run on that pull request merges it once `check` and `plan` ha
 merge would add no control: the contract says what the other role has already deployed, and the run on
 `main` that the merge starts still waits for this role's reviewer, whose plan shows what the contract
 changes. A contract that fails this repo's check or plan stays on its pull request, not on `main`. On
-vending, a contract that gives landing zones their addresses gets the IP plan committed to the pull request
-first, and the run of that commit merges it. Until vending has both governance's and platform's contracts,
+vending, a contract that gives landing zones their addresses or names gets the IP plan and the names committed
+to the pull request first, and the run of that commit merges it. Until vending has both governance's and platform's contracts,
 it waits: its check plans nothing, and it publishes nothing.
 
 A contract pull request stays open for a person when its run fails, when it changes more than
@@ -126,7 +126,7 @@ App that may write to the three repos, and the App merges them.
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests and commits the IP plan to vending pull requests; installed on the three repos |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests and commits the IP plan and the names to vending pull requests; installed on the three repos |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
