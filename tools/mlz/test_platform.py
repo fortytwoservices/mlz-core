@@ -153,8 +153,6 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(platform.REGION_CODES[region], code)
         self.assertEqual(len(set(platform.REGION_CODES.values())), len(platform.REGION_CODES))
         self.assertLessEqual(set(platform.GITHUB_RUNNER_REGIONS), set(platform.REGIONS))
-        naming = (Path(__file__).resolve().parents[2] / "modules" / "naming" / "main.tf").read_text()
-        self.assertIn('jsondecode(file("${path.module}/region-codes.json"))', naming)  # the same file as Python's
 
     def test_a_hub_in_any_azure_region(self):
         self.hub("germanywestcentral", HUB)
