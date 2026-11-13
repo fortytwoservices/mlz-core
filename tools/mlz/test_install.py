@@ -148,8 +148,9 @@ class FakeTerraform:
 
 
 class FakeAzure:
-    def __init__(self, parents):
-        self._parents = parents
+    def __init__(self, parents=None, resources=None):
+        self._parents = parents or {}
+        self.resources = resources or {}
         self.moves = []
 
     def parents(self):
@@ -157,6 +158,77 @@ class FakeAzure:
 
     def move(self, group, subscription):
         self.moves.append((group, subscription))
+
+    def resource(self, resource_id, api_version):
+        return self.resources.get(resource_id)
+
+
+class RunnersGitHub(FakeGitHub):
+    """The organization's runner settings, as an owner (or not) sees them."""
+
+    def __init__(self, owner=True, configurations=(), groups=(), runners=(), fail_configuration=False, **kwargs):
+        super().__init__(existing=REPOS.values(), **kwargs)
+        for number, repo in enumerate(REPOS.values()):
+            self.repos[repo]["id"] = 101 + number
+        self.owner, self.fail_configuration = owner, fail_configuration
+        self.configurations, self.groups, self.runners = list(configurations), list(groups), list(runners)
+        self.group_repositories, self.values, self.calls = {}, {}, []
+
+    def is_owner(self, org):
+        return self.owner
+
+    def network_configuration(self, org, name):
+        return next((c for c in self.configurations if c["name"] == name), None)
+
+    def create_network_configuration(self, org, body):
+        if self.fail_configuration:
+            raise ConfigError("gh api POST orgs/acme/settings/network-configurations: HTTP 403")
+        self.calls.append(("configuration", body))
+        self.configurations.append({**body, "id": "CONFIG"})
+        return self.configurations[-1]
+
+    def runner_group(self, org, name):
+        return next((g for g in self.groups if g["name"] == name), None)
+
+    def create_runner_group(self, org, body):
+        self.calls.append(("group", body))
+        self.groups.append({**body, "id": 7})
+        self.group_repositories[7] = set(body["selected_repository_ids"])
+        return self.groups[-1]
+
+    def update_runner_group(self, org, group, body):
+        self.calls.append(("update group", body))
+
+    def runner_group_repositories(self, org, group):
+        return self.group_repositories.get(group, set())
+
+    def set_runner_group_repositories(self, org, group, repositories):
+        self.calls.append(("group repositories", repositories))
+
+    def hosted_runner(self, org, name):
+        return next((r for r in self.runners if r["name"] == name), None)
+
+    def create_hosted_runner(self, org, body):
+        self.calls.append(("runner", body))
+
+    def variable(self, repo, name):
+        return self.values.get((repo, name))
+
+    def set_variable(self, repo, name, value):
+        self.calls.append(("variable", repo, name, value))
+        self.values[(repo, name)] = value
+
+
+MANAGEMENT = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups"
+NETWORK_SETTINGS = f"{MANAGEMENT}/rg-acme-management-network-nwe/providers/GitHub.Network/networkSettings/ghns-acme-management-nwe"
+STATE_ENDPOINT = f"{MANAGEMENT}/rg-acme-bootstrap-nwe/providers/Microsoft.Network/privateEndpoints/pep-acme-state-nwe"
+
+
+def runners_azure(endpoint=True):
+    resources = {NETWORK_SETTINGS: {"tags": {"GitHubId": "GHID123"}}}
+    if endpoint:
+        resources[STATE_ENDPOINT] = {"properties": {"provisioningState": "Succeeded"}}
+    return FakeAzure(resources=resources)
 
 
 class InstallTest(unittest.TestCase):
@@ -435,6 +507,83 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "run mlz install bootstrap first"):
             install.step_publish(FakeGitHub(), FakeTerraform(self.work), self.folder, self.out)
 
+    # runners
+
+    def test_the_runners_step_makes_the_three_and_moves_the_repos_onto_them(self):
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        calls = dict((call[0], call[1]) for call in github.calls if call[0] != "variable")
+        self.assertEqual(calls["configuration"], {"name": "mlz", "compute_service": "actions", "network_settings_ids": ["GHID123"]})
+        self.assertEqual(calls["group"], {"name": "mlz", "visibility": "selected", "selected_repository_ids": [101, 102, 103],
+                                          "allows_public_repositories": False, "network_configuration_id": "CONFIG"})
+        self.assertEqual(calls["runner"], {"name": "mlz", "image": {"id": "ubuntu-latest", "source": "github"}, "size": "2-core",
+                                           "maximum_runners": 10, "runner_group_id": 7})
+        self.assertEqual(github.values, {(repo, "MLZ_RUNS_ON"): "mlz" for repo in REPOS.values()})
+        self.assertIn("runners: the three repos run their plans, applies and publications on mlz from their next run. "
+                      "To go back to GitHub's public runners: gh variable delete MLZ_RUNS_ON --repo <repo>.", self.printed)
+
+    def test_the_repos_stay_on_public_runners_until_the_state_has_its_private_endpoint(self):
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
+        self.assertEqual([call[0] for call in github.calls], ["configuration", "group", "runner"])
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("run mlz install bootstrap again, then this step" in line for line in self.printed))
+
+    def test_a_second_run_changes_nothing_in_place_and_narrows_a_widened_group(self):
+        github = RunnersGitHub(
+            configurations=[{"name": "mlz", "id": "CONFIG", "network_settings_ids": ["GHID123"]}],
+            groups=[{"name": "mlz", "id": 7, "visibility": "all", "network_configuration_id": "CONFIG"}],
+            runners=[{"name": "mlz", "runner_group_id": 7}],
+        )
+        github.group_repositories[7] = {101, 102, 103, 999}
+        for repo in REPOS.values():
+            github.values[(repo, "MLZ_RUNS_ON")] = "mlz"
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        self.assertEqual(github.calls, [
+            ("update group", {"visibility": "selected", "allows_public_repositories": False, "network_configuration_id": "CONFIG"}),
+            ("group repositories", [101, 102, 103]),
+        ])
+
+    def test_someone_who_is_not_an_owner_gets_the_commands_and_changes_nothing(self):
+        github = RunnersGitHub(owner=False)
+        install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
+        self.assertEqual(github.calls, [])
+        text = "\n".join(self.printed)
+        self.assertIn("you are not an owner of acme, so nothing was changed", text)
+        self.assertIn("gh auth refresh -h github.com -s manage_runners:org,write:network_configurations", text)
+        self.assertIn("gh api -X POST orgs/acme/settings/network-configurations -f 'name=mlz' -f 'compute_service=actions' "
+                      "-f 'network_settings_ids[]=GHID123' --jq .id", text)
+        self.assertIn("-F 'selected_repository_ids[]=101' -F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' "
+                      "-F 'allows_public_repositories=false' -f network_configuration_id=\"$configuration\"", text)
+        self.assertIn("-f 'image[id]=ubuntu-latest' -f 'image[source]=github' -f 'size=2-core' -F 'maximum_runners=10' -F runner_group_id=\"$group\"", text)
+        self.assertIn("as an admin on them. Not yet: the state account has no private endpoint yet, and the runner reaches the state "
+                      "only through it: run mlz install bootstrap again, then run these:", text)
+        self.assertIn("gh variable set MLZ_RUNS_ON --repo acme/mlz-vending --body mlz", text)
+
+    def test_the_runner_size_comes_from_bootstrap_yaml(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", "  reviewers: [acme-lead]\n  runner_size: 4-core\n"))
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        self.assertEqual(dict(call[:2] for call in github.calls)["runner"]["size"], "4-core")
+
+    def test_no_runners_where_github_does_not_join_them_to_a_network(self):
+        (self.folder / "customer.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
+        with self.assertRaisesRegex(ConfigError, "of mlz-core's, norwayeast and swedencentral, not westeurope"):
+            install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
+
+    def test_the_network_settings_come_first(self):
+        with self.assertRaisesRegex(ConfigError, "no GitHub network settings yet \\(ghns-acme-management-nwe\\)"):
+            install.step_runners(RunnersGitHub(), FakeAzure(), self.folder, self.out)
+
+    def test_another_network_configuration_named_mlz_is_not_taken_over(self):
+        github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", "network_settings_ids": ["ELSEWHERE"]}])
+        with self.assertRaisesRegex(ConfigError, "a network configuration named mlz for other network settings"):
+            install.step_runners(github, runners_azure(), self.folder, self.out)
+
+    def test_a_refused_network_configuration_names_the_enterprise_policy(self):
+        with self.assertRaisesRegex(ConfigError, "Policies, Hosted compute networking"):
+            install.step_runners(RunnersGitHub(fail_configuration=True), runners_azure(), self.folder, self.out)
+
 
 class PrepareTest(unittest.TestCase):
     """The real Terraform.prepare, against a checkout of mlz-core made in a temporary folder."""
@@ -494,6 +643,38 @@ class GitHubTest(unittest.TestCase):
     def test_every_page_of_releases_is_read(self):
         releases = [{"tag_name": f"v0.{n}.0", "body": "", "draft": False, "prerelease": False} for n in range(150)]
         self.assertEqual(len(PagedGitHub({"repos/f/mlz-core/releases": releases}).releases("f/mlz-core")), 150)
+
+    def test_only_an_active_admin_is_an_owner(self):
+        for membership, owner in (({"state": "active", "role": "admin"}, True), ({"state": "active", "role": "member"}, False),
+                                  ({"state": "pending", "role": "admin"}, False), (None, False)):
+            github = AnsweringGitHub({"user": {"login": "someone"}, "orgs/acme/memberships/someone": membership})
+            self.assertEqual(github.is_owner("acme"), owner, membership)
+
+    def test_a_variable_is_made_or_changed(self):
+        github = AnsweringGitHub({"repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON": None})
+        github.set_variable("acme/mlz-platform", "MLZ_RUNS_ON", "mlz")
+        github.answers["repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON"] = {"name": "MLZ_RUNS_ON", "value": "mlz"}
+        github.set_variable("acme/mlz-platform", "MLZ_RUNS_ON", "mlz")
+        self.assertEqual([call[:2] for call in github.sent], [
+            ("POST", "repos/acme/mlz-platform/actions/variables"),
+            ("PATCH", "repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON"),
+        ])
+
+
+class AnsweringGitHub(GitHub):
+    """GitHub with canned answers by path; None is a 404. Writes are recorded, never sent."""
+
+    def __init__(self, answers):
+        self.answers, self.sent = answers, []
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method != "GET":
+            self.sent.append((method, path, body))
+            return {}
+        found = self.answers.get(path)
+        if found is None and not missing_ok:
+            raise ConfigError(f"gh api GET {path}: HTTP 404")
+        return found
 
 
 if __name__ == "__main__":

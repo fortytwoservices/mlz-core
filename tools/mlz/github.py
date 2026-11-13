@@ -12,6 +12,9 @@ import subprocess
 
 from .merge import ConfigError
 
+# What an owner's gh login needs for the organization's network configuration, runner group and runner.
+RUNNER_SCOPES = "manage_runners:org,write:network_configurations"
+
 
 class GitHub:
     def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
@@ -20,7 +23,8 @@ class GitHub:
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
                 return None
-            hint = " Add the scope with: gh auth refresh -h github.com -s workflow" if "workflow" in run.stderr and "scope" in run.stderr else ""
+            scopes = "workflow" if "workflow" in run.stderr else RUNNER_SCOPES if "runner" in run.stderr or "network_configurations" in run.stderr else None
+            hint = f" Add the scope with: gh auth refresh -h github.com -s {scopes}" if scopes and "scope" in run.stderr else ""
             raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
         return json.loads(run.stdout) if run.stdout.strip() else None
 
@@ -129,3 +133,52 @@ class GitHub:
         """The start of the subject GitHub issues to this repo's workflows."""
         found = self._api(f"repos/{repo}/actions/oidc/customization/sub")
         return found.get("sub_claim_prefix") or f"repo:{repo}"
+
+    # Runners: the organization's network configuration, runner group and GitHub-hosted runner, which only its
+    # owners may make (mlz install runners).
+
+    def is_owner(self, org: str) -> bool:
+        login = self._api("user")["login"]
+        found = self._api(f"orgs/{org}/memberships/{login}", missing_ok=True) or {}
+        return found.get("state") == "active" and found.get("role") == "admin"
+
+    def network_configuration(self, org: str, name: str) -> dict | None:
+        found = self._api(f"orgs/{org}/settings/network-configurations?per_page=100") or {}
+        return next((c for c in found.get("network_configurations", []) if c["name"] == name), None)
+
+    def create_network_configuration(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/settings/network-configurations", "POST", body)
+
+    def runner_group(self, org: str, name: str) -> dict | None:
+        found = self._api(f"orgs/{org}/actions/runner-groups?per_page=100") or {}
+        return next((g for g in found.get("runner_groups", []) if g["name"] == name), None)
+
+    def create_runner_group(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/actions/runner-groups", "POST", body)
+
+    def update_runner_group(self, org: str, group: int, body: dict) -> None:
+        self._api(f"orgs/{org}/actions/runner-groups/{group}", "PATCH", body)
+
+    def runner_group_repositories(self, org: str, group: int) -> set[int]:
+        found = self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories?per_page=100") or {}
+        return {r["id"] for r in found.get("repositories", [])}
+
+    def set_runner_group_repositories(self, org: str, group: int, repositories: list[int]) -> None:
+        self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories", "PUT", {"selected_repository_ids": repositories})
+
+    def hosted_runner(self, org: str, name: str) -> dict | None:
+        found = self._api(f"orgs/{org}/actions/hosted-runners?per_page=100") or {}
+        return next((r for r in found.get("runners", []) if r["name"] == name), None)
+
+    def create_hosted_runner(self, org: str, body: dict) -> dict:
+        return self._api(f"orgs/{org}/actions/hosted-runners", "POST", body)
+
+    def variable(self, repo: str, name: str) -> str | None:
+        found = self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True)
+        return None if found is None else found["value"]
+
+    def set_variable(self, repo: str, name: str, value: str) -> None:
+        if self.has_variable(repo, name):
+            self._api(f"repos/{repo}/actions/variables/{name}", "PATCH", {"name": name, "value": value})
+        else:
+            self._api(f"repos/{repo}/actions/variables", "POST", {"name": name, "value": value})

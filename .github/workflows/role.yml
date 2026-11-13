@@ -21,6 +21,8 @@
 # merge  a contract pull request: merges it once check and plan have passed on it.
 #
 # The bootstrap sets the variables (AZURE_*, TFSTATE_*, MLZ_REPOSITORIES); docs/pipelines.md lists the rest.
+# plan, apply and publish reach Azure and the state, so they run on the private runner in management's network
+# once mlz install runners sets MLZ_RUNS_ON; check and merge never do, and stay on GitHub's public runners.
 name: mlz role
 
 on:
@@ -44,6 +46,8 @@ env:
   ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
   TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
   TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+  # Terraform's version check reaches a host the private runners' firewall does not allow, and is not needed.
+  CHECKPOINT_DISABLE: "1"
   # Python runs from the customer's checkout, which a pull request controls. Without this, a file such as
   # mlz/ or json.py at its root would be imported before mlz-core's own code and the standard library, in a
   # step that may hold a write token. Python 3.11 and later honour it.
@@ -134,7 +138,7 @@ jobs:
   plan:
     if: needs.check.outputs.stacks != '[]'
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MLZ_RUNS_ON || 'ubuntu-latest' }} # the private runner once mlz install runners sets it
     timeout-minutes: 30
     permissions:
       contents: read
@@ -265,7 +269,7 @@ jobs:
   apply:
     if: needs.changed.result == 'success' && needs.changed.outputs.stacks != '[]'
     needs: [check, changed]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MLZ_RUNS_ON || 'ubuntu-latest' }} # the private runner once mlz install runners sets it
     timeout-minutes: 120
     environment: ${{ inputs.role }}
     permissions:
@@ -337,7 +341,7 @@ jobs:
       && contains(fromJSON('["success", "skipped"]'), needs.changed.result)
       && contains(fromJSON('["success", "skipped"]'), needs.apply.result)
     needs: [check, plan, changed, apply]
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.MLZ_RUNS_ON || 'ubuntu-latest' }} # the private runner once mlz install runners sets it
     timeout-minutes: 10
     # One publication at a time; publish.sh skips a run that main has moved past.
     concurrency:

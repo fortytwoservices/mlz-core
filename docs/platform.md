@@ -102,7 +102,8 @@ no connections, so the subnet's network security group refuses every one opened 
 connections out still get their replies. Elsewhere the subnet stays undelegated, for self-hosted runners.
 
 The state account's private endpoint, through which the runners reach the state, is the bootstrap's
-([bootstrap](bootstrap.md#running-it-again)). Azure refuses to delete the network settings resource while
+([bootstrap](bootstrap.md#running-it-again)), and `mlz install runners` sets up GitHub's side and moves the
+pipelines onto the runner ([bootstrap](bootstrap.md#private-runners)). Azure refuses to delete the network settings resource while
 the organization's network configuration still uses it: to take management's network down, delete that
 configuration in GitHub first.
 

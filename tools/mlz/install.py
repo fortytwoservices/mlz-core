@@ -7,6 +7,9 @@
                                                                       state account's private endpoint
     python3 -m mlz install handover  --settings <dir> --tenant <id>   the platform subscriptions into the top group
     python3 -m mlz install publish   --settings <dir>                 bootstrap.yaml offered to the governance repo
+    python3 -m mlz install runners   --settings <dir> --tenant <id>   GitHub's side of the private runners, then
+                                                                      the repos moved onto them (an owner of the
+                                                                      organization; others get the commands to send)
 
 <dir> holds the customer's customer.yaml and bootstrap.yaml: a checkout of the governance repo, or for a new
 customer a folder of the two files before the repos exist (repos then commits them to the governance repo).
@@ -24,12 +27,14 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Callable
 
-from . import contract
+from . import contract, platform
 from .files import read_yaml
+from .github import RUNNER_SCOPES
 from .merge import ConfigError
 from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW
 
@@ -56,7 +61,7 @@ MAIN_RULESET = {
 }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators")
-GITHUB_SETTINGS = ("organization", "repositories", "reviewers")
+GITHUB_SETTINGS = ("organization", "repositories", "reviewers", "runner_size")
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
 
@@ -313,6 +318,15 @@ class Azure:
     def move(self, group: str, subscription: str) -> None:
         self.request("PUT", f"/providers/Microsoft.Management/managementGroups/{group}/subscriptions/{subscription}?api-version=2021-04-01")
 
+    def resource(self, resource_id: str, api_version: str) -> dict | None:
+        """The resource, or None if it, or its resource group, does not exist."""
+        try:
+            return self.request("GET", f"{resource_id}?api-version={api_version}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
+
 
 def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], None] = print, ask: Callable[[str], str] = answer) -> None:
     """The platform subscriptions into the top group, once. One already anywhere in the tree stays where it is:
@@ -338,6 +352,116 @@ def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], N
     for role, subscription, _ in moves:
         azure.move(root, subscription)
         out(f"handover: {role} subscription {subscription} is now in {root}")
+
+
+# runners
+
+RUNNER = "mlz"  # the organization's network configuration, runner group and runner, and the label jobs run on
+RUNS_ON = "MLZ_RUNS_ON"  # the repo variable the workflow runs its Azure jobs on, when set (.github/workflows/role.yml)
+RUNNER_SIZE, MAXIMUM_RUNNERS = "2-core", 10
+
+
+def gh_fields(body: dict, prefix: str = "") -> list[str]:
+    """A request body as gh api fields: -f for text, -F for numbers and booleans, key[] for lists, key[sub]."""
+    fields = []
+    for key, value in body.items():
+        name = f"{prefix}[{key}]" if prefix else key
+        if isinstance(value, dict):
+            fields += gh_fields(value, name)
+        else:
+            for item in value if isinstance(value, list) else [value]:
+                flag = "-f" if isinstance(item, str) else "-F"
+                text = str(item).lower() if isinstance(item, bool) else str(item)
+                fields.append(f"{flag} '{name}{'[]' if isinstance(value, list) else ''}={text}'")
+    return fields
+
+
+def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print) -> None:
+    """GitHub's side of the private runners, in the customer's organization: a network configuration naming the
+    network settings resource in management's network, a runner group for the three repos only, and a
+    GitHub-hosted runner in it. Then, once the state account has its private endpoint, the repos run their Azure
+    jobs on that runner. Only an owner of the organization may make the three: anyone else gets them as
+    commands to send to one, filled in, and changes nothing."""
+    customer, bootstrap = settings(folder)
+    org, repos = bootstrap["github"]["organization"], repositories(bootstrap)
+    root, region = customer["root_id"], customer["primary_region"]
+    if region not in platform.GITHUB_RUNNER_REGIONS:
+        raise ConfigError(f"GitHub joins its runners to a customer's network only in some regions; of mlz-core's, {' and '.join(platform.GITHUB_RUNNER_REGIONS)}, "
+                          f"not {region}. The pipelines stay on GitHub's public runners.")
+    code = platform.REGION_CODES[region]
+    management = f"/subscriptions/{customer['subscriptions']['management']}"
+    settings_name = f"ghns-{root}-management-{code}"
+    network = azure.resource(f"{management}/resourceGroups/rg-{root}-management-network-{code}/providers/GitHub.Network/networkSettings/{settings_name}", "2024-04-02")
+    github_id = ((network or {}).get("tags") or {}).get("GitHubId")
+    if not github_id:
+        raise ConfigError(f"management's network has no GitHub network settings yet ({settings_name}): the platform's management stack makes it. "
+                          "Run the platform's pipeline on main, then this step again.")
+    endpoint = azure.resource(f"{management}/resourceGroups/rg-{root}-bootstrap-{code}/providers/Microsoft.Network/privateEndpoints/pep-{root}-state-{code}", "2024-07-01")
+    ready = ((endpoint or {}).get("properties") or {}).get("provisioningState") == "Succeeded"
+    waiting = "the state account has no private endpoint yet, and the runner reaches the state only through it: run mlz install bootstrap again"
+    repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
+    configuration = {"name": RUNNER, "compute_service": "actions", "network_settings_ids": [github_id]}
+    group = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False}
+    runner = {"name": RUNNER, "image": {"id": "ubuntu-latest", "source": "github"},
+              "size": bootstrap["github"].get("runner_size") or RUNNER_SIZE, "maximum_runners": MAXIMUM_RUNNERS}
+    switch = [f"gh variable set {RUNS_ON} --repo {repo} --body {RUNNER}" for repo in repos.values()]
+
+    if not github.is_owner(org):
+        out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the network "
+            f"configuration {RUNNER} for {settings_name}, the runner group {RUNNER} for the three repos only, and the runner {RUNNER} in it.\n")
+        out("\n".join([
+            f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
+            f"configuration=$(gh api -X POST orgs/{org}/settings/network-configurations {' '.join(gh_fields(configuration))} --jq .id)",
+            f"group=$(gh api -X POST orgs/{org}/actions/runner-groups {' '.join(gh_fields(group))} -f network_configuration_id=\"$configuration\" --jq .id)",
+            f"gh api -X POST orgs/{org}/actions/hosted-runners {' '.join(gh_fields(runner))} -F runner_group_id=\"$group\"",
+        ]) + "\n")
+        out("runners: then move the three repos onto the runner, as an admin on them"
+            + ("" if ready else f". Not yet: {waiting}, then run these") + ":\n")
+        out("\n".join(switch))
+        return
+
+    found = github.network_configuration(org, RUNNER)
+    if found is None:
+        try:
+            found = github.create_network_configuration(org, configuration)
+        except ConfigError as error:
+            raise ConfigError(f"{error}\nIf {org} belongs to an enterprise account, an enterprise owner must first let its organizations make network "
+                              "configurations: the enterprise's Settings, Policies, Hosted compute networking (docs/bootstrap.md).") from error
+        out(f"runners: network configuration {RUNNER} made, for {settings_name}")
+    elif github_id not in found.get("network_settings_ids", []):
+        raise ConfigError(f"{org} has a network configuration named {RUNNER} for other network settings; delete or rename it, then run this step again.")
+    else:
+        out(f"runners: network configuration {RUNNER} is in place")
+
+    made = github.runner_group(org, RUNNER)
+    if made is None:
+        made = github.create_runner_group(org, {**group, "network_configuration_id": found["id"]})
+        out(f"runners: runner group {RUNNER} made, for the three repos only")
+    else:
+        # Kept to the three repos and the network: a wider group would let other repos run jobs inside it.
+        if made.get("visibility") != "selected" or made.get("allows_public_repositories") or made.get("network_configuration_id") != found["id"]:
+            github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False, "network_configuration_id": found["id"]})
+        if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
+            github.set_runner_group_repositories(org, made["id"], repo_ids)
+        out(f"runners: runner group {RUNNER} is for the three repos only")
+
+    existing = github.hosted_runner(org, RUNNER)
+    if existing is None:
+        github.create_hosted_runner(org, {**runner, "runner_group_id": made["id"]})
+        out(f"runners: runner {RUNNER} made ({runner['size']}, at most {MAXIMUM_RUNNERS} at a time)")
+    elif existing.get("runner_group_id") != made["id"]:
+        raise ConfigError(f"{org} has a runner named {RUNNER} outside the runner group {RUNNER}; move or delete it, then run this step again.")
+    else:
+        out(f"runners: runner {RUNNER} is in place")
+
+    if not ready:
+        out(f"runners: the repos stay on GitHub's public runners: {waiting}, then this step.")
+        return
+    for repo in repos.values():
+        if github.variable(repo, RUNS_ON) != RUNNER:
+            github.set_variable(repo, RUNS_ON, RUNNER)
+    out(f"runners: the three repos run their plans, applies and publications on {RUNNER} from their next run. "
+        f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
 
 
 # publish
