@@ -542,7 +542,8 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         explicit = {}
     explicit = explicit or {}
     problems += [f"{where}: names.{k} is not a name vending gives; use {', '.join([*NAMED, 'network_security_groups'])}." for k in sorted(set(explicit) - set(NAMED) - {"network_security_groups"}, key=str)]
-    nsgs = explicit.get("network_security_groups") or {}
+    nsgs = explicit.get("network_security_groups")
+    nsgs = {} if nsgs is None else nsgs  # only absent or empty means none: false or [] is reported
     if not isinstance(nsgs, dict):
         problems.append(f"{where}: names.network_security_groups maps a subnet to its NSG's name.")
         nsgs = {}
