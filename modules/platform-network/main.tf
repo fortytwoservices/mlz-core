@@ -15,7 +15,10 @@ module "route_table" {
   tags = var.tags
 }
 
-# One per subnet, with Azure's default rules: the firewall decides what leaves.
+# One per subnet, with Azure's default rules: the firewall decides what leaves. GitHub's runners take no
+# connections, so their subnet's also refuses every connection to them, which Azure's defaults would let
+# the rest of the network and the peered hub open without passing the firewall. Their own connections out
+# still get their replies. GitHub's own Terraform does the same.
 resource "azapi_resource" "network_security_group" {
   for_each = var.subnets
 
@@ -24,7 +27,24 @@ resource "azapi_resource" "network_security_group" {
   parent_id = var.parent_id
   location  = var.location
   tags      = var.tags
-  body      = { properties = {} }
+  body = {
+    properties = {
+      securityRules = try(var.github_runners.subnet, null) == each.key ? [{
+        name = "deny-inbound"
+        properties = {
+          description              = "mlz-core: GitHub's runners take no connections."
+          priority                 = 100
+          direction                = "Inbound"
+          access                   = "Deny"
+          protocol                 = "*"
+          sourceAddressPrefix      = "*"
+          sourcePortRange          = "*"
+          destinationAddressPrefix = "*"
+          destinationPortRange     = "*"
+        }
+      }] : []
+    }
+  }
 
   response_export_values = []
 }

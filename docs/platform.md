@@ -97,8 +97,9 @@ the management stack delegates `snet-github-runners` to GitHub and creates the `
 resource that joins it to the customer's GitHub organization, `ghns-<root>-management-<region code>`. The
 pipeline names the organization by its ID (`GITHUB_REPOSITORY_OWNER_ID`); a plan by hand takes
 `-var github_business_id=<id>` (`gh api orgs/<organization> --jq .id`). The stack's `networks` output
-holds the resource's ID at GitHub, which the organization's network configuration names. Elsewhere the
-subnet stays undelegated, for self-hosted runners.
+holds the resource's ID at GitHub, which the organization's network configuration names. The runners take
+no connections, so the subnet's network security group refuses every one opened to them; their own
+connections out still get their replies. Elsewhere the subnet stays undelegated, for self-hosted runners.
 
 The state account's private endpoint, through which the runners reach the state, is the bootstrap's
 ([bootstrap](bootstrap.md#running-it-again)). Azure refuses to delete the network settings resource while
