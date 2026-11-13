@@ -19,6 +19,7 @@
 #        exactly the reviewed changes.
 # publish main: offers the role's contract to the repos that read it, as a pull request each.
 # merge  a contract pull request: merges it once check and plan have passed on it.
+# drift  the daily check: one issue in the repo while a stack differs from main or its plan did not finish.
 #
 # The bootstrap sets the variables (AZURE_*, TFSTATE_*, MLZ_REPOSITORIES); docs/pipelines.md lists the rest.
 name: mlz role
@@ -200,6 +201,26 @@ jobs:
           include-hidden-files: true
           retention-days: 30
 
+      # For the drift job: what the daily check's plan of this stack found, or none when the job stopped before
+      # planning. Always written, so a re-run's never leaves an earlier attempt's in place.
+      - name: Record the plan's status
+        if: always() && github.event_name == 'schedule'
+        env:
+          STACK: ${{ matrix.stack }}
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: |
+          mkdir -p .mlz
+          echo "${STATUS:-none}" > ".mlz/status-$STACK.txt"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && github.event_name == 'schedule'
+        with:
+          name: mlz-${{ inputs.role }}-status-${{ matrix.stack }}
+          path: .mlz/status-${{ matrix.stack }}.txt
+          include-hidden-files: true
+          overwrite: true # a re-run's plan replaces the failed one's
+          retention-days: 7
+
       - name: Put the plan on the pull request
         if: github.event_name == 'pull_request'
         env:
@@ -223,6 +244,46 @@ jobs:
             echo "::error::Drift: Azure differs from main. The plan above shows how."
             exit 1
           fi
+
+  # The daily check's result as one issue in the repo (tools/ci/drift.sh): opened or commented on while the
+  # check fails or a stack differs from main or its plan did not finish, closed by the first daily check that
+  # finds none. Only once check has found mlz-core's commit, which it does first: drift.sh comes from there.
+  drift:
+    if: always() && github.event_name == 'schedule' && needs.check.outputs.core-ref != ''
+    needs: [check, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One at a time per role, so two daily runs (one of them re-run) never both find no issue and open one.
+    concurrency:
+      group: mlz-drift-${{ inputs.role }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # None when no plan job got to plan: drift.sh then reports every stack as not planned.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        continue-on-error: true
+        with:
+          pattern: mlz-${{ inputs.role }}-status-*
+          merge-multiple: true
+          path: .mlz/
+
+      - name: Open, comment on or close the drift issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CHECK: ${{ needs.check.result }}
+          STACKS: ${{ needs.check.outputs.stacks }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .mlz-core/tools/ci/drift.sh
 
   # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
   # reviewer and apply; a stack with nothing to change asks for no approval. Its output is one apply job
