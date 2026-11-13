@@ -72,14 +72,20 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(names["storage account"], "stacmepayappwebpdnwe01")
         self.assertEqual(names["purpose first, empty"], "agw-pay-03")
 
-    def test_a_template_naming_a_token_twice_is_refused_by_both(self):
-        repeated = "{purpose}-{purpose}-{type}-{app}"
-        with self.assertRaisesRegex(naming.ConfigError, "has {purpose} more than once; a template names each token once"):
-            naming.settings({"naming": {"org": "acme", "template": repeated}}, "mlz")
-        mlz = {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": repeated, "templates": {}}
-        result, _ = apply({"twice": {"mlz": mlz, "type": "application_gateway", "purpose": None, "nn": 1}})
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("A template names each token once.", " ".join(result.stderr.split()))
+    def test_a_template_python_refuses_the_helper_refuses(self):
+        for template, message in (("{purpose}-{purpose}-{type}-{app}", "A template names each token once."),
+                                  ("{type}-{app}!", "A template is tokens in braces, dashes and lower-case letters and digits"),
+                                  ("fixed-{app}", "A template has {type}"),
+                                  ("{type}-{name}", "A template's tokens are {type}"),
+                                  ("-{type}-{app}", "It does not start or end with a dash"),
+                                  ("{type}--{app}", "It does not start or end with a dash")):
+            with self.assertRaises(naming.ConfigError, msg=template):
+                naming.settings({"naming": {"org": "acme", "template": template}}, "mlz")
+            # As the default template, and as a type's own.
+            for mlz in ({"template": template, "templates": {}}, {"template": naming.TEMPLATE, "templates": {"application_gateway": template}}):
+                result, _ = apply({"case": {"mlz": {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", **mlz}, "type": "application_gateway", "purpose": None, "nn": 1}})
+                self.assertNotEqual(result.returncode, 0, template)
+                self.assertIn(message, " ".join(result.stderr.split()), template)
 
     def test_a_name_azure_would_not_take_is_refused_not_cut(self):
         settings = naming.settings({"naming": {"org": "acme"}}, "mlz")

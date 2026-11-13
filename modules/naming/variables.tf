@@ -10,8 +10,24 @@ variable "mlz" {
   description = "The landing zone's naming values, as vending writes them to the workload repo's mlz.auto.tfvars.json."
   nullable    = false
 
+  # Templates are checked as customer.yaml's are (tools/mlz/naming.py, parse()), so none renders a name Python would not.
   validation {
-    # As customer.yaml's are checked (tools/mlz/naming.py): each token once, so an empty purpose drops out as there.
+    condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
+    can(regex("^(?:\\{[a-z]+\\}|-|[a-z0-9]+)+$", template))])
+    error_message = "A template is tokens in braces, dashes and lower-case letters and digits, nothing else."
+  }
+  validation {
+    condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
+    length(setsubtract(regexall("\\{([a-z]+)\\}", template)[*][0], ["type", "org", "app", "purpose", "env", "region", "nn"])) == 0])
+    error_message = "A template's tokens are {type}, {org}, {app}, {purpose}, {env}, {region} and {nn}."
+  }
+  validation {
+    condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
+    strcontains(template, "{type}") && !startswith(template, "-") && !endswith(template, "-") && !strcontains(template, "--")])
+    error_message = "A template has {type}: every name starts from its resource's short name. It does not start or end with a dash, or have two in a row."
+  }
+  validation {
+    # Each token once, so an empty purpose drops out as it does in Python.
     condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
     length(regexall("\\{[a-z]+\\}", template)) == length(distinct(regexall("\\{[a-z]+\\}", template)))])
     error_message = "A template names each token once."
