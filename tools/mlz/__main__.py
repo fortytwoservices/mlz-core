@@ -28,7 +28,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import contract, decommission, explain, firewall, install, new, platform, schema, upgrade, vending
+from . import contract, decommission, explain, firewall, install, new, platform, schema, upgrade, vending, workload
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -83,6 +83,8 @@ def main() -> int:
     w = roles.add_parser("vending-contract", help="each landing zone's region and range, for the platform's firewall rules")
     w.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     w.add_argument("--out", type=Path, required=True, help="the YAML file to write")
+    wr = roles.add_parser("workload-repos", help="after vending's apply, the workload repos' starter (once) and values (docs/vending.md)")
+    wr.add_argument("--configs", type=Path, required=True, help="the folder of <key>.json that python3 -m mlz vending wrote")
     d = roles.add_parser("decommission", help="after a landing zone's decommission is applied, offer the pull requests that delete its files")
     d.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout, at main")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
@@ -151,6 +153,14 @@ def main() -> int:
             return 1
         except ConfigError as error:
             print(f"mlz decommission: {error}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.role == "workload-repos":
+        try:
+            workload.sync(GitHub(), args.configs)
+        except ConfigError as error:
+            print(f"mlz workload-repos: {error}", file=sys.stderr)
             return 1
         return 0
 

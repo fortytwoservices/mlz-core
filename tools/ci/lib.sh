@@ -12,6 +12,7 @@ export PYTHONPATH=$CORE/tools
 # management's and identity's networks share one.
 root_of() {
   case $1/${2:-} in
+    workload/*) echo "$PWD" ;; # a landing zone's workload repo: the team's own root, at the repo's top
     platform/firewall) echo "$CORE/platform/rules/terraform" ;;
     platform/management | platform/identity) echo "$CORE/platform/networks/terraform" ;;
     *) echo "$CORE/$1/terraform" ;;
@@ -38,6 +39,7 @@ vars_for() {
       esac
       ;;
     vending) echo "-var config_file=$WORK/vending/$stack.json" ;;
+    workload) ;; # the team's root reads mlz.auto.tfvars.json, which vending writes, by itself
     *) echo "unknown role $role" >&2; return 1 ;;
   esac
   return 0

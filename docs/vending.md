@@ -210,9 +210,25 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
 An existing repo (`github.repo`) is the team's own: vending makes nothing in it, and its identities trust it the same
 way, so its workflows sign in from its `apply` environment and its pull requests.
 
-The workload repos are in the organization the vending repo is in: the pipeline's App token is for that one. The
-root's `landing_zone` output names the identities and the state. A workload starter, with a pipeline and the naming
-helper, comes next.
+**Its files.** After the apply that made it, vending's pipeline gives the repo mlz-core's workload starter
+(`starter/mlz-workload`), in one commit by the MLZ App (`python3 -m mlz workload-repos`, `tools/mlz/workload.py`):
+
+- `.github/workflows/mlz.yml`, which calls mlz-core's `workload.yml` at the release vending runs on. Every pull request
+  and every push to `main` plans, as the plan identity, from a read-only copy of the state; on `main` the apply then
+  waits for the team in `apply`, and applies, as the deploy identity, only the changes that plan showed. The scripts
+  are the role repos' own (`tools/ci/plan.sh`, `apply.sh`).
+- `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with an example named through
+  mlz-core's naming helper (`modules/naming`, `docs/naming.md`); a README.
+- **`mlz.auto.tfvars.json`**: the landing zone's key, subscription, region and naming values (the customer's code, the
+  workload's short name, the environment's and region's codes, the templates). Vending writes it again whenever they
+  change, so a team never types them.
+
+The starter goes in once, and adds only files that are not there: nothing the team wrote is replaced, and after that
+only `mlz.auto.tfvars.json` is written. None of it is in Terraform's state, so none of it is deleted when the landing
+zone is decommissioned and its repo archived.
+
+The workload repos are in the organization the vending repo is in: the pipeline's App tokens are for that one. The
+root's `landing_zone` output names the identities and the state.
 
 ## Operating notes
 

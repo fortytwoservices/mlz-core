@@ -1,0 +1,157 @@
+# A landing zone's workload repo's pipeline (starter/mlz-workload), which vending makes for each landing zone
+# (docs/vending.md). The repo's Terraform is at its top and reads mlz.auto.tfvars.json, the landing zone's values,
+# which vending keeps up to date. Every run plans, as the plan identity, from a copy of the state in the landing
+# zone's own account; on main, the apply then runs in the apply environment, as the deploy identity, once the
+# owning team approves, and only if its plan makes exactly the changes the reviewed one showed. The scripts are
+# role.yml's, with the role "workload" (tools/ci/lib.sh).
+name: mlz workload
+
+on:
+  workflow_call:
+
+permissions: {}
+
+env:
+  ARM_USE_OIDC: "true"
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+  TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+  CHECKPOINT_DISABLE: "1"
+  # Python runs from the repo's checkout, which a pull request controls: mlz-core's code and the standard library
+  # come first. Python 3.11 and later honour it.
+  PYTHONSAFEPATH: "1"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write       # signs in as the plan identity
+      pull-requests: write  # puts the plan on the pull request
+    outputs:
+      core-repository: ${{ steps.core.outputs.repository }}
+      core-ref: ${{ steps.core.outputs.ref }}
+      status: ${{ steps.plan.outputs.status }}
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the plan identity
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The caller pins mlz-core with uses: ...@<release>; job.workflow_sha is that release's commit, and the scripts
+      # come from there, never from the caller's repo, which a pull request controls (role.yml does the same).
+      - name: Find the mlz-core release
+        id: core
+        env:
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          if [[ ! $WORKFLOW_SHA =~ ^[0-9a-f]{40}$ || -z $WORKFLOW_REPOSITORY || $WORKFLOW_REPOSITORY == "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::GitHub did not say which mlz-core commit this workflow comes from (job.workflow_repository '$WORKFLOW_REPOSITORY', job.workflow_sha '$WORKFLOW_SHA')."
+            exit 1
+          fi
+          echo "$WORKFLOW_REPOSITORY ${WORKFLOW_REF#*@} at $WORKFLOW_SHA"
+          echo "repository=$WORKFLOW_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.core.outputs.repository }}
+          ref: ${{ steps.core.outputs.ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          .mlz-core/tools/ci/plan.sh workload workload
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Show the plan on the run page
+        if: steps.plan.outputs.status != '1'
+        run: cat .mlz/summary-workload.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.status != '1'
+        with:
+          name: mlz-workload-plan
+          path: |
+            .mlz/plan-workload.txt
+            .mlz/summary-workload.md
+            .mlz/changes-workload.txt
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Put the plan on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: .mlz-core/tools/ci/comment.sh workload "$STATUS"
+
+      - name: Result
+        env:
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: |
+          if [[ $STATUS == 1 ]]; then echo "::error::The plan failed."; exit 1; fi
+          if [[ $STATUS == 3 ]]; then echo "::error::The plan is refused; the plan above says why."; exit 1; fi
+
+  apply:
+    # main only, and only when the plan changes something. The apply environment waits for the owning team.
+    if: >-
+      github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.plan.outputs.status == '2'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: apply
+    permissions:
+      contents: read
+      id-token: write # signs in as the deploy identity, which only this environment may use
+    concurrency:
+      group: mlz-workload-apply
+      cancel-in-progress: false
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the deploy identity, set on the environment
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.core-repository }}
+          ref: ${{ needs.plan.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # The changes the reviewer saw; the apply makes exactly these or none.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-workload-plan
+          path: .mlz/reviewed/
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - name: Apply
+        run: .mlz-core/tools/ci/apply.sh workload workload
