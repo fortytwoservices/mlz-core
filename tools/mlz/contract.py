@@ -44,6 +44,7 @@ CONTRACTS = {
             "archetypes": "Where each kind of landing zone is placed.",
             "platform_subscriptions": "The platform's own subscriptions; no landing zone may use them.",
             "monitoring": "Where logs go.",
+            "naming": "customer.yaml's naming: the customer's code, the template and short names (mlz-core's defaults for the rest).",
         },
     },
     "platform": {

@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from . import firewall, install, platform, vending
+from . import firewall, install, naming, platform, vending
 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
@@ -176,6 +176,13 @@ def customer() -> dict:
             "in_sandboxes": {"description": "Whether sandboxes must tag their resource groups too.", "type": ["boolean", "null"]},
         }, "Tag policies. A key given here replaces the default's whole list.")),
         "policy_assignments_to_remove": or_empty({"description": "ALZ policy assignments to leave out, by archetype.", "type": "object", "propertyNames": {"enum": list(rules.ALZ_ARCHETYPES)}, "additionalProperties": strings}),
+        "naming": or_empty(mapping({
+            "org": text("The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).", pattern="^[a-z0-9]{2,4}$"),
+            "template": text(f"How names are made (default: {naming.TEMPLATE}). Tokens in braces, dashes and lower-case text; an empty {{purpose}} drops out."),
+            "templates": or_empty({"description": "A template for one type, for the 24-character ones (storage_account, key_vault).", "type": "object", "propertyNames": {"enum": sorted(naming.RULES)}, "additionalProperties": {"type": "string"}}),
+            "environments": or_empty({"description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.ENVIRONMENTS.items()) + ").", "type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{1,4}$"}}),
+            "regions": or_empty({"description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.", "type": "object", "propertyNames": {"enum": sorted(naming.REGION_CODES)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
+        }, "How mlz-core names what it creates (docs/naming.md).")),
     }
     return {
         "$schema": DRAFT,

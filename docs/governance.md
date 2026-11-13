@@ -64,6 +64,8 @@ most 24.
   governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones,
   Sandboxes and Decommissioned, the groups it creates (a decommissioned landing zone's subscription moves to
   Decommissioned, and its stack still plans there). Without the contract, no such rights are granted.
+- **Naming:** `customer.yaml`'s `naming:` section (the customer's code, the template, short names) is checked
+  here, where it is written, and published in the contract as written (`docs/naming.md`).
 - `contract` output: what platform and vending read, written as `_generated/governance.yaml` in their repos by `python3 -m mlz contract governance`.
 
 ## Tested

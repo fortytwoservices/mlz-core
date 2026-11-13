@@ -121,6 +121,23 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(root["policy_assignments_to_remove"], [])
         self.assertTrue((rl.GOVERNANCE / "lib/policy_definitions/Deny-RG-Without-Tag.alz_policy_definition.json").exists())
 
+    def test_naming_is_checked_where_it_is_written(self):
+        config, _ = self.render(self.BASE + "naming:\n  org: dmo\n  environments:\n    hotfix: hf\n")
+        self.assertEqual(config["naming"], {"org": "dmo", "environments": {"hotfix": "hf"}})
+        self.assertEqual(self.render(self.BASE)[0]["naming"], {})  # none: an empty one, for the contract
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(self.BASE + "naming:\n  org: democorp\n  template: '{type}-{name}'\n")
+        message = str(caught.exception)
+        self.assertIn("customer.yaml: naming.org is 'democorp'; it must be 2 to 4 lower-case letters and digits.", message)
+        self.assertIn("{name} is not a token", message)
+        # A root ID too long to be the customer's code in names needs naming.org once the section is there; without
+        # it nothing is asked of the root ID yet.
+        long = self.BASE.replace("root_id: demo", "root_id: contoso-prod")
+        self.render(long)
+        with self.assertRaises(rl.RenderError) as caught:
+            self.render(long + "naming:\n  environments:\n    hotfix: hf\n")
+        self.assertIn("set naming.org", str(caught.exception))
+
     def test_an_unknown_top_level_setting_is_refused(self):
         # A typo for allowed_regions, which would otherwise be ignored and the default regions used.
         with self.assertRaises(rl.RenderError) as caught:
