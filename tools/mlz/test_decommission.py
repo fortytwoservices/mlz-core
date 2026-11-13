@@ -14,17 +14,31 @@ from mlz.vending import IP_PLAN, allocate, render_plan
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
 HUB = "/subscriptions/c/resourceGroups/rg-demo-hub-nwe/providers/Microsoft.Network/virtualNetworks/vnet-demo-hub-nwe"
 POLICY = "/subscriptions/c/resourceGroups/rg-demo-hub-nwe/providers/Microsoft.Network/firewallPolicies/afwp-demo-hub-nwe"
+OTHER_HUB = "/subscriptions/c/resourceGroups/rg-demo-hub-sdc/providers/Microsoft.Network/virtualNetworks/vnet-demo-hub-sdc"
+OTHER_POLICY = "/subscriptions/c/resourceGroups/rg-demo-hub-sdc/providers/Microsoft.Network/firewallPolicies/afwp-demo-hub-sdc"
 
 
 class FakeAzure:
-    """The hub's firewall policy's rule collection groups, as Azure lists them."""
+    """Each hub's firewall policy's rule collection groups, as Azure lists them: two to a page, the next page by
+    a nextLink that already has its query string."""
 
-    def __init__(self, groups=None):
-        self.groups, self.read = groups or [], []
+    def __init__(self, groups=None, other=None):
+        self.groups, self.other, self.read = groups or [], other or [], []
+
+    def page(self, groups, url, start):
+        rest = groups[start + 2:]
+        return {"value": groups[start:start + 2], **({"nextLink": f"{url}?api-version=2025-07-01&$skiptoken={start + 2}"} if rest else {})}
 
     def resource(self, resource_id, api_version):
         self.read.append((resource_id, api_version))
-        return {"value": self.groups} if resource_id == f"{POLICY}/ruleCollectionGroups" else None
+        found = {f"{POLICY}/ruleCollectionGroups": self.groups, f"{OTHER_POLICY}/ruleCollectionGroups": self.other}
+        return self.page(found[resource_id], resource_id, 0) if resource_id in found else None
+
+    def request(self, method, url):
+        self.read.append((method, url))
+        base, _, query = url.partition("?")
+        groups = self.groups if base.startswith(POLICY) else self.other
+        return self.page(groups, base, int(query.rsplit("$skiptoken=", 1)[1]))
 
 
 def group(name, *collections, state="Succeeded"):
@@ -76,7 +90,7 @@ class DecommissionTest(unittest.TestCase):
         self.write("landing-zones/payments/dev.yaml", DEV)
         plan, _, retired = allocate(self.repo, PLATFORM)
         self.write(IP_PLAN, render_plan(plan, retired))
-        self.write("_generated/platform.yaml", f"regions:\n  norwayeast:\n    hub_network: {HUB}\n")
+        self.write("_generated/platform.yaml", f"regions:\n  norwayeast:\n    hub_network: {HUB}\n  swedencentral:\n    hub_network: {OTHER_HUB}\n")
         self.azure = FakeAzure()
         self.printed = []
 
@@ -127,10 +141,11 @@ class DecommissionTest(unittest.TestCase):
         # From the commit its files were worked out from, not whatever main is now.
         self.assertEqual(github.bases, [(REPOS["vending"], "run-sha")])
 
-    def wait_reason(self, groups):
-        """What a decommissioned payments-dev's release waits for, with these groups in the hub's policy."""
+    def wait_reason(self, groups, other=()):
+        """What a decommissioned payments-dev's release waits for, with these groups in its hub's policy and the
+        other hub's."""
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
-        self.azure.groups, self.printed = groups, []
+        self.azure.groups, self.azure.other, self.printed = groups, list(other), []
         github = FakeGitHub()
         self.cleanup(github)
         return None if github.pulls else self.printed[0]
@@ -144,13 +159,23 @@ class DecommissionTest(unittest.TestCase):
         named = collection("platform-network", {"name": "to-dev", "sourceAddresses": ["10.100.0.0/16"], "destinationAddresses": [dev]})
         self.assertIn(f"platform/platform-network/to-dev, from or to {dev}", self.wait_reason([group("platform", named)]))
         # A group whose change has not finished, or failed.
-        self.assertIn("rule collection group lz-07 is Updating", self.wait_reason([group("lz-07", other, state="Updating")]))
+        self.assertIn("rule collection group norwayeast: lz-07 is Updating", self.wait_reason([group("lz-07", other, state="Updating")]))
         self.assertIn("is Failed", self.wait_reason([group("lz-07", other, state="Failed")]))
         # Gone: other landing zones' rules may stay, and platform rules from the whole landing zone range.
         broad = collection("platform-network", {"name": "updates", "sourceAddresses": ["10.100.0.0/16"], "destinationAddresses": ["AzureCloud"]})
         self.assertIsNone(self.wait_reason([group("lz-07", other), group("platform", broad)]))
         self.assertIsNone(self.wait_reason([]))  # no group left at all
-        self.assertEqual(self.azure.read[-1], (f"{POLICY}/ruleCollectionGroups", "2025-07-01"))
+        self.assertIn((f"{POLICY}/ruleCollectionGroups", "2025-07-01"), self.azure.read)
+
+    def test_every_hub_and_every_page_is_looked_at(self):
+        dev = read_yaml(self.repo / IP_PLAN)["payments-dev"]["range"]
+        named = collection("platform-network", {"name": "to-dev", "destinationAddresses": [dev]})
+        # Another region's hub still has a shared rule to it.
+        self.assertIn(f"swedencentral: platform/platform-network/to-dev, from or to {dev}", self.wait_reason([], [group("platform", named)]))
+        # On the third page, fetched by its nextLink as Azure gave it, query string and all.
+        clean = [group(f"lz-{n:02d}") for n in range(4)]
+        self.assertIn("norwayeast: lz-late/platform-network/to-dev", self.wait_reason(clean + [group("lz-late", named)]))
+        self.assertIn(("GET", f"{POLICY}/ruleCollectionGroups?api-version=2025-07-01&$skiptoken=4"), self.azure.read)
 
     def test_the_workload_s_last_landing_zone_takes_its_workload_file_too(self):
         (self.repo / "landing-zones/payments/prod.yaml").unlink()

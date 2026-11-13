@@ -27,32 +27,33 @@ RULES = "firewall/landing-zones"
 RULE_COLLECTION_GROUPS = "2025-07-01"  # the API version the platform's rules root writes them with
 
 
-def rules_in_azure(azure, platform: dict, region: str, key: str, cidr: str) -> str | None:
-    """Why the landing zone's rules may still be in the hub's firewall policy, or None once they are surely gone:
-    no rule collection group is still being changed or failed its change, none holds <key>-network or
-    <key>-application, and no rule anywhere still has its range as a source or destination (a rule elsewhere
-    naming it by key). Its exact range, not any overlap: the platform's own rules come from whole landing zone
-    ranges. The hub's policy is named as its network is, afwp- for vnet- (the platform root's naming)."""
-    hub = platform["regions"][region]["hub_network"]
-    prefix, _, network = hub.rpartition("/providers/Microsoft.Network/virtualNetworks/")
-    url = f"{prefix}/providers/Microsoft.Network/firewallPolicies/{network.replace('vnet-', 'afwp-', 1)}/ruleCollectionGroups"
-    groups = []
-    while url:
-        page = azure.resource(url, RULE_COLLECTION_GROUPS) or {}
-        groups += page.get("value") or []
-        url = page.get("nextLink")
+def rules_in_azure(azure, platform: dict, key: str, cidr: str) -> str | None:
+    """Why the landing zone's rules may still be in a hub's firewall policy, or None once they are surely gone
+    from every hub: the shared rules, and rules naming it by key, are in every region's policy, not only its
+    own. In none is a rule collection group still being changed or failed its change, holding <key>-network or
+    <key>-application, or holding a rule with the landing zone's range as a source or destination. Its exact
+    range, not any overlap: the platform's own rules come from whole landing zone ranges. A hub's policy is
+    named as its network is, afwp- for vnet- (the platform root's naming)."""
     own = {f"{key}-network", f"{key}-application"}
-    for group in groups:
-        properties = group.get("properties") or {}
-        state = properties.get("provisioningState")
-        if state != "Succeeded":
-            return f"rule collection group {group.get('name')} is {state or 'in an unknown state'}"
-        for collection in properties.get("ruleCollections") or []:
-            if collection.get("name") in own:
-                return f"{group.get('name')}/{collection['name']}"
-            for rule in collection.get("rules") or []:
-                if cidr in (rule.get("sourceAddresses") or []) + (rule.get("destinationAddresses") or []):
-                    return f"{group.get('name')}/{collection.get('name')}/{rule.get('name')}, from or to {cidr}"
+    for region, hub in sorted(platform["regions"].items()):
+        prefix, _, network = hub["hub_network"].rpartition("/providers/Microsoft.Network/virtualNetworks/")
+        policy = f"{prefix}/providers/Microsoft.Network/firewallPolicies/{network.replace('vnet-', 'afwp-', 1)}"
+        page = azure.resource(f"{policy}/ruleCollectionGroups", RULE_COLLECTION_GROUPS) or {}
+        groups = page.get("value") or []
+        while page.get("nextLink"):  # already carries its api-version and continuation
+            page = azure.request("GET", page["nextLink"]) or {}
+            groups += page.get("value") or []
+        for group in groups:
+            properties, name = group.get("properties") or {}, f"{region}: {group.get('name')}"
+            state = properties.get("provisioningState")
+            if state != "Succeeded":
+                return f"rule collection group {name} is {state or 'in an unknown state'}"
+            for collection in properties.get("ruleCollections") or []:
+                if collection.get("name") in own:
+                    return f"{name}/{collection['name']}"
+                for rule in collection.get("rules") or []:
+                    if cidr in (rule.get("sourceAddresses") or []) + (rule.get("destinationAddresses") or []):
+                        return f"{name}/{collection.get('name')}/{rule.get('name')}, from or to {cidr}"
     return None
 
 
@@ -100,7 +101,7 @@ def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: st
             out(f"decommission: {key}'s firewall rules go first, in {url}; its own pull request follows once that is merged")
             continue
         zone = zones[key]
-        still = rules_in_azure(azure, platform, zone["settings"]["location"], key, str(plan[key]["range"]))
+        still = rules_in_azure(azure, platform, key, str(plan[key]["range"]))
         if still:
             out(f"decommission: {key}'s rules may still be in Azure ({still}): its file and range go once the platform's apply has taken them out")
             continue
