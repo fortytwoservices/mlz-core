@@ -46,9 +46,43 @@ module "virtual_network" {
       address_prefix         = prefix
       network_security_group = { id = azapi_resource.network_security_group[name].id }
       route_table            = { id = module.route_table.resource_id }
+      # The subnet GitHub's hosted runners join holds nothing else.
+      delegations = try(var.github_runners.subnet, null) == name ? [{
+        name               = "GitHub.Network.networkSettings"
+        service_delegation = { name = "GitHub.Network/networkSettings" }
+      }] : null
     }
   }
   tags = var.tags
+}
+
+# GitHub's side of the runners' subnet: GitHub joins its hosted runners to the subnet through it, and the
+# organization's network configuration names it by its GitHubId tag (mlz install runners). Azure refuses to
+# delete it while that configuration still uses it, so the configuration goes first. Shaped as GitHub's own
+# Terraform has it (github/terraform-github-runner-vnet).
+resource "azapi_resource" "github_network_settings" {
+  count = var.github_runners == null ? 0 : 1
+
+  type                      = "GitHub.Network/networkSettings@2024-04-02"
+  name                      = var.github_runners.name
+  parent_id                 = var.parent_id
+  location                  = var.location
+  schema_validation_enabled = false # AzAPI has no schema for GitHub.Network
+  body = {
+    properties = {
+      businessId = var.github_runners.business_id
+      subnetId   = module.virtual_network.subnets[var.github_runners.subnet].resource_id
+    }
+  }
+  response_export_values = ["tags.GitHubId"]
+
+  lifecycle {
+    ignore_changes = [tags] # GitHub writes GitHubId there
+    precondition {
+      condition     = can(regex("^[1-9][0-9]*$", var.github_runners.business_id))
+      error_message = "github_business_id is the GitHub organization's ID: the pipeline passes GITHUB_REPOSITORY_OWNER_ID; when planning by hand, pass -var github_business_id=<id> (gh api orgs/<organization> --jq .id)."
+    }
+  }
 }
 
 # The hubs have no VPN or ExpressRoute gateway yet, so neither side uses one.

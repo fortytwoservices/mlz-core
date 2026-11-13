@@ -117,9 +117,10 @@ class FakeGitHub:
 class FakeTerraform:
     """Answers like terraform would. migrate_failures: how many state moves fail before one succeeds."""
 
-    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None):
+    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False):
         self.work, self.root = work, work / "bootstrap" / "terraform"
         self.plan_status, self.migrate_failures = plan_status, migrate_failures
+        self.state_endpoint = state_endpoint
         self.subjects = subjects or {f"{role}-plan": f"repo:acme@1/mlz-{role}@2:pull_request" for role in install.ROLES}
         self.calls: list[tuple] = []
 
@@ -140,6 +141,7 @@ class FakeTerraform:
         return json.dumps({
             "backend_config": 'storage_account_name = "stacmestate1234"\ncontainer_name = "bootstrap"\nkey = "bootstrap.tfstate"\n',
             "oidc_subjects": self.subjects,
+            "state_private_endpoint": self.state_endpoint,
             "contract": {"top_management_group": "acme", "state": {"subscription": "00000000-0000-0000-0000-000000000001",
                          "resource_group": "rg-acme-bootstrap-nwe", "storage_account": "stacmestate1234"}, "identities": {}},
         }[name])
@@ -322,6 +324,14 @@ class InstallTest(unittest.TestCase):
         install.step_bootstrap(FakeGitHub(), terraform, self.folder, out=self.out)
         self.assertIn(f"-backend-config={self.work / 'backend.hcl'}", terraform.calls[0])
         self.assertEqual([c[0] for c in terraform.calls], ["init", "plan"])
+
+    def test_it_says_whether_the_state_has_its_private_endpoint(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=0), self.folder, out=self.out)
+        self.assertIn("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.", self.printed)
+        install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=0, state_endpoint=True), self.folder, out=self.out)
+        self.assertIn("bootstrap: the state account has its private endpoint in management's network.", self.printed)
 
     def test_the_plan_waits_for_a_yes(self):
         terraform = FakeTerraform(self.work)

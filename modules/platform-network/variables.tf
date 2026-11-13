@@ -58,3 +58,13 @@ variable "tags" {
   description = "Tags on everything the module creates."
   nullable    = false
 }
+
+variable "github_runners" {
+  type = object({
+    subnet      = string
+    name        = string
+    business_id = string
+  })
+  description = "Where GitHub's hosted runners join the network: the subnet delegated to GitHub, the network settings resource's name, and the GitHub organization's ID. Null for none."
+  default     = null
+}

@@ -53,3 +53,8 @@ output "backend_config" {
     key                  = "bootstrap.tfstate"
   EOT
 }
+
+output "state_private_endpoint" {
+  description = "Whether the state account has its private endpoint in management's network. It comes with the bootstrap's first run after the platform has built that network and the hub's blob zone."
+  value       = local.state_endpoint
+}

@@ -14,3 +14,9 @@ variable "network" {
     error_message = "`network` is management or identity."
   }
 }
+
+variable "github_business_id" {
+  type        = string
+  description = "The ID of the customer's GitHub organization, for GitHub's hosted runners in management's network. The pipeline passes it; by hand: gh api orgs/<organization> --jq .id."
+  default     = null
+}

@@ -55,6 +55,8 @@ output "platform_networks" {
       route_table      = format("rt-${local.suffix}", network)
       peering_to_hub   = "peer-${network}-to-hub"
       peering_from_hub = "peer-hub-to-${network}" # never a landing zone's: a landing zone key has a hyphen
+      # GitHub.Network/networkSettings, through which GitHub's hosted runners join the network (management's).
+      github_network_settings = format("ghns-${local.suffix}", network)
       # Per subnet: format(subnet, "<subnet name>"), format(network_security_group, "<subnet name>").
       subnet                 = "snet-%s"
       network_security_group = "nsg-${var.root_id}-${network}-%s-${local.region}"

@@ -2,7 +2,9 @@
 
     python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters
     python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo
-    python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked
+    python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked;
+                                                                      again after the platform's first apply, for the
+                                                                      state account's private endpoint
     python3 -m mlz install handover  --settings <dir> --tenant <id>   the platform subscriptions into the top group
     python3 -m mlz install publish   --settings <dir>                 bootstrap.yaml offered to the governance repo
 
@@ -242,6 +244,10 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     if local:
         move_state(terraform, backend, pending, override, out, wait)
     check_subjects(github, json.loads(terraform.output("oidc_subjects")), repositories(bootstrap), out)
+    if json.loads(terraform.output("state_private_endpoint")):
+        out("bootstrap: the state account has its private endpoint in management's network.")
+    else:
+        out("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.")
     out("bootstrap: done. Next: mlz install handover, then mlz install publish.")
 
 
