@@ -55,7 +55,7 @@ class ExplainTest(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(rows["network.size"], ("24", "mlz-core's default"))
         self.assertEqual(rows["network.subnets.default"][0], "26")
-        self.assertEqual(rows["github"], ("not set", "no repo of its own"))
+        self.assertEqual(rows["github"], ("no repo", "no github.organization"))
 
     def test_names_and_where_they_come_from(self):
         rows = self.rows()
@@ -87,6 +87,16 @@ class ExplainTest(unittest.TestCase):
         found = explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), {**GOVERNANCE, "naming": {"environments": {"prod": "PROD"}}}, PLATFORM)
         self.assertTrue(found)
         self.assertEqual(explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), GOVERNANCE, PLATFORM), [])
+
+    def test_the_workload_repo_vending_makes(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.allocate()
+        rows = self.rows()
+        self.assertEqual(rows["github.repo"], ("made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
+        self.assertEqual(rows["name repository"], ("payments-prod", "recorded in _generated/names.yaml"))
+        self.assertEqual(rows["name state_account"], ("stdemopaystatepdnwe01", "recorded in _generated/names.yaml"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  create: false\n")
+        self.assertEqual(self.rows()["github"], ("no repo", "github.create is false"))
 
     def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)

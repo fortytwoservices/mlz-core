@@ -89,8 +89,11 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
     if network.get("subnets") is None:
         default = max(26, size) if isinstance(size, int) else 26
         filled.append(("network.subnets.default", str(default), "mlz-core's default: one subnet, a /26 or the whole of a smaller range"))
-    if not isinstance(settings.get("github"), dict) or not settings["github"].get("repo"):
-        filled.append(("github", "not set", "no repo of its own"))
+    github = settings.get("github") if isinstance(settings.get("github"), dict) else {}
+    if vending.creates_repo(lz):
+        filled.append(("github.repo", "made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
+    elif not github.get("repo"):
+        filled.append(("github", "no repo", "github.create is false" if github.get("create") is False else "no github.organization"))
 
     worked = []
     archetype, location = settings.get("archetype"), settings.get("location")
@@ -126,7 +129,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         recorded = vending.flat(everything.get(key, {}))
         names, given = landing_zone_names(key, lz, entry, governance, everything, [])  # problems() reports what stops one
         fresh = vending.flat(landing_zone_names(key, lz, entry, governance, {}, [])[1])  # the template's, nothing kept
-        for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k == "network_security_groups"}).items():
+        for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k in (vending.REPOSITORY, "network_security_groups")}).items():
             if not value:
                 continue
             label = f"name NSG of {item.split('.', 1)[1]}" if item.startswith("network_security_groups.") else f"name {item}"

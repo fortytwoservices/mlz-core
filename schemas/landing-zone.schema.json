@@ -101,7 +101,7 @@
       "additionalProperties": false
     },
     "github": {
-      "description": "The landing zone's own repo.",
+      "description": "The landing zone's workload repo (docs/vending.md).",
       "type": [
         "object",
         "null"
@@ -109,13 +109,22 @@
       "properties": {
         "organization": {
           "type": "string",
-          "description": "The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.",
+          "description": "The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.",
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
         "repo": {
           "type": "string",
-          "description": "The landing zone's repo, whose main branch signs in as its deploy identity.",
+          "description": "An existing repo to use instead of one vending makes: vending only trusts it.",
           "pattern": "^[A-Za-z0-9._-]{1,100}$"
+        },
+        "create": {
+          "description": "false: no repo for this landing zone, for example a sandbox. Vending makes one by default once github.organization is set.",
+          "type": "boolean"
+        },
+        "team": {
+          "type": "string",
+          "description": "The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in _workload.yaml.",
+          "pattern": "^[a-z0-9]([a-z0-9_-]{0,98}[a-z0-9])?$"
         }
       },
       "additionalProperties": false
@@ -155,6 +164,18 @@
         "budget": {
           "type": "string",
           "description": "An explicit name for the budget, instead of the template's."
+        },
+        "plan_identity": {
+          "type": "string",
+          "description": "An explicit name for the user assigned identity, instead of the template's."
+        },
+        "state_resource_group": {
+          "type": "string",
+          "description": "An explicit name for the resource group, instead of the template's."
+        },
+        "state_account": {
+          "type": "string",
+          "description": "An explicit name for the storage account, instead of the template's."
         },
         "network_security_groups": {
           "description": "An explicit name for a subnet's NSG, by the subnet's name.",

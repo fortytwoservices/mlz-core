@@ -36,8 +36,15 @@ NAMED = {
     "route_table": ("route_table", None),
     "deploy_identity": ("user_assigned_identity", None),
     "budget": ("budget", None),
+    # The workload repo's (docs/vending.md): its plan identity, and its Terraform state, in a group of its own that
+    # decommissioning keeps, since the team's resources may outlive the landing zone's.
+    "plan_identity": ("user_assigned_identity", "plan"),
+    "state_resource_group": ("resource_group", "state"),
+    "state_account": ("storage_account", "state"),
 }
-SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
+# Recorded beside them: the workload repo vending creates, named by customer.yaml's naming.repository.
+REPOSITORY = "repository"
+SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo", "create", "team"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 # 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
 SUBNET_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$")
@@ -45,6 +52,7 @@ GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GITHUB_ORGANIZATION = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 GITHUB_REPO = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+GITHUB_TEAM = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,98}[a-z0-9])?$")  # a team's slug, as in its URL
 DEFAULT_SIZE = 24
 # Azure: 50 tags on a resource, of which mlz-core sets five; names up to 512, values up to 256.
 EXTRA_TAGS, TAG_NAME_LENGTH, TAG_VALUE_LENGTH = 45, 512, 256
@@ -231,6 +239,14 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
         problems.append(f"{at('github', 'repo')}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
     if repo is not None and organization is None:
         problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
+    create, team = github.get("create"), github.get("team")
+    if create is not None and not isinstance(create, bool):
+        problems.append(f"{at('github', 'create')}: github.create is true or false, without quotes.")
+    elif create is True and repo is not None:
+        problems.append(f"{at('github', 'create')}: github.repo names an existing repo, which vending never creates; "
+                        "leave out github.repo to have vending create one, or github.create to use that one.")
+    if team is not None and not (isinstance(team, str) and GITHUB_TEAM.fullmatch(team)):
+        problems.append(f"{at('github', 'team')}: github.team {team!r} is a GitHub team's slug, as in its URL, for example payments-devs.")
 
 
 def wanted_network(lz: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
@@ -520,7 +536,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 "dns_servers": region["dns_servers"],
                 "routes": route_table_routes(region.get("spoke_routes") or []),
             },
-            "github": {"organization": github["organization"], "repo": github["repo"]} if github.get("repo") else None,
+            "github": github_config(lz, names[key]),
             "decommission": decommissioned(lz),
             "names": names[key],
         }
@@ -536,6 +552,21 @@ def short_name_problems(lz: dict) -> list[str]:
         return [f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
                 "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md)."]
     return []
+
+
+def creates_repo(lz: dict) -> bool:
+    """Whether vending makes the landing zone's workload repo: it does for every landing zone once github.organization
+    is set, unless github.repo names an existing one, or github.create is false."""
+    github = lz["settings"].get("github")
+    return isinstance(github, dict) and bool(github.get("organization")) and github.get("repo") is None and github.get("create") is not False
+
+
+def github_config(lz: dict, names: dict) -> dict | None:
+    """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None."""
+    github = lz["settings"].get("github") or {}
+    if not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
+        return None
+    return {"organization": github["organization"], "repo": github.get("repo") or names[REPOSITORY], "create": creates_repo(lz), "team": github.get("team")}
 
 
 def short_name(lz: dict) -> str:
@@ -578,6 +609,8 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
                 return held[item]
             if template and env not in settings.environments:  # once, however many names need it
                 problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
+            elif template and kind == REPOSITORY:  # a GitHub repo: long names, from naming.repository
+                return naming.repository_name(settings, lz["workload"], env)
             elif template:
                 return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
             elif settings is None and fits:
@@ -594,6 +627,11 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         names[item] = one(item, kind, purpose, explicit, kept)
         if item not in explicit and names[item] is not None:
             entry[item] = names[item]
+    # The workload repo, when vending makes it (an existing one, github.repo, is the landing zone's own to name).
+    if creates_repo(lz):
+        names[REPOSITORY] = one(REPOSITORY, REPOSITORY, None, {}, kept)
+        if names[REPOSITORY] is not None:
+            entry[REPOSITORY] = names[REPOSITORY]
     held = kept.get("network_security_groups") or {}
     names["network_security_groups"] = {}
     for subnet in subnets:
@@ -602,7 +640,8 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             entry.setdefault("network_security_groups", {})[subnet] = names["network_security_groups"][subnet]
     # Two of one type side by side need names apart, which a template without {purpose} would not give: both
     # resource groups in one subscription, or every NSG in one resource group. Azure ignores case in both.
-    for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group")]),
+    for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group", "state_resource_group")]),
+                        ("identities", [(n, names[n]) for n in ("deploy_identity", "plan_identity")]),
                         ("NSGs", [(f"network_security_groups.{s}", v) for s, v in names["network_security_groups"].items()])):
         seen: dict[str, str] = {}
         for item, value in items:
@@ -623,10 +662,14 @@ def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
     parsed = {}
     for key, entry in recorded.items():
         try:
-            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {"network_security_groups"}:
+            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {REPOSITORY, "network_security_groups"}:
                 raise ValueError  # the allocator writes {} for a landing zone without names, never null or a list
             # In the order the allocator writes them, whatever order the file was read in.
             parsed[str(key)] = {item: naming.check(kind, entry[item]) for item, (kind, _) in NAMED.items() if item in entry}
+            if REPOSITORY in entry:
+                if not (isinstance(entry[REPOSITORY], str) and naming.GITHUB_REPOSITORY.fullmatch(entry[REPOSITORY])):
+                    raise ValueError
+                parsed[str(key)][REPOSITORY] = entry[REPOSITORY]
             if "network_security_groups" in entry:
                 if not isinstance(entry["network_security_groups"], dict) or not entry["network_security_groups"]:
                     raise ValueError  # the allocator leaves the key out rather than write it empty

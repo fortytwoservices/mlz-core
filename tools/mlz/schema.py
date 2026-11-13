@@ -97,9 +97,11 @@ def landing_zone() -> dict:
             }),
         }, "The spoke network. Its addresses come from the IP allocator, in _generated/ip-plan.yaml, never from here.")),
         "github": or_empty(mapping({
-            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
-            "repo": text("The landing zone's repo, whose main branch signs in as its deploy identity.", pattern=pattern(vending.GITHUB_REPO)),
-        }, "The landing zone's own repo.")),
+            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+            "repo": text("An existing repo to use instead of one vending makes: vending only trusts it.", pattern=pattern(vending.GITHUB_REPO)),
+            "create": {"description": "false: no repo for this landing zone, for example a sandbox. Vending makes one by default once github.organization is set.", "type": "boolean"},
+            "team": text("The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in _workload.yaml.", pattern=pattern(vending.GITHUB_TEAM)),
+        }, "The landing zone's workload repo (docs/vending.md).")),
         "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.", pattern="^[a-z0-9]{2,5}$"),
         "names": or_empty(mapping({
             **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
@@ -188,6 +190,7 @@ def customer() -> dict:
             "templates": or_empty({"description": "A template for one type, for the 24-character ones (storage_account, key_vault).", "type": "object", "propertyNames": {"enum": sorted(naming.RULES)}, "additionalProperties": {"type": "string"}}),
             "environments": or_empty({"description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.ENVIRONMENTS.items()) + ").", "type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{1,4}$"}}),
             "regions": or_empty({"description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.", "type": "object", "propertyNames": {"enum": sorted(naming.REGION_CODES)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
+            "repository": text(f"How a landing zone's workload repo is named (default: {naming.REPOSITORY}), with long names: {{app}} the workload's folder, {{env}} the landing zone's file, {{org}} the customer's code. Both {{app}} and {{env}} are needed."),
             "platform": or_empty({"description": "A part of the platform to its short name in names, replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.PLATFORM.items()) + "). The platform's environment is prod.", "type": "object", "propertyNames": {"enum": list(naming.PLATFORM)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
         }, "How mlz-core names what it creates (docs/naming.md).")),
     }

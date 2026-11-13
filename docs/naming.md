@@ -62,6 +62,9 @@ landing zone's environment (its file name) and its region:
 | The identity's resource group | `id` | `rg-acme-pay-id-pd-nwe-01` |
 | The virtual network, the route table, the deploy identity, the budget | none | `vnet-acme-pay-pd-nwe-01` |
 | Each subnet's NSG | the subnet's name | `nsg-acme-pay-default-pd-nwe-01` |
+| The workload repo's plan identity | `plan` | `id-acme-pay-plan-pd-nwe-01` |
+| Its state's resource group and storage account | `state` | `rg-acme-pay-state-pd-nwe-01`, `stacmepaystatepdnwe01` |
+| The workload repo itself, when vending makes it | `customer.yaml`'s `naming.repository` | `payments-prod` |
 
 Subnets (`snet-<name>`) and peerings (`peer-<key>-to-hub`, `peer-hub-to-<key>`) are named inside their network,
 so they keep that pattern.
@@ -158,6 +161,7 @@ naming:
     westeurope: weu
   platform:                    # the platform's parts' short names, replacing mlz-core's
     hub: con
+  repository: "{app}-{env}"    # a landing zone's workload repo, with long names: payments-prod
 ```
 
 mlz-core's environments: `dev: dv`, `test: te`, `uat: ut`, `sit: st`, `qa: qa`, `preprod: pp`,
