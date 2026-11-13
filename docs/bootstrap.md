@@ -171,8 +171,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    merges it once it has checked and planned it, and the run on `main` that starts is governance's first
    deployment, which waits for its reviewer; the first run's order is in `docs/pipelines.md`.
 
-Each new landing zone's subscription is still handed over by hand, before its YAML is merged (the second
-command in `terraform output -raw handover`).
+Each new landing zone's subscription is handed over by hand, before its YAML is merged (the second command in
+`terraform output -raw handover`), unless vending makes it where `billing_scope` says (`docs/vending.md`).
 
 ### Private runners
 

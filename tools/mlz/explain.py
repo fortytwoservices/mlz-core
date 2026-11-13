@@ -18,7 +18,7 @@ from . import naming, vending
 from .files import SUFFIXES
 from .merge import ConfigError
 
-ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags")
+ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags")
 REQUIRED = ("owner", "cost_center", "archetype", "subscription", "location")
 WIDTH = 44  # a value longer than this puts its source on the next line
 
@@ -76,7 +76,11 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         ]
         layered.append((dotted(path), show(final[path]), source + (f", replacing {'; '.join(replaced)}" if replaced else "")))
 
-    filled = [(k, "not set", "required: set it in one of the layers") for k in REQUIRED if settings.get(k) in (None, "")]
+    # The subscription, unless vending makes it where billing_scope says.
+    filled = [(k, "not set", "required: set it in one of the layers") for k in REQUIRED
+              if settings.get(k) in (None, "") and not (k == "subscription" and vending.makes_subscription(lz))]
+    if vending.makes_subscription(lz):
+        filled.append(("subscription", "made by vending", f"none is handed over: vending's apply makes it, billed where billing_scope says ({vending.agreement(settings['billing_scope'])})"))
     budget, network = settings.get("budget"), settings.get("network")
     budget, network = budget if isinstance(budget, dict) else {}, network if isinstance(network, dict) else {}
     if budget.get("monthly") is None:
@@ -129,7 +133,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         recorded = vending.flat(everything.get(key, {}))
         names, given = landing_zone_names(key, lz, entry, governance, everything, [])  # problems() reports what stops one
         fresh = vending.flat(landing_zone_names(key, lz, entry, governance, {}, [])[1])  # the template's, nothing kept
-        for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k in (vending.REPOSITORY, "network_security_groups")}).items():
+        for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k in (vending.REPOSITORY, vending.SUBSCRIPTION, "network_security_groups")}).items():
             if not value:
                 continue
             label = f"name NSG of {item.split('.', 1)[1]}" if item.startswith("network_security_groups.") else f"name {item}"

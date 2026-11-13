@@ -52,6 +52,31 @@ run "live" {
     condition     = toset(keys(azapi_resource.state_role)) == toset(["plan", "deploy"])
     error_message = "The plan identity reads the state and the deploy identity writes it."
   }
+  assert {
+    condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000010" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000010" && length(terraform_data.made_subscription) == 0
+    error_message = "A subscription handed over is the one the landing zone's resources go in, and not one vending made."
+  }
+}
+
+run "made_subscription" {
+  command = plan
+  variables {
+    config_file = "tests/made-subscription.json"
+  }
+  # The new subscription's ID is Azure's, known once the alias is made: given here, as Azure would.
+  override_resource {
+    target          = module.vending.module.subscription[0].azapi_resource.subscription[0]
+    values          = { output = { properties = { subscriptionId = "00000000-0000-0000-0000-000000000020" } } }
+    override_during = plan
+  }
+  assert {
+    condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000020" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000020" && azapi_resource.state_resource_group.parent_id == "/subscriptions/00000000-0000-0000-0000-000000000020"
+    error_message = "A landing zone without a subscription gets the one vending makes, and its resources go in it."
+  }
+  assert {
+    condition     = length(terraform_data.made_subscription) == 1
+    error_message = "A subscription vending makes is guarded: a plan that would cancel it is refused."
+  }
 }
 
 run "decommissioned" {

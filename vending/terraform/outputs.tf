@@ -2,7 +2,7 @@ output "landing_zone" {
   description = "What the landing zone's repo and the platform need: its identities, its state, the network, and the subscription. No secrets."
   value = {
     key             = local.lz.key
-    subscription_id = local.lz.subscription_id
+    subscription_id = module.vending.subscription_id
     # None of these once decommissioned: nothing vending made is left.
     decommissioned = local.decommission
     deploy_identity = local.decommission ? null : {

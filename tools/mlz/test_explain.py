@@ -98,6 +98,18 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  create: false\n")
         self.assertEqual(self.rows()["github"], ("no repo", "github.create is false"))
 
+    def test_a_subscription_vending_makes(self):
+        ea = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + f"billing_scope: {ea}\n")
+        self.write("landing-zones/payments/prod.yaml", "budget: null\n")
+        self.allocate()
+        rows = self.rows()
+        self.assertEqual(rows["subscription"], ("made by vending", "none is handed over: vending's apply makes it, billed where billing_scope says (EA)"))
+        self.assertEqual(rows["billing_scope"], (ea, "landing-zones/_defaults/all.yaml"))
+        self.assertEqual(rows["name subscription"], ("sub-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
+        lz = vending.landing_zones(self.repo)["payments-prod"]
+        self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), GOVERNANCE, PLATFORM, vending.recorded_names(self.repo)), [])
+
     def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
         self.assertEqual(self.rows()["management group"], ("demo-decommissioned", "decommission: true; its plan destroys everything vending made"))

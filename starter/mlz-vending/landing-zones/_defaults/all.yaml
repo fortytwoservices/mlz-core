@@ -3,6 +3,10 @@
 # A complete landing zone is in _examples/, which vending skips. What each setting does: docs/vending.md
 # in mlz-core.
 
+# billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321
+#                                   # vending makes the subscription of a landing zone without one, billed
+#                                   # here: an EA enrollment account or an MCA invoice section
+
 # github:
 #   organization: demo-org          # where the landing zones' own repos are
 

@@ -1,6 +1,7 @@
 # payments in production, the landing zone payments-prod: one subscription, one network, one state.
 
-subscription: 00000000-0000-0000-0000-000000000005   # handed over to vending before this file is merged
+subscription: 00000000-0000-0000-0000-000000000005   # handed over to vending before this file is merged; without
+                                                     # it, vending makes one where billing_scope says
 budget:
   monthly: 2000                       # the alerts go to the owner
 network:

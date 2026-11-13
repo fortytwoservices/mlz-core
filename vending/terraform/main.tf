@@ -3,7 +3,8 @@ locals {
   # the hub to peer with, and every name, from the customer's template or the landing zone's own (docs/naming.md).
   lz = jsondecode(file(var.config_file))
 
-  subscription = "/subscriptions/${local.lz.subscription_id}"
+  # Handed over (subscription_id), or made here (subscription: its billing scope and name), known once it is made.
+  subscription = "/subscriptions/${module.vending.subscription_id}"
   names        = local.lz.names
   github       = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
 
@@ -111,7 +112,7 @@ data "azapi_client_config" "current" {}
 resource "github_actions_variable" "workload" {
   for_each = local.repo_made ? {
     AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
-    AZURE_SUBSCRIPTION_ID   = local.lz.subscription_id
+    AZURE_SUBSCRIPTION_ID   = module.vending.subscription_id
     AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
     TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
     TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
@@ -260,8 +261,14 @@ module "vending" {
   location         = local.lz.location
   enable_telemetry = false
 
-  # The subscription exists: it is placed and tagged, not created.
-  subscription_alias_enabled                        = false
+  # A subscription handed over is placed, not changed. One without is made where the billing scope says, by this
+  # apply's identity, which the customer's billing owner lets create subscriptions there (docs/vending.md); Azure
+  # makes it the subscription's owner. Made, it is named and tagged here, and never cancelled (made_subscription).
+  subscription_alias_enabled                        = local.lz.subscription != null
+  subscription_alias_name                           = try(local.lz.subscription.name, null)
+  subscription_display_name                         = try(local.lz.subscription.name, null)
+  subscription_billing_scope                        = try(local.lz.subscription.billing_scope, null)
+  subscription_workload                             = local.lz.subscription == null ? null : "Production"
   subscription_id                                   = local.lz.subscription_id
   subscription_management_group_association_enabled = true
   subscription_management_group_id                  = local.lz.management_group_id
@@ -377,5 +384,16 @@ module "vending" {
         }
       }
     }
+  }
+}
+
+# The sub-vending module cancels a subscription it made once it no longer makes it: a landing zone given
+# subscription: <its ID> after vending made its subscription would have it cancelled. This refuses that plan
+# ("Instance cannot be destroyed"): a subscription vending made stays vending's, decommissioned or not (docs/vending.md).
+resource "terraform_data" "made_subscription" {
+  for_each = local.lz.subscription == null ? {} : { made = true }
+
+  lifecycle {
+    prevent_destroy = true
   }
 }

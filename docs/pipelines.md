@@ -138,13 +138,14 @@ pinned by commit in `role.yml`).
 ## The first run
 
 The roles depend on each other's contracts, so a new customer goes in this order. The contracts move on by
-themselves; what a person does is approve each apply, and hand over landing zone subscriptions.
+themselves; what a person does is approve each apply, and hand over the landing zone subscriptions vending does
+not make.
 
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
 2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
    contract to vending.
 3. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
-   first (`docs/bootstrap.md`).
+   first (`docs/bootstrap.md`), or made by vending where `billing_scope` says (`docs/vending.md`).
 
 From then on, each repo's pull requests and merges run on their own.

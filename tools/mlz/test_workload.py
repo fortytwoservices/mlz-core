@@ -11,7 +11,7 @@ from pathlib import Path
 
 from mlz import workload
 
-WORKLOAD = {"landing_zone": "payments-prod", "subscription_id": "33333333-3333-3333-3333-333333333333", "location": "norwayeast",
+WORKLOAD = {"landing_zone": "payments-prod", "location": "norwayeast",
             "org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}", "templates": {}}
 
 

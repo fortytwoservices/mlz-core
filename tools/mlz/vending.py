@@ -26,7 +26,17 @@ from .yamlout import dump
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags", "decommission", "short_name", "names"}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names"}
+# Where a subscription vending makes is billed (docs/vending.md): an EA enrollment account, or an MCA invoice section.
+# An MPA customer's (CSP) is Fortytwo's Partner Center's to make, not the customer's identities'.
+BILLING_ACCOUNT = r"/providers/Microsoft\.Billing/billingAccounts/[^/]+"
+BILLING_SCOPES = {
+    "EA": re.compile(BILLING_ACCOUNT + r"/enrollmentAccounts/[^/]+"),
+    "MCA": re.compile(BILLING_ACCOUNT + r"/billingProfiles/[^/]+/invoiceSections/[^/]+"),
+    "MPA": re.compile(BILLING_ACCOUNT + r"/customers/[^/]+"),
+}
+# Recorded beside the landing zone's other names: the subscription vending makes, its alias and display name.
+SUBSCRIPTION = "subscription"
 # What vending names in a landing zone from the customer's template (docs/naming.md), by the config's key: the type,
 # and the purpose that tells apart two of one type. An explicit name under names: in the landing zone's file wins.
 NAMED = {
@@ -169,9 +179,20 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     problems += short_name_problems(lz)
     if "decommission" in s and s["decommission"] is not True:
         problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
-    for required in ("owner", "cost_center", "archetype", "subscription", "location"):
+    for required in ("owner", "cost_center", "archetype", "location"):
         if s.get(required) in (None, ""):
             problems.append(f"{where}: {required} is required (set it here or in a layer above).")
+    # A subscription handed over, or one vending makes where it is billed (docs/vending.md).
+    if s.get("subscription") in (None, "") and s.get("billing_scope") in (None, ""):
+        problems.append(f"{where}: subscription is required, or billing_scope for vending to make one (set either here or in a layer above).")
+    billing = s.get("billing_scope")
+    if billing not in (None, "") and agreement(billing) is None:
+        problems.append(f"{at('billing_scope')}: billing_scope {billing!r} is an EA enrollment account "
+                        "(/providers/Microsoft.Billing/billingAccounts/<id>/enrollmentAccounts/<id>) or an MCA invoice section "
+                        "(.../billingAccounts/<id>/billingProfiles/<id>/invoiceSections/<id>).")
+    elif agreement(billing) == "MPA":
+        problems.append(f"{at('billing_scope')}: a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center, "
+                        "not by vending: make it there, then hand it over with subscription: <id> (docs/vending.md).")
     for single in ("owner", "archetype", "location", "subscription"):
         if s.get(single) is not None and not isinstance(s[single], str):
             problems.append(f"{at(single)}: {single} is one value, not {s[single]!r}.")
@@ -528,12 +549,12 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     for key, lz in zones.items():
         if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("location"), str):
             try:
-                workloads[key] = {"landing_zone": key, "subscription_id": str(lz["settings"].get("subscription", "")).lower(),
+                workloads[key] = {"landing_zone": key,
                                   "location": lz["settings"]["location"], "app": short_name(lz),
                                   **naming.helper_values(settings, lz["environment"], lz["settings"]["location"])}
             except ConfigError as error:
                 problems.append(f"{lz['where']}: its workload repo's values: {error}")
-    subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
+    subscriptions = [str(z["settings"].get("subscription") or "").lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
         raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
@@ -546,7 +567,9 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         configs[key] = {
             "key": key,
             "root_id": governance["root"],
-            "subscription_id": s["subscription"].lower(),
+            # Handed over, or made by vending's apply, where the billing scope says (subscription_id null until then).
+            "subscription_id": s["subscription"].lower() if s.get("subscription") else None,
+            "subscription": {"billing_scope": s["billing_scope"], "name": names[key][SUBSCRIPTION]} if makes_subscription(lz) else None,
             # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
             "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
             "location": s["location"],
@@ -587,6 +610,19 @@ def short_name_problems(lz: dict) -> list[str]:
     return []
 
 
+def agreement(billing_scope: object) -> str | None:
+    """EA, MCA or MPA, by the billing scope's form; None for anything else."""
+    if not isinstance(billing_scope, str):
+        return None
+    return next((name for name, form in BILLING_SCOPES.items() if form.fullmatch(billing_scope)), None)
+
+
+def makes_subscription(lz: dict) -> bool:
+    """Whether vending makes the landing zone's subscription: none handed over, and an EA or MCA billing scope."""
+    s = lz["settings"]
+    return s.get("subscription") in (None, "") and agreement(s.get("billing_scope")) in ("EA", "MCA")
+
+
 def creates_repo(lz: dict) -> bool:
     """Whether vending makes the landing zone's workload repo: it does for every landing zone once github.organization
     is set, unless github.repo names an existing one, or github.create is false."""
@@ -618,10 +654,11 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
     where, s = lz["where"], lz["settings"]
     explicit = s.get("names")
     if explicit is not None and not isinstance(explicit, dict):
-        problems.append(f"{where}: names maps each name to set ({', '.join([*NAMED, 'network_security_groups'])}) to the name.")
+        problems.append(f"{where}: names maps each name to set ({', '.join([*NAMED, SUBSCRIPTION, 'network_security_groups'])}) to the name.")
         explicit = {}
     explicit = explicit or {}
-    problems += [f"{where}: names.{k} is not a name vending gives; use {', '.join([*NAMED, 'network_security_groups'])}." for k in sorted(set(explicit) - set(NAMED) - {"network_security_groups"}, key=str)]
+    problems += [f"{where}: names.{k} is not a name vending gives; use {', '.join([*NAMED, SUBSCRIPTION, 'network_security_groups'])}."
+                 for k in sorted(set(explicit) - set(NAMED) - {SUBSCRIPTION, "network_security_groups"}, key=str)]
     nsgs = explicit.get("network_security_groups")
     nsgs = {} if nsgs is None else nsgs  # only absent or empty means none: false or [] is reported
     if not isinstance(nsgs, dict):
@@ -667,6 +704,12 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         names[REPOSITORY] = one(REPOSITORY, REPOSITORY, None, {}, kept)
         if names[REPOSITORY] is not None:
             entry[REPOSITORY] = names[REPOSITORY]
+    # The subscription, when vending makes it: its alias and display name. Recorded like the rest; renewed, only its
+    # display name changes, as Azure keeps an alias's name.
+    if makes_subscription(lz):
+        names[SUBSCRIPTION] = one(SUBSCRIPTION, "subscription", None, explicit, kept)
+        if SUBSCRIPTION not in explicit and names[SUBSCRIPTION] is not None:
+            entry[SUBSCRIPTION] = names[SUBSCRIPTION]
     held = kept.get("network_security_groups") or {}
     names["network_security_groups"] = {}
     for subnet in subnets:
@@ -697,10 +740,12 @@ def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
     parsed = {}
     for key, entry in recorded.items():
         try:
-            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {REPOSITORY, "network_security_groups"}:
+            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {REPOSITORY, SUBSCRIPTION, "network_security_groups"}:
                 raise ValueError  # the allocator writes {} for a landing zone without names, never null or a list
             # In the order the allocator writes them, whatever order the file was read in.
             parsed[str(key)] = {item: naming.check(kind, entry[item]) for item, (kind, _) in NAMED.items() if item in entry}
+            if SUBSCRIPTION in entry:
+                parsed[str(key)][SUBSCRIPTION] = naming.check("subscription", entry[SUBSCRIPTION])
             if REPOSITORY in entry:
                 if not (isinstance(entry[REPOSITORY], str) and naming.GITHUB_REPOSITORY.fullmatch(entry[REPOSITORY])):
                     raise ValueError
@@ -747,7 +792,7 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
         if base is None:
             return entry
         on_base = base.get(key, {})
-        return {**{item: value for item, value in entry.items() if (item in NAMED or item == REPOSITORY) and item in on_base},
+        return {**{item: value for item, value in entry.items() if (item in NAMED or item in (REPOSITORY, SUBSCRIPTION)) and item in on_base},
                 "network_security_groups": {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items()
                                             if subnet in (on_base.get("network_security_groups") or {})}}
 
