@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/fortytwoservices/mlz-core/compare/v0.6.1...v0.7.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **vending:** make a landing zone's subscription where billing_scope says ([#72](https://github.com/fortytwoservices/mlz-core/issues/72))
+
+### Features
+
+* **install:** give vending's apply identity the billing role to make subscriptions ([#74](https://github.com/fortytwoservices/mlz-core/issues/74)) ([d2b99e7](https://github.com/fortytwoservices/mlz-core/commit/d2b99e7d245ee71ff3c35e11350707291be76fcf))
+* **vending:** make a landing zone's subscription where billing_scope says ([#72](https://github.com/fortytwoservices/mlz-core/issues/72)) ([68df9e9](https://github.com/fortytwoservices/mlz-core/commit/68df9e9ab55306dcba1091bb2ffbe7f519e2804b))
+
 ## [0.6.1](https://github.com/fortytwoservices/mlz-core/compare/v0.6.0...v0.6.1) (2026-11-13)
 
 

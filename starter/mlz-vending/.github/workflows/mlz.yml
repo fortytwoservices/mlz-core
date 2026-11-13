@@ -30,7 +30,7 @@ jobs:
     concurrency:
       group: mlz-main-${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 'queue' || github.run_id }}
       queue: max
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.6.1 # x-release-please-version
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.7.0 # x-release-please-version
     with:
       role: vending
     # By name: mlz-core is in another organisation, which `secrets: inherit` does not reach.
