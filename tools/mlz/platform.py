@@ -273,6 +273,20 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
     for network, regions_ in networks.items():
         for region, net in regions_.items():
             net["names"] = named(lambda: names.network(settings, network, region, list(net["subnets"])), problems)
+    # Two of a type in one place need names apart: the public IPs of the components a hub has, and the connectivity
+    # subscription's groups, a hub's in each region and the DNS zones'.
+    for region, settings_ in hubs.items():
+        hub_names = settings_["names"]
+        if hub_names:
+            used = {"firewall_public_ip": hub_names["firewall_public_ip"]}
+            if settings_["firewall"]["management_subnet_address_prefix"]:
+                used["firewall_management_public_ip"] = hub_names["firewall_management_public_ip"]
+            if settings_["bastion"]:
+                used["bastion_public_ip"] = hub_names["bastion_public_ip"]
+            named(lambda: names.apart(f"hubs/{region}'s public IP addresses", used), problems)
+    named(lambda: names.apart("resource groups in the connectivity subscription", {
+        **{f"hubs/{region}'s": h["names"]["resource_group"] for region, h in hubs.items() if h["names"]},
+        "the DNS zones'": names.dns_resource_group(settings, primary)}), problems)
     shared = named(lambda: {
         "dns_resource_group": names.dns_resource_group(settings, primary),
         "network_resource_groups": {network: names.network_resource_group(settings, network, primary) for network in networks},

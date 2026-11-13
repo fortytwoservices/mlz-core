@@ -35,6 +35,28 @@ ROLES = {"governance": "gov", "platform": "plat", "vending": "vend"}
 BOOTSTRAP_NAMED = {"resource_group": "resource_group", "storage_account": "storage_account"}
 
 
+def apart(what: str, named: dict[str, str]) -> dict[str, str]:
+    """named, if no two share a name, ignoring case as Azure does; else a ConfigError. Two of a type in one place need
+    names apart, which a template without {app} or {purpose} does not give."""
+    seen: dict[str, str] = {}
+    for item, name in named.items():
+        if name.lower() in seen:
+            raise ConfigError(f"{seen[name.lower()]} and {item} would both be {name}, and Azure needs {what} named apart; "
+                              "put {app} and {purpose} in the template, or name one explicitly.")
+        seen[name.lower()] = item
+    return named
+
+
+def management_groups(naming: Naming, primary: str, bootstrap_group: str) -> None:
+    """The resource groups governance, the platform and the bootstrap each make in the management subscription: one name
+    for two would merge what each manages, and the rights each pipeline has on its own."""
+    apart("resource groups in the management subscription", {
+        "governance's management group": platform_name(naming, "management", "resource_group", primary),
+        "management's network group": network_resource_group(naming, "management", primary),
+        "the bootstrap's group": bootstrap_group,
+    })
+
+
 def dns_resource_group(naming: Naming, primary: str) -> str:
     """The Private Link DNS zones' group: the platform makes it, governance's policy and the bootstrap point at it."""
     return platform_name(naming, "dns", "resource_group", primary)
@@ -51,7 +73,8 @@ def network(naming: Naming, network: str, region: str, subnets: list[str]) -> di
         "virtual_network": platform_name(naming, network, "virtual_network", region),
         "route_table": platform_name(naming, network, "route_table", region),
         "github_network_settings": platform_name(naming, network, "github_network_settings", region),
-        "network_security_groups": {subnet: platform_name(naming, network, "network_security_group", region, subnet) for subnet in subnets},
+        "network_security_groups": apart(f"{network}'s network security groups", {
+            subnet: platform_name(naming, network, "network_security_group", region, subnet) for subnet in subnets}),
         "subnet": "snet-%s",
         "peering_to_hub": f"peer-{network}-to-hub",
         "peering_from_hub": f"peer-hub-to-{network}",  # never a landing zone's: a landing zone key has a hyphen
@@ -60,13 +83,14 @@ def network(naming: Naming, network: str, region: str, subnets: list[str]) -> di
 
 def governance(naming: Naming, primary: str) -> dict:
     """Governance's: management's monitoring, and the DNS zones' group its policy points at."""
+    management_groups(naming, primary, platform_name(naming, "bootstrap", "resource_group", primary))
     return {
         "management": {
             "resource_group": platform_name(naming, "management", "resource_group", primary),
             "workspace": platform_name(naming, "management", "log_analytics_workspace", primary),
             "ama_identity": platform_name(naming, "management", "user_assigned_identity", primary, "ama"),
-            "data_collection_rules": {key: platform_name(naming, "management", "data_collection_rule", primary, purpose)
-                                      for key, purpose in DATA_COLLECTION_RULES.items()},
+            "data_collection_rules": apart("data collection rules", {key: platform_name(naming, "management", "data_collection_rule", primary, purpose)
+                                                                     for key, purpose in DATA_COLLECTION_RULES.items()}),
         },
         "dns_resource_group": dns_resource_group(naming, primary),
     }
@@ -108,11 +132,13 @@ def bootstrap(naming: Naming, primary: str, explicit: dict | None = None) -> dic
     def own(key: str, kind: str, purpose: str | None) -> str:
         return explicit[key] if key in explicit else platform_name(naming, "bootstrap", kind, primary, purpose)
 
+    management_groups(naming, primary, own("resource_group", "resource_group", None))
     return {
         "resource_group": own("resource_group", "resource_group", None),
         "storage_account": own("storage_account", "storage_account", "state"),
-        "identities": {f"{role}-{kind}": platform_name(naming, "bootstrap", "user_assigned_identity", primary, f"{short}{kind}")
-                       for role, short in ROLES.items() for kind in ("plan", "apply")},
+        # Six, each with rights of its own: one name for two would give a pull request's plan an apply's rights.
+        "identities": apart("the pipeline identities", {f"{role}-{kind}": platform_name(naming, "bootstrap", "user_assigned_identity", primary, f"{short}{kind}")
+                                                        for role, short in ROLES.items() for kind in ("plan", "apply")}),
         "state_endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "state"),
         "state_endpoint_nic": platform_name(naming, "bootstrap", "network_interface", primary, "state"),
         "network_resource_groups": {name: network_resource_group(naming, name, primary) for name in ("management", "identity")},
