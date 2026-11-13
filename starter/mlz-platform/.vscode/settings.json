@@ -4,7 +4,7 @@
 // user settings.
 {
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.6.1/schemas/hub.schema.json": ["hubs/*.yaml", "hubs/*.yml", "hubs/*/*.yaml", "hubs/*/*.yml"], // x-release-please-version
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.6.1/schemas/firewall.schema.json": ["firewall/**/*.yaml", "firewall/**/*.yml"] // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.7.0/schemas/hub.schema.json": ["hubs/*.yaml", "hubs/*.yml", "hubs/*/*.yaml", "hubs/*/*.yml"], // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.7.0/schemas/firewall.schema.json": ["firewall/**/*.yaml", "firewall/**/*.yml"] // x-release-please-version
   }
 }
