@@ -8,7 +8,8 @@ It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload
 only what no layer above sets: a required setting given on the command line is written as given, one
 not given is written commented out, so the check names it until someone fills it in. A setting given that
 a layer above already has at the same value is left out, but for the subscription, which is always the
-landing zone's own. It writes nothing over a file that is there, and
+landing zone's own: not written when none is given and a layer above sets billing_scope, as vending then makes
+it. It writes nothing over a file that is there, and
 commits nothing: the files go into a pull request, whose run gives the landing zone its addresses.
 """
 
@@ -102,8 +103,10 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         rest = ("location",)
     else:
         rest = (*WORKLOAD_SETTINGS, "location")
-    # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in.
-    body = needed(rest) + [("subscription", given.get("subscription"))]
+    # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in,
+    # unless vending makes it where a layer above's billing_scope says.
+    made = given.get("subscription") is None and above.get("billing_scope") not in (None, "")
+    body = needed(rest) + ([] if made else [("subscription", given.get("subscription"))])
     header = f"# {workload} in {env}, the landing zone {key}: one subscription, one network, one state."
     extra = [
         "",

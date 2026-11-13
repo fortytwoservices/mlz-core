@@ -18,7 +18,7 @@ from mlz.__main__ import MARKER, main, own_folder
 from mlz import files
 from mlz.contract import render
 from mlz.firewall import vending_contract
-from mlz.vending import IP_PLAN, NAMES, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
+from mlz.vending import IP_PLAN, NAMES, agreement, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -648,7 +648,7 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, own, PLATFORM)
         # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written.
         self.assertEqual(configs["payments-prod"]["workload"], {
-            "landing_zone": "payments-prod", "subscription_id": "33333333-3333-3333-3333-333333333333", "location": "norwayeast",
+            "landing_zone": "payments-prod", "location": "norwayeast",
             "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
             "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
         })
@@ -728,6 +728,56 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/dev.yaml", PROD)
         self.allocate()
         self.assertIn("is used by more than one landing zone", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_without_a_subscription_vending_makes_one_where_billing_scope_says(self):
+        ea = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + f"billing_scope: {ea}\n")
+        self.write("landing-zones/payments/dev.yaml", "budget: null\n")
+        self.allocate()
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        # Made: no ID until vending's apply makes it, named from the template and recorded like the other names.
+        self.assertIsNone(configs["payments-dev"]["subscription_id"])
+        self.assertEqual(configs["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": ea, "name": "sub-demo-pay-dv-nwe-01"})
+        self.assertIn("payments-dev:\n  network_resource_group: rg-demo-pay-net-dv-nwe-01\n", (self.repo / NAMES).read_text())
+        self.assertIn("  subscription: sub-demo-pay-dv-nwe-01\n", (self.repo / NAMES).read_text())
+        # Handed over: the billing scope above is not used, and nothing is made.
+        self.assertEqual(configs["payments-prod"]["subscription_id"], "33333333-3333-3333-3333-333333333333")
+        self.assertIsNone(configs["payments-prod"]["subscription"])
+        self.assertNotIn("subscription", configs["payments-prod"]["names"])
+        # Its own name under names:, used and not recorded; an MCA invoice section is a billing scope too.
+        mca = "/providers/Microsoft.Billing/billingAccounts/a1b2:c3d4_2019-05-31/billingProfiles/AB12-CD34/invoiceSections/EF56-GH78"
+        self.write("landing-zones/payments/dev.yaml", f"billing_scope: {mca}\nnames:\n  subscription: Payments Dev\n")
+        self.assertIn("landing-zones/payments/dev: subscription name Payments Dev has characters Azure does not allow there", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/dev.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": mca, "name": "payments_dev"})
+        self.assertNotIn("  subscription: ", (self.repo / NAMES).read_text())
+        # Two landing zones with one display name still get a subscription each: each has its own alias.
+        self.write("landing-zones/payments/prod.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
+        self.allocate()
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual((configs["payments-dev"]["subscription"]["alias"], configs["payments-prod"]["subscription"]["alias"]),
+                         ("demo-payments-dev", "demo-payments-prod"))
+
+    def test_a_billing_scope_is_an_enrollment_account_or_an_invoice_section(self):
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"), "EA")
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/billingProfiles/P/invoiceSections/S"), "MCA")
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c"), "MPA")
+        self.assertIsNone(agreement("/providers/Microsoft.Billing/billingAccounts/a/billingProfiles/P"))
+        self.write("landing-zones/payments/dev.yaml", "budget: null\n")
+        self.allocate()
+        self.assertIn("landing-zones/payments/dev: subscription is required, or billing_scope for vending to make one", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a/billingProfiles/P\n")
+        self.assertIn("billing_scope", self.problems(build, GOVERNANCE, PLATFORM))
+        # An alias longer than Azure takes, from the longest root and names there are: refused, not cut.
+        workload, env = "w" * 24, "e" * 24
+        self.write(f"landing-zones/{workload}/{env}.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/1/enrollmentAccounts/2\n")
+        alias = f"{'r' * 16}-{workload}-{env}"
+        self.assertIn(f"landing-zones/{workload}/{env}: the alias vending makes its subscription by, {alias}, is more than Azure's 63 characters",
+                      self.problems(build, {**GOVERNANCE, "root": "r" * 16}, PLATFORM))
+        # A CSP customer's subscription is made in Fortytwo's Partner Center, then handed over.
+        self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c\n")
+        self.assertIn("a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_a_landing_zone_split_into_chunks_reads_the_same(self):
         self.allocate()

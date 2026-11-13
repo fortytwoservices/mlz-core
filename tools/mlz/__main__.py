@@ -231,8 +231,10 @@ def main() -> int:
             governance, platform_contract = optional_contracts(args)
             found = explain.problems(key, vending.landing_zones(args.repo)[key], vending.ip_plan(args.repo), governance, platform_contract,
                                      vending.recorded_names(args.repo))
-            print(f"mlz new: next, fill in the settings commented out in those files (the check below names them), hand "
-                  f"the subscription over to vending (docs/bootstrap.md), and open a pull request: its run gives {key} its addresses.")
+            subscription = ("vending makes its subscription where billing_scope says" if vending.makes_subscription(vending.landing_zones(args.repo)[key])
+                            else "hand the subscription over to vending (docs/bootstrap.md)")
+            print(f"mlz new: next, fill in the settings commented out in those files (the check below names them), {subscription}, "
+                  f"and open a pull request: its run gives {key} its addresses.")
             print("".join(f"  {problem}\n" for problem in found) or f"  {explain.clean(None not in (governance, platform_contract))}\n", end="")
         elif args.role == "vending-contract":
             data = firewall.vending_contract(vending.landing_zones(args.repo), vending.ip_plan(args.repo))

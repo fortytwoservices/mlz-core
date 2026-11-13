@@ -78,6 +78,15 @@ class NewLandingZoneTest(unittest.TestCase):
         new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555"})
         self.assertIn("\nsubscription: 55555555-5555-5555-5555-555555555555", self.read("landing-zones/payments/dev.yaml"))
 
+    def test_no_subscription_is_asked_for_when_vending_makes_it(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321\n")
+        new.landing_zone(self.repo, "payments", "dev", NOTHING)
+        self.assertNotIn("subscription", self.read("landing-zones/payments/dev.yaml").split("\n", 1)[1])
+        self.assertTrue(vending.makes_subscription(vending.landing_zones(self.repo)["payments-dev"]))
+        # One given is handed over, as ever.
+        new.landing_zone(self.repo, "payments", "test", {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555"})
+        self.assertIn("\nsubscription: 55555555-5555-5555-5555-555555555555", self.read("landing-zones/payments/test.yaml"))
+
     def test_a_file_written_meanwhile_is_not_written_over(self):
         # Another run wrote the file after this one's checks: the exclusive write refuses, and leaves it as it was.
         original = new.read_setting

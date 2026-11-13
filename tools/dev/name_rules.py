@@ -7,11 +7,12 @@ since some catalog slugs are unusable (a blob container's is storage-account-blo
 catalog's patterns leave out are added here (no_double_hyphen, no_trailing_period). A type whose catalog entry is incomplete or
 wrong (virtual machines: no dashes) is left out until checked another way.
 
-Two types mlz-core names have no rule anywhere: data collection rules (the catalog's entry has no lengths) and
-GitHub's network settings (not in the catalog). Microsoft publishes none for either: they are not on the resource
+Three types mlz-core names have no rule in the catalog (OWN). Data collection rules (the catalog's entry has no
+lengths) and GitHub's network settings (not in it): Microsoft publishes none for either: they are not on the resource
 naming rules page, the REST API specs give the name no pattern or length, and azurerm only checks that it is not
-empty. For those mlz-core sets a rule of its own (OWN), narrow enough to hold on any Azure resource it knows of:
-it may refuse a name Azure would take, never the other way round.
+empty. For those mlz-core sets a rule of its own, narrow enough to hold on any Azure resource it knows of: it may
+refuse a name Azure would take, never the other way round. A subscription's alias (not in the catalog either) takes
+the rule Azure/avm-ptn-alz-sub-vending documents for it.
 """
 
 from __future__ import annotations
@@ -45,13 +46,18 @@ TYPES = {
     "dns_resolver_outbound_endpoint": ("dns_resolver_outbound_endpoint", "out", {}),
 }
 
-# mlz-core's key: (the CAF short name, or mlz-core's where CAF has none; the resource type). Each takes CONSERVATIVE.
-OWN = {
-    "data_collection_rule": ("dcr", "Microsoft.Insights/dataCollectionRules"),
-    "github_network_settings": ("ghns", "GitHub.Network/networkSettings"),
-}
 CONSERVATIVE = {"min_length": 1, "max_length": 64, "dashes": True, "lowercase": False, "global": False,
                 "pattern": r"^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$"}
+# mlz-core's key: (the CAF short name, or mlz-core's where CAF has none; its rule; where the rule comes from).
+OWN = {
+    "data_collection_rule": ("dcr", CONSERVATIVE, "Microsoft publishes no naming rule for Microsoft.Insights/dataCollectionRules: mlz-core's own"),
+    "github_network_settings": ("ghns", CONSERVATIVE, "Microsoft publishes no naming rule for GitHub.Network/networkSettings: mlz-core's own"),
+    # A subscription vending makes is named once, as its alias and its display name: the alias's rule, which is the
+    # narrower (Azure/avm-ptn-alz-sub-vending's subscription_alias_name: a-z, A-Z, 0-9, - and _, up to 63).
+    "subscription": ("sub", {"min_length": 1, "max_length": 63, "dashes": True, "lowercase": False, "global": False,
+                             "pattern": r"^[a-zA-Z0-9_-]+$"},
+                     "Microsoft.Subscription/aliases: the alias name's rule, as avm-ptn-alz-sub-vending documents it"),
+}
 
 
 def entries(catalog: dict) -> dict[str, dict]:
@@ -87,8 +93,8 @@ def main(path: str) -> None:
         types[key] = {"slug": slug, "min_length": rule["min_length"], "max_length": rule["max_length"],
                       "dashes": rule["dashes"], "lowercase": rule["lowercase"], "global": rule["scope"] == "global",
                       **({"pattern": rule["regex"]} if not allowed else allowed), **extra}
-    for key, (slug, resource_type) in OWN.items():
-        types[key] = {"slug": slug, **CONSERVATIVE, "own_rule": f"Microsoft publishes no naming rule for {resource_type}: mlz-core's own"}
+    for key, (slug, rule, source) in OWN.items():
+        types[key] = {"slug": slug, **rule, "own_rule": source}
     out = Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json"
     out.write_text(json.dumps({"source": CATALOG, "types": types}, indent=2) + "\n")
     print(f"wrote {out}: {len(types)} types")

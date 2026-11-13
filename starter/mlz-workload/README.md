@@ -5,8 +5,9 @@ push to `main`; on `main`, it applies once the owning team approves the `apply` 
 that plan showed.
 
 - **Write** the landing zone's resources at the top of the repo: `main.tf` has an example.
-- **`mlz.auto.tfvars.json`** is the landing zone's subscription, region and naming values. mlz-core's vending writes
-  it and keeps it up to date: do not edit it.
+- **`mlz.auto.tfvars.json`** is the landing zone's key, region and naming values. mlz-core's vending writes it and
+  keeps it up to date: do not edit it. The subscription is the one the pipeline signs in to
+  (`data "azapi_client_config"`).
 - **Names** come from the customer's template, through mlz-core's naming helper (`main.tf`'s example): a name Azure
   would not take stops the plan.
 - **State** is in the landing zone's own storage account (the repo's `TFSTATE_*` variables). Pull requests plan from

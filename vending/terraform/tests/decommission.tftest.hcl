@@ -52,6 +52,35 @@ run "live" {
     condition     = toset(keys(azapi_resource.state_role)) == toset(["plan", "deploy"])
     error_message = "The plan identity reads the state and the deploy identity writes it."
   }
+  assert {
+    condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000010" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000010" && length(azapi_resource_action.subscription) == 0
+    error_message = "A subscription handed over is the one the landing zone's resources go in, and vending makes none."
+  }
+}
+
+run "made_subscription" {
+  command = plan
+  variables {
+    config_file = "tests/made-subscription.json"
+  }
+  # The new subscription's ID is Azure's, in the alias's answer: given here, as Azure would.
+  override_resource {
+    target          = azapi_resource_action.subscription["made"]
+    values          = { output = { properties = { subscriptionId = "00000000-0000-0000-0000-000000000020" } } }
+    override_during = plan
+  }
+  assert {
+    condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000020" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000020" && azapi_resource.state_resource_group.parent_id == "/subscriptions/00000000-0000-0000-0000-000000000020"
+    error_message = "A landing zone without a subscription gets the one vending makes, and its resources go in it."
+  }
+  assert {
+    condition     = azapi_resource_action.subscription["made"].resource_id == "/providers/Microsoft.Subscription/aliases/mlz-payments-prod" && azapi_resource_action.subscription["made"].method == "PUT" && azapi_resource_action.subscription["made"].when == "apply"
+    error_message = "The subscription is made once, by an alias from the root and the key, and nothing is done to it on destroy."
+  }
+  assert {
+    condition     = azapi_resource_action.subscription["made"].body.properties.billingScope == "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321" && azapi_resource_action.subscription["made"].body.properties.displayName == "sub-acme-pay-pd-nwe-01" && azapi_resource_action.subscription["made"].body.properties.additionalProperties.managementGroupId == "/providers/Microsoft.Management/managementGroups/mlz-lz-corp"
+    error_message = "It is billed where the billing scope says, named from the config, and made in its management group."
+  }
 }
 
 run "decommissioned" {

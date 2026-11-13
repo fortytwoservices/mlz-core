@@ -199,6 +199,16 @@
       "global": false,
       "pattern": "^[a-zA-Z0-9]([a-zA-Z0-9_.-]*[a-zA-Z0-9])?$",
       "own_rule": "Microsoft publishes no naming rule for GitHub.Network/networkSettings: mlz-core's own"
+    },
+    "subscription": {
+      "slug": "sub",
+      "min_length": 1,
+      "max_length": 63,
+      "dashes": true,
+      "lowercase": false,
+      "global": false,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "own_rule": "Microsoft.Subscription/aliases: the alias name's rule, as avm-ptn-alz-sub-vending documents it"
     }
   }
 }

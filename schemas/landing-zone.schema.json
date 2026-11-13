@@ -39,8 +39,13 @@
     },
     "subscription": {
       "type": "string",
-      "description": "The landing zone's subscription ID, handed to vending before this file is merged.",
+      "description": "The landing zone's subscription ID, handed to vending before this file is merged. Without it, vending makes one where billing_scope says.",
       "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "billing_scope": {
+      "type": "string",
+      "description": "Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in _defaults/all.yaml; a landing zone with subscription: uses that one instead.",
+      "pattern": "^/providers/Microsoft\\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"
     },
     "budget": {
       "description": "The landing zone's monthly budget.",
@@ -176,6 +181,10 @@
         "state_account": {
           "type": "string",
           "description": "An explicit name for the storage account, instead of the template's."
+        },
+        "subscription": {
+          "type": "string",
+          "description": "An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."
         },
         "network_security_groups": {
           "description": "An explicit name for a subnet's NSG, by the subnet's name.",

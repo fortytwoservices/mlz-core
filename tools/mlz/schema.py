@@ -82,7 +82,8 @@ def landing_zone() -> dict:
         "cost_center": {"description": "The cost center. Becomes the CostCenter tag.", "type": ["string", "integer"], "maxLength": vending.TAG_VALUE_LENGTH},
         "archetype": text("The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).", enum=list(ARCHETYPES)),
         "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
-        "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged.", pattern=pattern(vending.GUID, ignore_case=True)),
+        "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged. Without it, vending makes one where billing_scope says.", pattern=pattern(vending.GUID, ignore_case=True)),
+        "billing_scope": text("Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in _defaults/all.yaml; a landing zone with subscription: uses that one instead.", pattern=r"^/providers/Microsoft\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"),
         "budget": or_empty(mapping({
             "monthly": {"description": "A whole amount per month, in the subscription's currency. No monthly, no budget.", "type": "integer", "exclusiveMinimum": 0},
             "contacts": or_empty({"description": "Who gets the budget alerts, as email addresses (default: the owner).", "type": "array", "items": email}),
@@ -105,6 +106,7 @@ def landing_zone() -> dict:
         "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.", pattern="^[a-z0-9]{2,5}$"),
         "names": or_empty(mapping({
             **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
+            vending.SUBSCRIPTION: text("An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."),
             "network_security_groups": or_empty({"description": "An explicit name for a subnet's NSG, by the subnet's name.", "type": "object", "additionalProperties": {"type": "string"}}),
         }, "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.")),
         "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},

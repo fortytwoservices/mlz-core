@@ -1,7 +1,7 @@
 # Vending
 
-The `mlz-vending` role: one landing zone per YAML file, each with a subscription placed in its management
-group, a spoke network peered to the hub with everything routed through the firewall, NSGs, a deploy
+The `mlz-vending` role: one landing zone per YAML file, each with a subscription, handed over or made by vending,
+placed in its management group, a spoke network peered to the hub with everything routed through the firewall, NSGs, a deploy
 identity, and a budget. Built on Microsoft's `Azure/avm-ptn-alz-sub-vending/azure` and
 `az-tf-mlz-route-table`. Each landing zone has a state of its own.
 
@@ -40,7 +40,8 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 
 | Setting | What it is |
 |---|---|
-| `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. |
+| `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. `subscription` is one handed over; without it, vending makes one ([below](#the-subscription)). |
+| `billing_scope` | Where the subscriptions vending makes are billed: an EA enrollment account or an MCA invoice section. Set once, in `_defaults/all.yaml` ([below](#the-subscription)). |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
 | `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
 | `github` | The landing zone's workload repo ([below](#the-workload-repo)). `organization`, set once in `_defaults/all.yaml`: from then on every landing zone has one. `repo`: an existing repo to use instead, which vending only trusts. `create: false`: none, for example for a sandbox. `team`: the owning team's GitHub team, by its slug, set once per workload in `_workload.yaml`. |
@@ -110,14 +111,15 @@ python3 -m mlz new landing-zone --repo . billing prod --subscription <id> --owne
 
 - **Given or not:** a required setting given on the command line (`--subscription`, `--owner`,
   `--cost-center`, `--archetype`, `--location`) is written as given. One not given is written commented
-  out, and the check names it until someone fills it in.
+  out, and the check names it until someone fills it in. With `billing_scope` set above, no subscription is
+  asked for: vending makes it, unless `--subscription` hands one over.
 - **Not repeated:** a setting given at the value a layer above already has is left out.
 - **Where it goes:** owner, cost center and archetype go in the new workload's `_workload.yaml`; the
   subscription goes in the landing zone's own file.
 
 It writes nothing over a file that is there, and refuses a key another landing zone already has. Then it
 runs the landing zone's check. The files go into a pull request: hand the subscription over to vending
-first (`docs/bootstrap.md`), and the pull request's run gives the landing zone its addresses.
+first (`docs/bootstrap.md`), unless vending makes it, and the pull request's run gives the landing zone its addresses.
 
 ## Where a value comes from
 
@@ -182,6 +184,54 @@ owner: payments@demo.example
   as `main` says, the daily check included, so each pull request follows within a day of what it waits for.
   An open pull request is left as it is. Both come from the MLZ App, on branches `mlz/decommission-<key>`.
 
+## The subscription
+
+A landing zone's subscription is handed over, or made by vending:
+
+- **Handed over:** `subscription: <id>` in the landing zone's own file. Someone makes it and moves it into the tree
+  before the file is merged (`docs/bootstrap.md`); vending places it in its management group and changes nothing
+  else about it.
+- **Made by vending:** no `subscription`, and a `billing_scope`, usually once for every landing zone in
+  `_defaults/all.yaml`. Vending's apply makes the subscription there, straight into its management group, as a
+  Production subscription tagged as the landing zone. Its display name comes from the template
+  (`sub-acme-pay-pd-nwe-01`, recorded in `_generated/names.yaml`, `docs/naming.md`). Its alias, the handle Azure
+  makes it by, is `<root>-<key>` (`mlz-payments-prod`): unique in the tenant, and never changed, so the subscription
+  is made once whatever it is named later. The plan shows it to be made, and everything in it waits for its ID. A
+  landing zone may still set `subscription` to hand one over instead.
+
+```yaml
+# landing-zones/_defaults/all.yaml
+billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321
+```
+
+| Agreement | `billing_scope` | Who may let vending make subscriptions there |
+|---|---|---|
+| Enterprise Agreement (EA) | `/providers/Microsoft.Billing/billingAccounts/<account>/enrollmentAccounts/<enrollment account>` | The enrollment account's owner, its Account Owner (Microsoft's role table calls it "enrollment account owner (EA admin)"). They give vending's apply identity the EA role SubscriptionCreator on the enrollment account, through the billing API: there is no portal page for it. |
+| Microsoft Customer Agreement (MCA) | `/providers/Microsoft.Billing/billingAccounts/<account>/billingProfiles/<profile>/invoiceSections/<section>` | An owner of the invoice section, its billing profile or the billing account. They give vending's apply identity the role Azure subscription creator on the invoice section, in the portal (Cost Management + Billing, the invoice section, Access control (IAM)) or through the billing API. |
+| Microsoft Partner Agreement (CSP) | `.../customers/<customer>` | Refused: a CSP customer's subscription is made from Fortytwo's Partner Center, then handed over. |
+
+These are billing roles, not Azure roles: Azure's role assignments and Entra ID's directory roles neither give nor
+show them. Until vending's apply identity has the role, the apply that would make the subscription fails, and
+nothing else in that landing zone is made.
+
+**Azure makes vending's apply identity the new subscription's Owner**, besides the rights it has from the tree.
+
+**Vending never reads the alias back, and never cancels a subscription.** Azure lets only those who may make an alias
+read it (`Microsoft.Subscription/aliases/write`, which no Reader role has: tested in the TCAF tenant on 13 November
+2026), and the plans run as the read-only plan identity. So vending makes the subscription with one request to its
+alias, which Terraform keeps the answer of and never sends again, rather than with sub-vending's alias resource,
+which every plan would read. From then on sub-vending places, names and tags the subscription by its ID.
+
+- **Decommissioned**, it moves to `<root>-decommissioned` like a handed-over one
+  ([below](#decommissioning-a-landing-zone)); cancelling it is the customer's call, in Azure.
+- **`subscription: <its ID>` added later** hands it over: vending stops naming and tagging it, and changes nothing in it.
+- **A changed `billing_scope`** moves no subscription already made: Azure bills it where it was made until its billing
+  is transferred. Only subscriptions made from then on are billed to the new scope.
+- **A landing zone of the same key later**, after this one was decommissioned and released, has the same alias, and
+  Azure answers it with the old subscription, cancelled or not. To give it a new one, delete the alias first, as
+  someone who may make subscriptions there (deleting an alias leaves its subscription as it is):
+  `az rest --method delete --url "https://management.azure.com/providers/Microsoft.Subscription/aliases/<root>-<key>?api-version=2021-10-01"`.
+
 ## The workload repo
 
 Once `github.organization` is set, every landing zone has a workload repo of its own for the team's code, in the
@@ -219,8 +269,9 @@ way, so its workflows sign in from its `apply` environment and its pull requests
   are the role repos' own (`tools/ci/plan.sh`, `apply.sh`).
 - `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with an example named through
   mlz-core's naming helper (`modules/naming`, `docs/naming.md`); a README.
-- **`mlz.auto.tfvars.json`**: the landing zone's key, subscription, region and naming values (the customer's code, the
-  workload's short name, the environment's and region's codes, the templates). Vending writes it again whenever they
+- **`mlz.auto.tfvars.json`**: the landing zone's key, region and naming values (the customer's code, the workload's
+  short name, the environment's and region's codes, the templates). Its subscription is the one the pipeline signs in
+  to, `AZURE_SUBSCRIPTION_ID`. Vending writes it again whenever they
   change, so a team never types them.
 
 The starter goes in once, and adds only files that are not there: nothing the team wrote is replaced, and after that

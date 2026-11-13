@@ -11,6 +11,9 @@
 # resource "azapi_resource" "app_group" {
 #   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
 #   name      = module.app_group_name.name
-#   parent_id = "/subscriptions/${var.mlz.subscription_id}"
+#   parent_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}"
 #   location  = var.mlz.location
 # }
+#
+# The landing zone's subscription is the one the pipeline signs in to (the repo's AZURE_SUBSCRIPTION_ID):
+# data "azapi_client_config" "current" {}
