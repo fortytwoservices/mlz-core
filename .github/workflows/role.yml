@@ -180,10 +180,27 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
+      # Vending's stacks read each landing zone's workload repo in the organization, as the MLZ App: the repo's and
+      # the organization's IDs, for the identities' trust, and what vending made there. Read only. The action passes
+      # on any permission-* input; Variables (actions_variables) is not among the ones it lists, hence a warning.
+      - id: github-reader
+        if: inputs.role == 'vending'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-administration: read
+          permission-environments: read
+          permission-actions-variables: read
+          permission-members: read
+
       - name: Plan
         id: plan
         env:
           STACK: ${{ matrix.stack }}
+          GITHUB_TOKEN: ${{ steps.github-reader.outputs.token }} # vending's GitHub provider; empty for the others
+          GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
           set +e
           .mlz-core/tools/ci/plan.sh "$ROLE" "$STACK"
@@ -380,9 +397,27 @@ jobs:
           terraform_version: 1.17.0
           terraform_wrapper: false
 
+      # Vending makes each landing zone's workload repo, gives its team access, its apply environment and its
+      # variables, as the MLZ App (docs/vending.md). Administration makes the repo too: tested in a test
+      # organization, where it alone did (GitHub lists Repository creation as well, which is not needed).
+      - id: github-writer
+        if: inputs.role == 'vending'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-administration: write
+          permission-contents: write # to rename a new repo's first branch to main
+          permission-environments: write
+          permission-actions-variables: write
+          permission-members: read
+
       - name: Apply
         env:
           STACKS: ${{ matrix.stack }} # one stack, or the platform's changed stacks in order
+          GITHUB_TOKEN: ${{ steps.github-writer.outputs.token }} # vending's GitHub provider; empty for the others
+          GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
           for stack in $STACKS; do
             .mlz-core/tools/ci/apply.sh "$ROLE" "$stack"

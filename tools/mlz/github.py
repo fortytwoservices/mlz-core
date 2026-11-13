@@ -149,6 +149,10 @@ class GitHub:
     # Runners: the organization's network configuration, runner group and GitHub-hosted runner, which only its
     # owners may make (mlz install runners).
 
+    def plan(self, org: str) -> str | None:
+        """The organization's GitHub plan (enterprise, team, free), or None: GitHub shows it to its owners only."""
+        return ((self._api(f"orgs/{org}", missing_ok=True) or {}).get("plan") or {}).get("name")
+
     def is_owner(self, org: str) -> bool:
         login = self._api("user")["login"]
         found = self._api(f"orgs/{org}/memberships/{login}", missing_ok=True) or {}

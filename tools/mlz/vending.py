@@ -247,6 +247,10 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
                         "leave out github.repo to have vending create one, or github.create to use that one.")
     if team is not None and not (isinstance(team, str) and GITHUB_TEAM.fullmatch(team)):
         problems.append(f"{at('github', 'team')}: github.team {team!r} is a GitHub team's slug, as in its URL, for example payments-devs.")
+    elif team is None and creates_repo(lz):
+        # Every apply needs someone to approve it: in a repo vending makes, the owning team does.
+        problems.append(f"{where}: github.team is needed: the GitHub team that owns the repo vending makes for this landing zone, and approves "
+                        f"its applies. Set it once for the workload, in landing-zones/{lz['workload']}/_workload.yaml, or set github.create: false.")
 
 
 def wanted_network(lz: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:

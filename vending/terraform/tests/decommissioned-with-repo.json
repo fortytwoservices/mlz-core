@@ -1,0 +1,63 @@
+{
+  "key": "payments-prod",
+  "root_id": "mlz",
+  "subscription_id": "00000000-0000-0000-0000-000000000010",
+  "management_group_id": "mlz-decommissioned",
+  "location": "norwayeast",
+  "tags": {
+    "Owner": "payments@demo.example",
+    "CostCenter": "4200",
+    "Environment": "prod",
+    "Workload": "payments",
+    "ManagedBy": "mlz-core"
+  },
+  "budget": {
+    "monthly": 500,
+    "contacts": [
+      "payments@demo.example"
+    ]
+  },
+  "network": {
+    "address_space": "10.100.8.0/24",
+    "subnets": {
+      "default": "10.100.8.0/26"
+    },
+    "hub_virtual_network_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-mlz-hub-nwe/providers/Microsoft.Network/virtualNetworks/vnet-mlz-hub-nwe",
+    "dns_servers": [
+      "10.100.0.4"
+    ],
+    "routes": {
+      "default": {
+        "name": "default",
+        "address_prefix": "0.0.0.0/0",
+        "next_hop_type": "VirtualAppliance",
+        "next_hop_in_ip_address": "10.100.0.4"
+      }
+    }
+  },
+  "github": {
+    "organization": "acme-org",
+    "repo": "payments-prod",
+    "create": true,
+    "team": "payments-devs"
+  },
+  "decommission": true,
+  "names": {
+    "network_resource_group": "rg-acme-pay-net-pd-nwe-01",
+    "identity_resource_group": "rg-acme-pay-id-pd-nwe-01",
+    "virtual_network": "vnet-acme-pay-pd-nwe-01",
+    "route_table": "rt-acme-pay-pd-nwe-01",
+    "deploy_identity": "id-acme-pay-pd-nwe-01",
+    "budget": "budget-acme-pay-pd-nwe-01",
+    "network_security_groups": {
+      "default": "nsg-acme-pay-default-pd-nwe-01"
+    },
+    "subnet": "snet-%s",
+    "peering_to_hub": "peer-payments-prod-to-hub",
+    "peering_from_hub": "peer-hub-to-payments-prod",
+    "plan_identity": "id-acme-pay-plan-pd-nwe-01",
+    "state_resource_group": "rg-acme-pay-state-pd-nwe-01",
+    "state_account": "stacmepaystatepdnwe01",
+    "repository": "payments-prod"
+  }
+}
