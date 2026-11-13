@@ -355,6 +355,10 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
         with self.assertRaisesRegex(ConfigError, "no landing zone payments-uat; the landing zones are payments-dev, payments-prod, payments-test"):
             give_names(self.repo, ip_plan(self.repo), named, {"payments-uat"})
+        # Renewed without a short name the template can use: refused, the record left as it is.
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: PAY"))
+        with self.assertRaisesRegex(ConfigError, "short_name is 'PAY'; it must be 2 to 5 lower-case letters and digits"):
+            give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
 
     def test_a_pull_request_keeps_only_the_names_its_base_has(self):
         self.allocate()
@@ -431,6 +435,11 @@ class VendingTest(unittest.TestCase):
         for wrong in ("null", "false", "[]"):  # the allocator writes {} for an entry without names, never these
             self.write(NAMES, f"payments-prod: {wrong}\n")
             self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+            # Nor an NSG map like these: it leaves the key out rather than write one empty.
+            self.write(NAMES, f"payments-prod:\n  virtual_network: vnet-x\n  network_security_groups: {wrong}\n")
+            self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write(NAMES, "payments-prod:\n  network_security_groups: {}\n")
+        self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
         (self.repo / NAMES).unlink()
         self.allocate()
         self.write(NAMES, (self.repo / NAMES).read_text().replace("vnet-demo-pay-pd-nwe-01", "vnet demo"))
@@ -507,10 +516,15 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
         self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
         self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
-        self.allocate()
-        problems = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("landing-zones/payments/_workload.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5", problems)
-        self.assertNotIn("landing-zones/web", problems)
+        plan, _, retired = allocate(self.repo, PLATFORM)
+        self.write(IP_PLAN, render_plan(plan, retired))
+        # No names without a short name: the allocator says why, once, and gives nothing.
+        with self.assertRaises(ConfigError) as caught:
+            give_names(self.repo, plan, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertEqual(message.count("landing-zones/payments/_workload.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5"), 1)
+        self.assertNotIn("landing-zones/web", message)
+        self.assertIn("short_name is needed", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.assertIn("workloads payments, web share the short name web", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)

@@ -158,11 +158,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     for name, data in lz["layers"]:
         if "short_name" in data and name != f"landing-zones/{lz['workload']}/_workload":
             problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/_workload.yaml.")
-    if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
-        problems.append(f"{at('short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits.")
-    elif "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):
-        problems.append(f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
-                        "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md).")
+    problems += short_name_problems(lz)
     if "decommission" in s and s["decommission"] is not True:
         problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
     for required in ("owner", "cost_center", "archetype", "subscription", "location"):
@@ -525,6 +521,17 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     return configs
 
 
+def short_name_problems(lz: dict) -> list[str]:
+    """What is wrong with the workload's short name: one it sets, or the workload's own name when it sets none."""
+    s = lz["settings"]
+    if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
+        return [f"{origin(lz, 'short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits."]
+    if "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):
+        return [f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
+                "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md)."]
+    return []
+
+
 def short_name(lz: dict) -> str:
     """The workload's short name in names: short_name, or the workload's own name when it fits."""
     return lz["settings"].get("short_name") or lz["workload"]
@@ -569,6 +576,8 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
                 return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
             elif settings is None and fits:
                 problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (python3 -m mlz allocate).")
+            elif settings is not None:  # the template needs both; check() says the same, so the messages are one
+                problems.extend(short_name_problems(lz) or [f"{where}: location is required (set it here or in a layer above)."])
             return None
         except ConfigError as error:
             problems.append(f"{where}: {error}")
@@ -612,7 +621,9 @@ def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
                 raise ValueError  # the allocator writes {} for a landing zone without names, never null or a list
             # In the order the allocator writes them, whatever order the file was read in.
             parsed[str(key)] = {item: naming.check(kind, entry[item]) for item, (kind, _) in NAMED.items() if item in entry}
-            if entry.get("network_security_groups"):
+            if "network_security_groups" in entry:
+                if not isinstance(entry["network_security_groups"], dict) or not entry["network_security_groups"]:
+                    raise ValueError  # the allocator leaves the key out rather than write it empty
                 parsed[str(key)]["network_security_groups"] = {str(subnet): naming.check("network_security_group", value)
                                                                 for subnet, value in sorted(entry["network_security_groups"].items())}
         except (AttributeError, TypeError, ValueError, ConfigError):
