@@ -39,7 +39,7 @@ class DriftTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_drift(self, statuses: dict[str, int | None], open_issue: str = "", check: str = "success") -> str:
+    def run_drift(self, statuses: dict[str, int | str | None], open_issue: str = "", check: str = "success") -> str:
         for stack, status in statuses.items():
             if status is not None:
                 (self.dir / ".mlz" / f"status-{stack}.txt").write_text(f"{status}\n")
@@ -57,6 +57,11 @@ class DriftTest(unittest.TestCase):
         self.assertNotIn("`management`", log)
         self.assertIn("https://example/run/1", log)
         self.assertIn("A change in GitHub's own list of domains", log)  # the platform's firewall stack
+
+    def test_a_job_that_never_planned_is_not_a_clean_one(self):
+        log = self.run_drift({"platform": "none"}, open_issue="12")  # what the job records when it stopped before planning
+        self.assertIn("- **No plan:** `platform`, the plan did not finish", log)
+        self.assertNotIn("issue close 12", log)
 
     def test_a_refused_plan_is_reported_as_not_planned(self):
         log = self.run_drift({"platform": 3})
