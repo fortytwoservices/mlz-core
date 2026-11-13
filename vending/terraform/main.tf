@@ -99,8 +99,10 @@ resource "azapi_resource" "state_role" {
     } : identity => role if !local.decommission
   }
 
-  type      = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  name      = uuidv5("url", "mlz-core/${local.lz.key}/state/${each.key}")
+  type = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  # Unique in the tenant, as Azure needs: the container and the principal, so a replaced identity gets a new assignment
+  # (an assignment's principal never changes).
+  name      = uuidv5("url", "mlz-core/${azapi_resource.state_container.id}/${module.vending.umi_principal_ids[each.key]}")
   parent_id = azapi_resource.state_container.id
   body = {
     properties = {

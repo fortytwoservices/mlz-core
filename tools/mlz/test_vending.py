@@ -666,6 +666,31 @@ class VendingTest(unittest.TestCase):
         record, _ = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=recorded_names(self.repo))
         self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
 
+    def test_no_two_landing_zones_get_one_repo(self):
+        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        # {app}{env} without a dash: ab/preprod and abpre/prod come out the same.
+        for workload, env, sub in (("ab", "preprod", "55"), ("abpre", "prod", "66")):
+            self.write(f"landing-zones/{workload}/_workload.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))
+            self.write(f"landing-zones/{workload}/{env}.yaml", DEV.replace("44", sub))
+        joined = {**GOVERNANCE, "naming": {"repository": "{app}{env}"}}
+        self.allocate(governance=joined)
+        self.assertIn("landing-zones: ab-preprod, abpre-prod would share the repo demo-org/abpreprod, which vending makes for ab-preprod, abpre-prod",
+                      self.problems(build, joined, PLATFORM))
+        # A repo vending makes, with the name another landing zone's existing repo has, ignoring case. The names given
+        # under the joined template are recorded, so they go first.
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: AB-Preprod\n")
+        self.assertIn("would share the repo demo-org/ab-preprod, which vending makes for ab-preprod", self.problems(build, GOVERNANCE, PLATFORM))
+        # Not text: reported by the check, not a crash here.
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: 42\n")
+        self.assertIn("github.repo 42 is a repository name", self.problems(build, GOVERNANCE, PLATFORM))
+        # Two landing zones naming one existing repo, which vending makes for neither: theirs to share.
+        self.write("landing-zones/ab/preprod.yaml", DEV.replace("44", "55") + "github:\n  repo: shared-infra\n")
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: shared-infra\n")
+        self.allocate()
+        build(self.repo, GOVERNANCE, PLATFORM)
+
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
         self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
         self.allocate()

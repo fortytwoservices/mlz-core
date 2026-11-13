@@ -502,6 +502,17 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             problems.append(f"{key}: no names yet; run the IP allocator (python3 -m mlz allocate).")
             continue
         names[key], _ = landing_zone_names(key, lz, sorted(plan[key]["subnets"]), recorded[key], None, problems)
+    # One repo per landing zone that vending makes: a name another landing zone has, made or named under github.repo,
+    # would give two landing zones one repo. GitHub ignores case in repo names. Two landing zones may still share an
+    # existing repo they both name.
+    repos: dict[tuple[str, str], list[tuple[str, bool]]] = {}
+    for key, lz in zones.items():
+        github = github_config(lz, names[key]) if key in names else None
+        if github and isinstance(github["organization"], str) and isinstance(github["repo"], str):  # check() reports the rest
+            repos.setdefault((github["organization"].lower(), github["repo"].lower()), []).append((key, github["create"]))
+    problems += [f"landing-zones: {', '.join(k for k, _ in sorted(users))} would share the repo {org}/{repo}, which vending makes for "
+                 f"{', '.join(k for k, made in sorted(users) if made)}; give naming.repository {{app}} and {{env}} apart, or name one under github.repo."
+                 for (org, repo), users in sorted(repos.items()) if len(users) > 1 and any(made for _, made in users)]
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -563,9 +574,9 @@ def creates_repo(lz: dict) -> bool:
 
 def github_config(lz: dict, names: dict) -> dict | None:
     """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None."""
-    github = lz["settings"].get("github") or {}
-    if not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
-        return None
+    github = lz["settings"].get("github")
+    if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
+        return None  # check() reports a github that is not a group of settings
     return {"organization": github["organization"], "repo": github.get("repo") or names[REPOSITORY], "create": creates_repo(lz), "team": github.get("team")}
 
 
