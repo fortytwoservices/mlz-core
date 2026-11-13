@@ -551,7 +551,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.calls, [])
         text = "\n".join(self.printed)
         self.assertIn("you are not an owner of acme, so nothing was changed", text)
-        self.assertIn("gh auth refresh -h github.com -s manage_runners:org,write:network_configurations", text)
+        self.assertIn("gh auth refresh -h github.com -s admin:org,manage_runners:org,read:network_configurations,write:network_configurations", text)
         self.assertIn("gh api -X POST orgs/acme/settings/network-configurations -f name=mlz -f compute_service=actions "
                       "-f 'network_settings_ids[]=GHID123' --jq .id", text)
         self.assertIn("-F 'selected_repository_ids[]=101' -F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' "

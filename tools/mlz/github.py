@@ -12,8 +12,10 @@ import subprocess
 
 from .merge import ConfigError
 
-# What an owner's gh login needs for the organization's network configuration, runner group and runner.
-RUNNER_SCOPES = "manage_runners:org,write:network_configurations"
+# What an owner's gh login needs for the organization's network configuration, runner group and runner: runner
+# groups take admin:org, runners manage_runners:org, network configurations read: to list and write: to make
+# (GitHub's REST docs, each endpoint's classic token scope).
+RUNNER_SCOPES = "admin:org,manage_runners:org,read:network_configurations,write:network_configurations"
 
 
 class GitHub:
@@ -23,7 +25,8 @@ class GitHub:
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
                 return None
-            scopes = "workflow" if "workflow" in run.stderr else RUNNER_SCOPES if "runner" in run.stderr or "network_configurations" in run.stderr else None
+            runner_scope = any(word in run.stderr for word in ("admin:org", "manage_runners", "network_configurations"))
+            scopes = "workflow" if "workflow" in run.stderr else RUNNER_SCOPES if runner_scope else None
             hint = f" Add the scope with: gh auth refresh -h github.com -s {scopes}" if scopes and "scope" in run.stderr else ""
             raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}{hint}")
         return json.loads(run.stdout) if run.stdout.strip() else None

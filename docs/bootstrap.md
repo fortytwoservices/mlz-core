@@ -157,8 +157,9 @@ state account's private endpoint ([below](#running-it-again)), `mlz install runn
 - Then, once the state account has its private endpoint, it sets `MLZ_RUNS_ON` to `mlz` in the three repos,
   and their next runs plan, apply and publish on the runner ([pipelines](pipelines.md#what-runs-when)).
   Without the endpoint the runner could not reach the state, so the repos stay on GitHub's public runners.
-- Only an owner of the organization may make the three, and their `gh` login needs the
-  `manage_runners:org` and `write:network_configurations` scopes. Run by anyone else, the step changes
+- Only an owner of the organization may make the three, and their `gh` login needs the `admin:org`
+  (runner groups), `manage_runners:org` (runners), and `read:network_configurations` and
+  `write:network_configurations` scopes. Run by anyone else, the step changes
   nothing and prints the commands to send to an owner, filled in, and then the three commands that switch
   the repos, which an admin on them runs.
 
