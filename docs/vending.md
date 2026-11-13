@@ -170,13 +170,13 @@ owner: payments@demo.example
   `firewall/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
   taken the landing zone's rules out of Azure (the job reads every rule collection group of the hub's
   firewall policy: none still changing or failed, none with the landing zone's collections, no rule with its
-  range as source or destination; deleting the file alone does not take them out), it opens one here that deletes the landing zone's file, and `_workload.yaml` when it was
-  the workload's last landing zone, and releases its range in the IP plan. In that order: released, the range
-  may go to a new landing zone, which must not inherit the old one's rules, and the landing zone leaves
-  vending's contract, so a rules file still there would stop the platform's check. The job runs after every
-  run on `main` in which the landing zones are as `main` says, the daily check included, so each pull request
-  follows within a day of what it waits for. An open pull request is left as it is. Both come from the MLZ
-  App, on branches `mlz/decommission-<key>`.
+  range as source or destination; deleting the file alone does not take them out), it opens one here that
+  deletes the landing zone's file, and `_workload.yaml` when it was the workload's last landing zone, and
+  releases its range in the IP plan. In that order: released, the range may go to a new landing zone, which
+  must not inherit the old one's rules, and the landing zone leaves vending's contract, so a rules file still
+  there would stop the platform's check. The job runs after every run on `main` in which the landing zones are
+  as `main` says, the daily check included, so each pull request follows within a day of what it waits for.
+  An open pull request is left as it is. Both come from the MLZ App, on branches `mlz/decommission-<key>`.
 
 ## Operating notes
 

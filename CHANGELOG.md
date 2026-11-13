@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4](https://github.com/fortytwoservices/mlz-core/compare/v0.3.3...v0.3.4) (2026-11-13)
+
+
+### Features
+
+* **governance:** one run on a first deployment; the DNS policy's rights on the connectivity subscription ([#47](https://github.com/fortytwoservices/mlz-core/issues/47)) ([e21df03](https://github.com/fortytwoservices/mlz-core/commit/e21df03555093c0a982073750e4ae44f58527bdb))
+* **platform:** region codes for every Azure region, from one file ([#49](https://github.com/fortytwoservices/mlz-core/issues/49)) ([a1c52e5](https://github.com/fortytwoservices/mlz-core/commit/a1c52e5cf7f8c88225e08e1de765380d4eefbee6))
+
 ## [0.3.3](https://github.com/fortytwoservices/mlz-core/compare/v0.3.2...v0.3.3) (2026-11-13)
 
 
