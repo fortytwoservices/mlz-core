@@ -121,6 +121,24 @@ To rename:
 before it is released, it is the same resource under the same name. `python3 -m mlz release` frees both, and a
 decommissioned landing zone's names go with its file and range, in the same pull request.
 
+### In a workload repo
+
+A team names what it makes in its landing zone's workload repo with `modules/naming`, a Terraform module on the same
+template, codes and rules, so its resources read like the landing zone's own:
+
+```hcl
+module "gateway_name" {
+  source  = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=vX.Y.Z"
+  mlz     = var.mlz # the landing zone's naming values: org, app, env, region, template, templates
+  type    = "application_gateway"
+  purpose = "web"
+}
+# module.gateway_name.name: agw-acme-pay-web-pd-nwe-01
+```
+
+A name that does not fit stops the plan, as mlz-core's own do. A test renders cases through the module and through
+`tools/mlz/naming.py` and requires the same names.
+
 ## The platform, governance and the bootstrap
 
 Each part of the platform is an app of its own, in `prod` (the platform's names, below, are for a customer whose
