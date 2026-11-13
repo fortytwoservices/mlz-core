@@ -23,8 +23,12 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
+        self.allocate()
+
+    def allocate(self, governance=GOVERNANCE) -> None:
         plan, _, retired = vending.allocate(self.repo, PLATFORM)
         self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
+        self.write(vending.NAMES, vending.render_names(vending.give_names(self.repo, plan, governance)[0]))
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -55,8 +59,16 @@ class ExplainTest(unittest.TestCase):
 
     def test_names_and_where_they_come_from(self):
         rows = self.rows()
-        self.assertEqual(rows["name virtual_network"], ("vnet-demo-pay-pd-nwe-01", "the naming template (docs/naming.md)"))
-        self.assertEqual(rows["name NSG of default"], ("nsg-demo-pay-default-pd-nwe-01", "the naming template (docs/naming.md)"))
+        self.assertEqual(rows["name virtual_network"], ("vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
+        self.assertEqual(rows["name NSG of default"], ("nsg-demo-pay-default-pd-nwe-01", "recorded in _generated/names.yaml"))
+        # A changed short name renames nothing; explain shows what renewing would give.
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.assertEqual(self.rows()["name virtual_network"], (
+            "vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml; the template now gives vnet-demo-pm-pd-nwe-01 (python3 -m mlz names --renew payments-prod)"))
+        # Not recorded yet: the template's, which the pull request's run records.
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        (self.repo / vending.NAMES).unlink()
+        self.assertEqual(self.rows()["name route_table"], ("rt-demo-pay-pd-nwe-01", "the naming template (docs/naming.md), recorded by the IP allocator on the pull request"))
         self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-legacy\n")
         self.assertEqual(self.rows()["name virtual_network"], ("vnet-legacy", "names: in landing-zones/payments/prod.yaml"))
         # The file as it is: a .yml, or a folder of chunks.

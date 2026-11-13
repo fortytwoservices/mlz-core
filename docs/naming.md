@@ -79,6 +79,39 @@ so they keep that pattern.
   each, so the check refuses it until `{purpose}` is back or one of them is named under `names:`.
 - `python3 -m mlz explain <key>` shows every name and where it came from.
 
+### A name, once given, stays
+
+The IP allocator gives a landing zone its names along with its addresses, and records them in
+`_generated/names.yaml`; the pull request's run commits both (`docs/vending.md`). Vending's plan reads the names
+from there, not from the template, so **changing the template, a short name or an environment's code renames
+nothing already named**: only what is new takes the template as it is then, such as a new landing zone, or the NSG of
+a new subnet.
+
+```yaml
+# _generated/names.yaml
+payments-prod:
+  network_resource_group: rg-acme-pay-net-pd-nwe-01
+  ...
+  network_security_groups:
+    default: nsg-acme-pay-default-pd-nwe-01
+```
+
+A name counts as given once it is on `main`, where it can be deployed from. Until then, each run of the pull
+request gives it again from the YAML as it is, so a short name changed in review still applies.
+
+To rename:
+
+- **one resource**: set its name under `names:` in the landing zone's file. The file's name wins and the record
+  drops that resource; take the name out again and the template gives it a new one.
+- **a whole landing zone**: `python3 -m mlz names --repo . --renew <key>` gives what it has now the template's names
+  again and writes the record. Commit it in a pull request: its plan shows each renamed resource replaced, and nothing is
+  changed until the reviewer approves the apply. `mlz explain <key>` shows, beside each recorded name, what the
+  template would give now.
+
+**A removed landing zone or subnet keeps its names while it holds its addresses** in the IP plan: asked for again
+before it is released, it is the same resource under the same name. `python3 -m mlz release` frees both, and a
+decommissioned landing zone's names go with its file and range, in the same pull request.
+
 ## customer.yaml
 
 ```yaml
@@ -103,4 +136,4 @@ characters, or with a hyphen, cannot be the customer's code, so it needs `naming
 once the section is there, and vending's, which names every landing zone, asks for it either way.
 
 The design and the decisions behind it, 13 November 2026: recorded names, `mlz names --renew`, the platform's
-app names and child resources, in the managed landing zone's design notes.
+app names and child resources, are in the managed landing zone's design notes.

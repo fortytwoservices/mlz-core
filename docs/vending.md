@@ -53,8 +53,7 @@ Any layer can be a folder of chunks.
 - **Address ranges and subnets**, by the IP allocator (`python3 -m mlz allocate`). A new landing zone gets
   the first free block of its size in its region's `landing_zone_ranges`, never in a region's
   `platform_address_space` (the hub, management and identity) or a range the platform reserves; a new subnet gets the first free block in its landing zone's range,
-  largest first. It writes one file, the
-  network plan, and nobody types an address:
+  largest first. It writes the network plan, and nobody types an address:
 
   ```yaml
   # _generated/ip-plan.yaml
@@ -74,9 +73,9 @@ Any layer can be a folder of chunks.
   rather than moving anything. It writes nothing when anything is wrong.
 
   **Nobody runs the allocator by hand.** On a pull request, the pipeline runs it on the pull request merged
-  into `main` and, when anything new needs addresses, commits the plan to the pull request
-  (`chore: IP plan for this pull request`, from the pipeline's GitHub App). That run stops there; the run
-  of the new commit checks and plans with the addresses, and the reviewer sees them in the pull request.
+  into `main` and, when anything new needs addresses or names, commits the plan and the names to the pull request
+  (`chore: IP plan and names for this pull request`, from the pipeline's GitHub App). That run stops there; the run
+  of the new commit checks and plans with them, and the reviewer sees them in the pull request.
   Because it allocates on top of `main`, blocks another pull request has already merged are never given
   out twice. If `main` changed the plan since the branch was made, the pipeline first brings the branch up
   to date with `main` (a merge commit from the same App), so the plan it commits next never conflicts with
@@ -84,13 +83,15 @@ Any layer can be a folder of chunks.
   its own. You can still run `python3 -m mlz allocate --repo .` yourself, for example to see the
   addresses before pushing.
 
-  `python3 -m mlz allocate --check` writes nothing and fails when the plan in the repo is not what the
-  allocator would write. On `main` it stops two pull requests that each took the same free block, if both
+  `python3 -m mlz allocate --check` writes nothing and fails when the plan or the names in the repo are not what
+  the allocator would write. On `main` it stops two pull requests that each took the same free block, if both
   were merged before either was brought up to date. 500 landing zones take about a second.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
   `ManagedBy`.
 - **Names** from the customer's template, with the workload's `short_name`: for example `vnet-acme-pay-pd-nwe-01`,
-  or an explicit one under `names:` in the landing zone's file (`docs/naming.md`).
+  or an explicit one under `names:` in the landing zone's file. The allocator gives them with the addresses
+  and records them in `_generated/names.yaml`, where they stay when the template or a short name changes;
+  `python3 -m mlz names --renew <key>` gives a landing zone the template's names again (`docs/naming.md`).
 
 `python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
 the value (a mistake in `_defaults/all.yaml` is reported once, against that file, not once per landing zone),
@@ -173,7 +174,7 @@ owner: payments@demo.example
   firewall policy, since shared rules are in each: none still changing or failed, none with the landing zone's collections, no rule with its
   range as source or destination; deleting the file alone does not take them out), it opens one here that
   deletes the landing zone's file, and `_workload.yaml` when it was the workload's last landing zone, and
-  releases its range in the IP plan. In that order: released, the range may go to a new landing zone, which
+  releases its range in the IP plan, and its names. In that order: released, the range may go to a new landing zone, which
   must not inherit the old one's rules, and the landing zone leaves vending's contract, so a rules file still
   there would stop the platform's check. The job runs after every run on `main` in which the landing zones are
   as `main` says, the daily check included, so each pull request follows within a day of what it waits for.

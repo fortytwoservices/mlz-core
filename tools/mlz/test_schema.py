@@ -113,8 +113,10 @@ class StarterTest(unittest.TestCase):
         plan, _, retired = vending.allocate(repo, PLATFORM)
         (repo / vending.IP_PLAN).parent.mkdir(parents=True, exist_ok=True)
         (repo / vending.IP_PLAN).write_text(vending.render_plan(plan, retired))
+        (repo / vending.NAMES).write_text(vending.render_names(vending.give_names(repo, plan, GOVERNANCE)[0]))
         config = vending.build(repo, GOVERNANCE, PLATFORM)["payments-prod"]
         self.assertEqual(config["management_group_id"], "demo-lz-corp")
+        self.assertEqual(config["names"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
         self.assertEqual(set(config["network"]["subnets"]), {"app", "data"})
 
 
