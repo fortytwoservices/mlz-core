@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/fortytwoservices/mlz-core/compare/v0.4.0...v0.5.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **naming:** every resource the platform, governance and the bootstrap make gets a new name from the customer's naming template, which their next plans show as replacements; a root ID over four characters or with a hyphen needs naming.org in customer.yaml even without a naming section. The bootstrap's state account has prevent_destroy, so a run that would rename it stops: set names.storage_account in bootstrap.yaml to keep it (docs/naming.md).
+
+### Features
+
+* **naming:** the platform, governance and the bootstrap named from the customer's template ([#64](https://github.com/fortytwoservices/mlz-core/issues/64)) ([95f31a7](https://github.com/fortytwoservices/mlz-core/commit/95f31a75c90171f48e6e793840902f28113abbe7))
+* **naming:** the platform's parts as apps, and rules for DCRs and GitHub network settings ([#62](https://github.com/fortytwoservices/mlz-core/issues/62)) ([05795d2](https://github.com/fortytwoservices/mlz-core/commit/05795d2ff7cdf5d0b5e901423bd2edd26dbff007))
+
 ## [0.4.0](https://github.com/fortytwoservices/mlz-core/compare/v0.3.8...v0.4.0) (2026-11-13)
 
 
