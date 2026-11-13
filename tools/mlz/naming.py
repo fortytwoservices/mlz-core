@@ -227,6 +227,10 @@ def template_text(parts: list[tuple[str, str]]) -> str:
 
 def helper_values(naming: Naming, env: str, region: str) -> dict:
     """What modules/naming takes for one landing zone, codes resolved: org, env, region, the templates as written."""
+    if env not in naming.environments:
+        raise ConfigError(f"the environment {env!r} has no short name; add it under naming.environments in customer.yaml.")
+    if region not in naming.regions:
+        raise ConfigError(f"the region {region!r} has no short name (modules/naming/region-codes.json).")
     return {"org": naming.org, "env": naming.environments[env], "region": naming.regions[region], "template": template_text(naming.template),
             "templates": {kind: template_text(parts) for kind, parts in naming.templates.items()}}
 

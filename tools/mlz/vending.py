@@ -524,6 +524,15 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
         except ConfigError as error:
             problems.append(f"_generated/governance.yaml: {error}")
+    workloads = {}
+    for key, lz in zones.items():
+        if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("location"), str):
+            try:
+                workloads[key] = {"landing_zone": key, "subscription_id": str(lz["settings"].get("subscription", "")).lower(),
+                                  "location": lz["settings"]["location"], "app": short_name(lz),
+                                  **naming.helper_values(settings, lz["environment"], lz["settings"]["location"])}
+            except ConfigError as error:
+                problems.append(f"{lz['where']}: its workload repo's values: {error}")
     subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
@@ -562,8 +571,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "decommission": decommissioned(lz),
             "names": names[key],
             # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
-            "workload": {"landing_zone": key, "subscription_id": s["subscription"].lower(), "location": s["location"], "app": short_name(lz),
-                         **naming.helper_values(settings, lz["environment"], s["location"])} if creates_repo(lz) and settings else None,
+            "workload": workloads.get(key),
         }
     return configs
 

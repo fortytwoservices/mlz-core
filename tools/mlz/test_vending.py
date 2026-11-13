@@ -653,6 +653,11 @@ class VendingTest(unittest.TestCase):
             "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
         })
         self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
+        # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
+        self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
+        self.allocate(governance={**own, "naming": {**own["naming"], "environments": {"hotfix": "hf"}}})
+        self.assertIn("landing-zones/payments/hotfix: its workload repo's values: the environment 'hotfix' has no short name; add it under "
+                      "naming.environments in customer.yaml.", self.problems(build, own, PLATFORM))
 
     def test_a_repo_vending_makes_needs_its_team(self):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team.
