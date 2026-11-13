@@ -4,6 +4,6 @@
 // user settings.
 {
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.7/schemas/landing-zone.schema.json": ["landing-zones/**/*.yaml", "landing-zones/**/*.yml"] // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.3.8/schemas/landing-zone.schema.json": ["landing-zones/**/*.yaml", "landing-zones/**/*.yml"] // x-release-please-version
   }
 }
