@@ -105,6 +105,11 @@ def parse(template: object, where: str, problems: list[str]) -> list[tuple[str, 
     if ("token", "type") not in parts:
         problems.append(f"{where}: {template!r} has no {{type}}: every name starts from its resource's short name.")
         return []
+    tokens = [v for k, v in parts if k == "token"]
+    if len(tokens) != len(set(tokens)):
+        problems.append(f"{where}: {template!r} has {', '.join(sorted('{' + t + '}' for t in set(tokens) if tokens.count(t) > 1))} more than once; "
+                        "a template names each token once.")
+        return []
     return parts
 
 

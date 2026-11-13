@@ -26,6 +26,7 @@ CASES = {
     "no purpose token": ({"org": "acme", "template": FLAT}, "network_security_group", "pay", "uat", "norwayeast", "web", 12),
     "an environment and a region of the customer's": ({"org": "acme", "environments": {"hotfix": "hf"}, "regions": {"westeurope": "weu"}}, "public_ip_address", "pay", "hotfix", "westeurope", "afw", 2),
     "a data collection rule": ({"org": "mlz"}, "data_collection_rule", "mgt", "prod", "norwayeast", "changetracking", 1),
+    "an empty purpose, as absent": ({"org": "acme"}, "application_gateway", "pay", "prod", "norwayeast", "", 1),
 }
 
 
@@ -70,6 +71,15 @@ class HelperTest(unittest.TestCase):
         self.assertEqual(names["network group"], "rg-acme-pay-net-pd-nwe-01")
         self.assertEqual(names["storage account"], "stacmepayappwebpdnwe01")
         self.assertEqual(names["purpose first, empty"], "agw-pay-03")
+
+    def test_a_template_naming_a_token_twice_is_refused_by_both(self):
+        repeated = "{purpose}-{purpose}-{type}-{app}"
+        with self.assertRaisesRegex(naming.ConfigError, "has {purpose} more than once; a template names each token once"):
+            naming.settings({"naming": {"org": "acme", "template": repeated}}, "mlz")
+        mlz = {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": repeated, "templates": {}}
+        result, _ = apply({"twice": {"mlz": mlz, "type": "application_gateway", "purpose": None, "nn": 1}})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("A template names each token once.", " ".join(result.stderr.split()))
 
     def test_a_name_azure_would_not_take_is_refused_not_cut(self):
         settings = naming.settings({"naming": {"org": "acme"}}, "mlz")

@@ -9,6 +9,13 @@ variable "mlz" {
   })
   description = "The landing zone's naming values, as vending writes them to the workload repo's mlz.auto.tfvars.json."
   nullable    = false
+
+  validation {
+    # As customer.yaml's are checked (tools/mlz/naming.py): each token once, so an empty purpose drops out as there.
+    condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
+    length(regexall("\\{[a-z]+\\}", template)) == length(distinct(regexall("\\{[a-z]+\\}", template)))])
+    error_message = "A template names each token once."
+  }
 }
 
 variable "type" {
@@ -25,10 +32,10 @@ variable "type" {
 variable "purpose" {
   type        = string
   default     = null
-  description = "What the resource is for, where the landing zone has more than one of its type: web, logs. Lower-case letters, digits and inner hyphens, up to 20. Empty, it drops out of the name with one dash."
+  description = "What the resource is for, where the landing zone has more than one of its type: web, logs. Lower-case letters, digits and inner hyphens, up to 20. Null or empty, it drops out of the name with one dash."
 
   validation {
-    condition     = var.purpose == null || can(regex("^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$", var.purpose))
+    condition     = var.purpose == null || var.purpose == "" || can(regex("^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$", var.purpose))
     error_message = "`purpose` is 1 to 20 lower-case letters and digits, with hyphens inside."
   }
 }
