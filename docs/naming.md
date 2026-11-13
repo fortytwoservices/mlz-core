@@ -75,6 +75,8 @@ so they keep that pattern.
   ```
 
   A changed name replaces the resource: the plan shows it deleted and created again.
+- Both resource groups, and every NSG, need names of their own. A template without `{purpose}` gives them one
+  each, so the check refuses it until `{purpose}` is back or one of them is named under `names:`.
 - `python3 -m mlz explain <key>` shows every name and where it came from.
 
 ## customer.yaml

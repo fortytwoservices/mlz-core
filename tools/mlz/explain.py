@@ -121,11 +121,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         worked += [(f"route {r['name']}", f"{r['to']} via {r['via']}", source) for r in region.get("spoke_routes") or []]
     if governance is not None and entry is not None:
         # Names, as vending gives them: the landing zone's own under names:, or the customer's template.
-        try:
-            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
-        except ConfigError:
-            settings = None  # problems() reports it, as the vending check does
-        named = vending.landing_zone_names(key, lz, settings, sorted(entry["subnets"]), []) if settings else {}
+        named = landing_zone_names(key, lz, entry, governance, [])  # problems() reports what stops one
         own = lz["settings"].get("names") if isinstance(lz["settings"].get("names"), dict) else {}
         for item, value in named.items():
             if item in vending.NAMED and value:
@@ -135,6 +131,16 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 given = subnet in (own.get("network_security_groups") or {}) if isinstance(own.get("network_security_groups"), dict) else False
                 worked.append((f"name NSG of {subnet}", value, f"names: in {lz['where']}.yaml" if given else "the naming template (docs/naming.md)"))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
+
+
+def landing_zone_names(key: str, lz: dict, entry: dict, governance: dict, found: list[str]) -> dict:
+    """The names vending gives the landing zone, with what stops any of them in found."""
+    try:
+        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+    except ConfigError as error:
+        found.append(f"_generated/governance.yaml: {error}")
+        return {}
+    return vending.landing_zone_names(key, lz, settings, sorted(entry["subnets"]), found)
 
 
 def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: dict | None) -> list[str]:
@@ -159,6 +165,8 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
         given = plan[key]["range"]
         found += [f"{vending.IP_PLAN}: {key}'s range {given} overlaps {other}'s {entry['range']}."
                   for other, entry in sorted(plan.items()) if other != key and given.overlaps(entry["range"])]
+        if governance is not None:
+            landing_zone_names(key, lz, plan[key], governance, found)
     return list(dict.fromkeys(found))
 
 

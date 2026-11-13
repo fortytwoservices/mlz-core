@@ -35,7 +35,7 @@ ENVIRONMENTS = {"dev": "dv", "test": "te", "uat": "ut", "sit": "st", "qa": "qa",
 # the real limit, and a type without dashes drops them.
 LIMITS = {"org": (2, 4), "app": (2, 5), "purpose": (1, 20), "env": (1, 4), "region": (2, 5)}
 SHORT = re.compile(r"^[a-z0-9]+$")
-PURPOSE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+PURPOSE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")  # as a subnet's name: hyphens inside, any number
 SETTINGS = {"org", "template", "templates", "environments", "regions"}
 RULES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json").read_text())["types"]
 PART = re.compile(r"\{([a-z]+)\}|(-)|([a-z0-9]+)")

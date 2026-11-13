@@ -60,6 +60,18 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-legacy\n")
         self.assertEqual(self.rows()["name virtual_network"], ("vnet-legacy", "names: in landing-zones/payments/prod.yaml"))
 
+    def test_the_check_reports_what_stops_a_name(self):
+        lz = lambda: vending.landing_zones(self.repo)["payments-prod"]
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  route_table: 'rt bad'\n")
+        found = explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: route_table name rt bad has characters Azure does not allow", "\n".join(found))
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        found = explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), {**GOVERNANCE, "root": "demo-corp"}, PLATFORM)
+        self.assertIn("_generated/governance.yaml: naming settings are not valid", "\n".join(found))
+        found = explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), {**GOVERNANCE, "naming": {"environments": {"prod": "PROD"}}}, PLATFORM)
+        self.assertTrue(found)
+        self.assertEqual(explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), GOVERNANCE, PLATFORM), [])
+
     def test_a_decommissioned_landing_zone_shows_where_it_goes(self):
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
         self.assertEqual(self.rows()["management group"], ("demo-decommissioned", "decommission: true; its plan destroys everything vending made"))

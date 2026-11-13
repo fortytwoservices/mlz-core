@@ -338,6 +338,35 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
         self.assertIn("landing-zones/payments/_workload: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
 
+    def test_two_of_one_type_side_by_side_are_named_apart(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
+        self.allocate()
+        # A template without {purpose} gives both resource groups, and both NSGs, one name.
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        problems = self.problems(build, flat, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: network_resource_group and identity_resource_group would both be rg-demo-pay-pd-nwe-01, "
+                      "and Azure needs its resource groups named apart; put {purpose} in the template, or set one under names:.", problems)
+        self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe-01", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
+                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe-01\n  network_security_groups:\n    web: nsg-pay-web\n")
+        problems = self.problems(build, flat, PLATFORM)  # Azure ignores case in a resource group's name
+        self.assertIn("would both be RG-demo-pay-pd-nwe-01", problems)
+        self.assertNotIn("NSGs", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
+                   "names:\n  identity_resource_group: rg-pay-identity\n  network_security_groups:\n    web: nsg-pay-web\n")
+        names = build(self.repo, flat, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe-01", "rg-pay-identity"))
+
+    def test_a_short_name_that_is_not_text_is_reported_not_a_crash(self):
+        self.allocate()
+        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))
+        self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: 42"))
+        self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/_workload: short_name is ['pay']; it must be 2 to 5", problems)
+        self.assertIn("landing-zones/web/_workload: short_name is 42; it must be 2 to 5", problems)
+
     def test_the_short_name_is_the_workload_s_own_when_it_fits(self):
         self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
         self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))

@@ -459,7 +459,8 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     # One short name per workload: two workloads with the same one would read alike in every name.
     shorts = {}
     for lz in zones.values():
-        shorts.setdefault(short_name(lz), set()).add(lz["workload"])
+        if isinstance(short_name(lz), str):  # check() reports one that is not
+            shorts.setdefault(short_name(lz), set()).add(lz["workload"])
     problems += [f"landing-zones: workloads {', '.join(sorted(w))} share the short name {k}; give each its own short_name." for k, w in sorted(shorts.items()) if len(w) > 1]
     try:
         # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
@@ -547,6 +548,17 @@ def landing_zone_names(key: str, lz: dict, settings: naming.Naming, subnets: lis
 
     names = {name: one(kind, purpose, explicit.get(name)) for name, (kind, purpose) in NAMED.items()}
     names["network_security_groups"] = {subnet: one("network_security_group", subnet, nsgs.get(subnet)) for subnet in subnets}
+    # Two of one type side by side need names apart, which a template without {purpose} would not give: both
+    # resource groups in one subscription, or every NSG in one resource group. Azure ignores case in both.
+    for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group")]),
+                        ("NSGs", [(f"network_security_groups.{s}", v) for s, v in names["network_security_groups"].items()])):
+        seen: dict[str, str] = {}
+        for item, value in items:
+            if value is not None and value.lower() in seen:
+                problems.append(f"{where}: {seen[value.lower()]} and {item} would both be {value}, and Azure needs its {what} named apart; "
+                                "put {purpose} in the template, or set one under names:.")
+            elif value is not None:
+                seen[value.lower()] = item
     names["subnet"] = "snet-%s"
     names["peering_to_hub"], names["peering_from_hub"] = f"peer-{key}-to-hub", f"peer-hub-to-{key}"
     return names
