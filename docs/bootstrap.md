@@ -155,15 +155,16 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, no force push,
      no deletion.
    - Each gets `.github/CODEOWNERS`, with `platform_team` owning every file but `_generated/`, and that team gets
-     write access, which a code owner needs; a team with more keeps it. The team must exist first; it can take its
-     members from an Entra ID group ([pipelines](pipelines.md#code-owners)).
+     write access, which a code owner needs; a team with more keeps it. The team must exist first, and be visible:
+     `CODEOWNERS` skips a secret team. It can take its members from an Entra ID group
+     ([pipelines](pipelines.md#code-owners)).
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
      request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` is left as it is.
 2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
-   and the ruleset `main` requires a code owner's review. Making the App needs a browser, so that step stays
-   manual.
+   and an active ruleset requires a code owner's review on the default branch. Making the App needs a browser, so
+   that step stays manual.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the

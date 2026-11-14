@@ -45,11 +45,11 @@ WORKFLOW = ".github/workflows/mlz.yml"
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
-                 teams=("platform",), writers=None, owner_errors=None, ruleset_review=True, owned=True):
+                 teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
-        self.teams, self.granted = set(teams), []
+        self.teams, self.secret, self.granted = set(teams), set(secret), []
         self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
         self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
@@ -102,7 +102,7 @@ class FakeGitHub:
         return (repo, name) in self.variables
 
     def team(self, org, slug):
-        return {"slug": slug} if slug in self.teams else None
+        return {"slug": slug, "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
 
     def team_can_write(self, org, slug, repo):
         return (slug, repo) in self.writers
@@ -436,7 +436,8 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
         # Per repo: the MLZ App, and its code owners.
         self.assertEqual(len(self.printed), 8)
-        self.assertIn("acme/mlz-vending: acme/platform owns it, and its approval is required", self.printed)
+        self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
+                      "and a code owner's review is required on main", self.printed)
 
     # code owners
 
@@ -459,6 +460,11 @@ class InstallTest(unittest.TestCase):
     def test_the_platform_team_must_exist_and_be_named(self):
         with self.assertRaisesRegex(ConfigError, "acme has no team platform"):
             install.step_repos(FakeGitHub(teams=()), self.folder, self.out)
+        # GitHub skips a secret team in CODEOWNERS; it is refused before any repo changes.
+        github = FakeGitHub(secret=("platform",))
+        with self.assertRaisesRegex(ConfigError, "acme/platform is a secret team"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.repos, github.commits), ({}, []))
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
         with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
             install.step_repos(FakeGitHub(), self.folder, self.out)

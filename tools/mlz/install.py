@@ -153,9 +153,14 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
     _, bootstrap = settings(folder)
     repos = repositories(bootstrap)
     org, team = platform_team(bootstrap)
-    if github.team(org, team) is None:
+    found_team = github.team(org, team)
+    if found_team is None:
         raise ConfigError(f"{org} has no team {team} (bootstrap.yaml's github.platform_team). Make it, and connect it to its "
                           "Entra ID group if the organization syncs teams, then run this step again.")
+    if found_team.get("privacy") == "secret":
+        # GitHub skips a secret team in CODEOWNERS, which would leave every path without an owner.
+        raise ConfigError(f"{org}/{team} is a secret team, and CODEOWNERS can only name a visible one. An organization owner "
+                          "makes it visible (the team's Settings, Team visibility), then run this step again.")
     for role, repo in repos.items():
         owner, name = repo.split("/")
         found = github.repo(repo)
@@ -279,7 +284,7 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
         found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}, so CODEOWNERS only suggests reviewers; "
                      "turn on 'Require review from Code Owners' in its ruleset main (Settings, Rules, Rulesets), and check that it is active.")
     if not found:
-        out(f"{repo}: {org}/{team} owns it, and its approval is required")
+        out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}")
     return found
 
 
