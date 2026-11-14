@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/fortytwoservices/mlz-core/compare/v0.7.0...v0.8.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **firewall:** rules say why, never reach the whole internet, and may come before their landing zone ([#75](https://github.com/fortytwoservices/mlz-core/issues/75))
+
+### Features
+
+* **firewall:** rules say why, never reach the whole internet, and may come before their landing zone ([#75](https://github.com/fortytwoservices/mlz-core/issues/75)) ([31a885e](https://github.com/fortytwoservices/mlz-core/commit/31a885e8d56292cb35be63dfbd1c08a83139d98a))
+* **install:** the platform team as code owner of the three repos ([#76](https://github.com/fortytwoservices/mlz-core/issues/76)) ([d6f13f7](https://github.com/fortytwoservices/mlz-core/commit/d6f13f77ccb51580bbd138ad5a6112b5feed7d43))
+
 ## [0.7.0](https://github.com/fortytwoservices/mlz-core/compare/v0.6.1...v0.7.0) (2026-11-13)
 
 
