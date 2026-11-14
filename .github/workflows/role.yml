@@ -125,11 +125,12 @@ jobs:
         run: .mlz-core/tools/ci/ip-plan.sh
 
       # A line of CODEOWNERS that GitHub cannot use leaves its paths with no owner at all, so any error in it stops
-      # the run; on a pull request, in the file as the pull request has it (docs/pipelines.md, Code owners).
+      # the run (docs/pipelines.md, Code owners). At github.sha, the commit checked out: on a pull request, the merge
+      # commit GitHub makes of it, which the errors API reads too (tested in fortytwo-test, 2026-11-14).
       - name: Check the code owners
         env:
           GH_TOKEN: ${{ github.token }}
-          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          REF: ${{ github.sha }}
         run: PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF"
 
       - name: Check the YAML

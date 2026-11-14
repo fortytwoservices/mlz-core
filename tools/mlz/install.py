@@ -186,6 +186,9 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
             missing = {path: text for path, text in starter_files(role, folder).items() if github.file(repo, path, branch)[0] is None}
+            # GitHub reads .github/CODEOWNERS before the root's and docs/: one added beside the repo's own would replace it.
+            if any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+                missing.pop(owners.PATH, None)
             url = github.open_pull(repo, STARTER_BRANCH)
             if not url:
                 github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
@@ -269,11 +272,12 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
         if errors is None:
             found.append(f"{repo}: GitHub has not read {owners.PATH} yet; run this step again in a minute.")
         found += [f"{repo}: {problem}" for problem in owners.problems(errors or [], repo)]
-    ruleset = github.ruleset(repo, MAIN_RULESET["name"]) or {}
-    review = next((rule.get("parameters") or {} for rule in ruleset.get("rules", []) if rule.get("type") == "pull_request"), {})
-    if not review.get("require_code_owner_review"):
-        found.append(f"{repo}: its ruleset main does not require a code owner's review, so CODEOWNERS only suggests reviewers; "
-                     "turn on 'Require review from Code Owners' in it (Settings, Rules, Rulesets).")
+    # The rules GitHub applies to the branch, from every active ruleset, the organization's too: a ruleset that is
+    # disabled, only evaluated, or aimed at other branches has none here.
+    if not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")
+               for rule in github.branch_rules(repo, branch)):
+        found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}, so CODEOWNERS only suggests reviewers; "
+                     "turn on 'Require review from Code Owners' in its ruleset main (Settings, Rules, Rulesets), and check that it is active.")
     if not found:
         out(f"{repo}: {org}/{team} owns it, and its approval is required")
     return found

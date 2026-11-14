@@ -135,10 +135,9 @@ class GitHub:
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True
 
-    def ruleset(self, repo: str, name: str) -> dict | None:
-        """The repo's own ruleset of that name, with its rules, or None."""
-        found = next((r for r in self._pages(f"repos/{repo}/rulesets?includes_parents=false") if r["name"] == name), None)
-        return self._api(f"repos/{repo}/rulesets/{found['id']}") if found else None
+    def branch_rules(self, repo: str, branch: str) -> list[dict]:
+        """Every rule GitHub enforces on the branch, from the active rulesets that apply to it, the organization's too."""
+        return self._pages(f"repos/{repo}/rules/branches/{branch}")
 
     # Code owners (tools/mlz/owners.py)
 

@@ -114,8 +114,8 @@ class FakeGitHub:
     def codeowners_errors(self, repo, ref):
         return self.owner_errors.get(repo, [])
 
-    def ruleset(self, repo, name):
-        return {"name": name, "rules": [{"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}}]}
+    def branch_rules(self, repo, branch):
+        return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -470,6 +470,15 @@ class InstallTest(unittest.TestCase):
         self.assertEqual((branch, list(files), message), ("mlz/code-owners", [".github/CODEOWNERS"], "chore: the platform team as code owner"))
         self.assertIn("acme/mlz-governance: .github/CODEOWNERS is offered in https://github.com/acme/mlz-governance/pull/1", self.printed)
 
+    def test_an_adopted_repo_keeps_its_own_code_owners(self):
+        # Its CODEOWNERS at the root: a .github/ one beside it would be read first, and replace it.
+        github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"],
+                            files={("acme/mlz-governance", "CODEOWNERS"): ("* @acme/own\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        offered = next(files for repo, branch, _, files, _ in github.commits if repo == "acme/mlz-governance" and branch == "mlz/starter")
+        self.assertNotIn(".github/CODEOWNERS", offered)
+        self.assertIn(".github/workflows/mlz.yml", offered)
+
     def test_check_lists_what_stops_the_code_owners(self):
         github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False,
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()],
@@ -479,7 +488,7 @@ class InstallTest(unittest.TestCase):
             install.step_check(github, self.folder, self.out)
         message = str(caught.exception)
         self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
-        self.assertIn("acme/mlz-platform: its ruleset main does not require a code owner's review", message)
+        self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
                       "A team needs write access to acme/mlz-vending before CODEOWNERS can name it", message)
 

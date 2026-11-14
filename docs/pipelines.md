@@ -148,8 +148,8 @@ file, from `bootstrap.yaml`'s `platform_team`:
   ```
 
   A code owner approves merges to `main`; the apply still waits for the role's environment's reviewer.
-- **Every run checks the file as GitHub reads it** (`python3 -m mlz owners`, in `check`), on a pull request in
-  the file as the pull request has it. GitHub skips a line it cannot use, such as a team that does not exist or
+- **Every run checks the file as GitHub reads it** (`python3 -m mlz owners`, in `check`), at the commit the run
+  checked out: on a pull request, the merge of it into its base. GitHub skips a line it cannot use, such as a team that does not exist or
   has no write access, and the paths that line matches then have no owner at all; they do not fall back to the
   line above (tested on 14 November 2026). So any error stops the run, saying which line and why. A repo without
   the file is only noted.
