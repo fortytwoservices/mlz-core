@@ -135,17 +135,17 @@ platform address space inside those ranges gets them too. `firewall/management.y
 from its network's range, and `firewall/identity.yaml` identity's, from its range in every region that
 builds it (a rule there with no such region stops the check). A rule names only where traffic goes; the
 source is worked out from the vending contract (`_generated/vending.yaml`) and the platform's own layout.
-A file in `firewall/landing-zones/` for a key that contract does not name stops the check, since it is
-usually a typo. A key the contract lists as held, a landing zone decommissioned or removed whose range is not
-released yet, only warns: its rules leave Azure with that run, before the range can go to another landing
-zone, and the file can be deleted (`docs/vending.md`, decommissioning). A rule elsewhere that still names a
-held landing zone stops the check, saying so. Before vending has published anything, on the platform's
-first deployment, those files wait instead, with a notice, so the hub can be built first. `to` takes:
+
+Every rule has a `name`, a `description`, `to` and `ports`. The description says what the rule is for: a
+person approves every rule, and reads it there. `to` takes:
 
 - names in lower case (`api.example.com`) and wildcards (`*.example.com`)
-- addresses and ranges, and other landing zones by key (`website-prod`)
+- addresses and ranges, up to a /8, and other landing zones by key (`website-prod`)
 - FQDN tags such as `WindowsUpdate`
 - service tags such as `AzureMonitor` or `Storage.NorwayEast`
+
+Nothing reaches the whole internet: `*`, the `Internet` service tag and a range wider than a /8 stop the
+check.
 
 `ports` takes `https`, `http`, TCP ports (`8443`) and `udp:<port>`. A name reaches `https` and `http`
 through an application rule, which checks the name the client asks for, and the ports written as numbers
@@ -166,6 +166,26 @@ requires, and deleting a rules file takes its rules out of Azure.
 |---|---|---|
 | `platform` | 500 | `required-network` (100): what governance's own policies need, whatever the customer writes. Today, the Azure Monitor Agent, which reaches the `AzureMonitor` and `AzureResourceManager` service tags on 443, from the landing zones and the platform's own networks. `runners-network` and `runners-application` (110 and 115): what the three pipelines need from management's two runner subnets ([below](#what-the-runners-reach)). Then `firewall/platform.yaml` (200 and 205), `firewall/management.yaml` (300 and 305) and `firewall/identity.yaml` (400 and 405). |
 | `lz-00` to `lz-29` | 1000 to 3900 | Each landing zone's rules, in the group its key hashes to, for ever. Adding a landing zone never moves another's rules, and the 31 groups in all stay under Azure's limit per policy, however many landing zones there are. |
+
+### Asking for a rule
+
+A landing zone's team asks for its rules with a pull request in the platform repo that changes
+`firewall/landing-zones/<key>.yaml`. Any number of landing zones may change in one pull request, as long as
+it says why. The platform repo's check runs on it, and the repo's owners approve and merge it; the platform's
+next run applies it once its reviewer approves. `schemas/firewall.schema.json` in mlz-core describes the
+file, so an editor, or a coding agent writing the request, checks it before the pull request is opened.
+
+- **A landing zone that does not exist yet.** Its file can come before it: a key the vending contract does not
+  name yet is checked like any other, can be merged, and waits, with a notice on every run; the platform's
+  first run after vending publishes the landing zone applies its rules. A mistyped key waits for ever, named
+  in that notice. Before vending has published anything at all, on the platform's first deployment, every
+  landing zone's file waits the same way, so the hub can be built first.
+- **A destination must exist.** A rule to another landing zone that the contract does not name stops the
+  check.
+- **A landing zone being retired.** A key the contract lists as held, a landing zone decommissioned or
+  removed whose range is not released yet, only warns: its rules leave Azure with that run, before the range
+  can go to another landing zone, and the file can be deleted (`docs/vending.md`, decommissioning). A rule
+  elsewhere that still names a held landing zone stops the check, saying so.
 
 ### What the runners reach
 
