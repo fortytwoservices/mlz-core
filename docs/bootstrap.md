@@ -3,7 +3,7 @@
 The one-time setup a customer's pipelines run on. A person at Fortytwo runs it once per customer, before
 the first pipeline run; running it again changes only what differs. It is `bootstrap/terraform`, and it
 reads two files from the customer's governance repo: `customer.yaml` (root ID, display name, primary
-region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, reviewers, state operators).
+region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, platform team, reviewers, state operators).
 
 ```yaml
 # bootstrap.yaml
@@ -13,6 +13,7 @@ github:
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
+  platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
   # runner_size: 4-core            # the private runner's size at GitHub (mlz install runners); 2-core if unset
 
@@ -151,12 +152,19 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 
 1. **`repos`** creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
    commit from its starter. The governance repo gets the customer's own `customer.yaml` and `bootstrap.yaml`.
-   - Each gets the ruleset `main`: changes only through pull requests, no force push, no deletion.
+   - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, no force push,
+     no deletion.
+   - Each gets `.github/CODEOWNERS`, with `platform_team` owning every file but `_generated/`, and that team gets
+     write access, which a code owner needs; a team with more keeps it. The team must exist first, and be visible:
+     `CODEOWNERS` skips a secret team. It can take its members from an Entra ID group
+     ([pipelines](pipelines.md#code-owners)).
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
-     request. A ruleset of its own named `main` is left as it is.
-2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), and that the
-   customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`).
-   Making the App needs a browser, so that step stays manual.
+     request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` is left as it is.
+2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
+   customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
+   that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
+   and an active ruleset requires a code owner's review on the default branch. Making the App needs a browser, so
+   that step stays manual.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the

@@ -7,6 +7,7 @@ github:
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
+  platform_team: platform          # the GitHub team that owns the three repos and approves their changes
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
 
 # People who may run Terraform by hand against the state (the bootstrap itself, break-glass work),

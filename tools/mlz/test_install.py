@@ -33,6 +33,7 @@ BOOTSTRAP = """github:
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
+  platform_team: platform
   reviewers: [acme-lead]
 """
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
@@ -43,12 +44,20 @@ WORKFLOW = ".github/workflows/mlz.yml"
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
-                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise"):
+                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
+                 teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True):
         self.org_plan = org_plan
+        # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
+        # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
+        self.teams, self.secret, self.granted = set(teams), set(secret), []
+        self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
+        self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
         self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
+        # And its CODEOWNERS, unless it was set up before code owners (owned=False).
+        self.files.update({(repo, ".github/CODEOWNERS"): ("* @acme/platform\n", "sha") for repo in existing if owned and repo not in half_made})
         self.files.update(files or {})
         self.renamed, self.empty = [], set(empty)
         self.existing_rulesets = set(rulesets)
@@ -91,6 +100,22 @@ class FakeGitHub:
 
     def has_variable(self, repo, name):
         return (repo, name) in self.variables
+
+    def team(self, org, slug):
+        return {"slug": slug, "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
+
+    def team_can_write(self, org, slug, repo):
+        return (slug, repo) in self.writers
+
+    def grant_team(self, org, slug, repo):
+        self.granted.append((slug, repo))
+        self.writers.add((slug, repo))
+
+    def codeowners_errors(self, repo, ref):
+        return self.owner_errors.get(repo, [])
+
+    def branch_rules(self, repo, branch):
+        return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -367,7 +392,8 @@ class InstallTest(unittest.TestCase):
         github = FakeGitHub(existing=REPOS.values(), rulesets=[("acme/mlz-platform", "main")])
         install.step_repos(github, self.folder, self.out)
         self.assertNotIn(("acme/mlz-platform", "main"), github.rulesets)  # the customer's own may be stricter
-        self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests", self.printed)
+        self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
+                      "and requires a code owner's review (mlz install check says)", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
         own = ("acme/mlz-governance", "customer.yaml")
@@ -408,7 +434,69 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        self.assertEqual(len(self.printed), 5)
+        # Per repo: the MLZ App, and its code owners.
+        self.assertEqual(len(self.printed), 8)
+        self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
+                      "and a code owner's review is required on main", self.printed)
+
+    # code owners
+
+    def test_new_repos_get_the_platform_team_as_code_owner(self):
+        github = FakeGitHub(writers=())
+        install.step_repos(github, self.folder, self.out)
+        for repo in REPOS.values():
+            files = next(files for r, _, _, files, _ in github.commits if r == repo)
+            self.assertIn("*             @acme/platform\n", files[".github/CODEOWNERS"])
+            self.assertIn("\n/_generated/\n", files[".github/CODEOWNERS"])
+        self.assertEqual(sorted(github.granted), sorted(("platform", repo) for repo in REPOS.values()))
+        self.assertTrue(install.MAIN_RULESET["rules"][2]["parameters"]["require_code_owner_review"])
+
+    def test_a_team_that_can_write_already_keeps_its_access(self):
+        github = FakeGitHub(existing=REPOS.values())
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.granted, [])  # never lowered: one with maintain or admin keeps it
+        self.assertIn("acme/mlz-platform: acme/platform may write, as its code owner", self.printed)
+
+    def test_the_platform_team_must_exist_and_be_named(self):
+        with self.assertRaisesRegex(ConfigError, "acme has no team platform"):
+            install.step_repos(FakeGitHub(teams=()), self.folder, self.out)
+        # GitHub skips a secret team in CODEOWNERS; it is refused before any repo changes.
+        github = FakeGitHub(secret=("platform",))
+        with self.assertRaisesRegex(ConfigError, "acme/platform is a secret team"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.repos, github.commits), ({}, []))
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+
+    def test_a_repo_set_up_before_code_owners_is_offered_the_file(self):
+        github = FakeGitHub(existing=REPOS.values(), owned=False)
+        install.step_repos(github, self.folder, self.out)
+        repo, branch, _, files, message = github.commits[0]
+        self.assertEqual((branch, list(files), message), ("mlz/code-owners", [".github/CODEOWNERS"], "chore: the platform team as code owner"))
+        self.assertIn("acme/mlz-governance: .github/CODEOWNERS is offered in https://github.com/acme/mlz-governance/pull/1", self.printed)
+
+    def test_an_adopted_repo_keeps_its_own_code_owners(self):
+        # Its CODEOWNERS at the root: a .github/ one beside it would be read first, and replace it.
+        github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"],
+                            files={("acme/mlz-governance", "CODEOWNERS"): ("* @acme/own\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        offered = next(files for repo, branch, _, files, _ in github.commits if repo == "acme/mlz-governance" and branch == "mlz/starter")
+        self.assertNotIn(".github/CODEOWNERS", offered)
+        self.assertIn(".github/workflows/mlz.yml", offered)
+
+    def test_check_lists_what_stops_the_code_owners(self):
+        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False,
+                            variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()],
+                            owner_errors={"acme/mlz-vending": [{"line": 3, "kind": "Unknown owner", "path": ".github/CODEOWNERS",
+                                                                 "message": "Unknown owner on line 3: make sure the team @acme/network exists\n\n  /x @acme/network"}]})
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        message = str(caught.exception)
+        self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
+        self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
+        self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
+                      "A team needs write access to acme/mlz-vending before CODEOWNERS can name it", message)
 
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],

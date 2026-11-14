@@ -12,6 +12,7 @@
     python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
                             [--billing-scope <scope>] [--yes]
     python3 -m mlz schema   --out schemas
+    python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -29,7 +30,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import contract, decommission, explain, firewall, install, new, platform, schema, upgrade, vending, workload
+from . import contract, decommission, explain, firewall, install, new, owners, platform, schema, upgrade, vending, workload
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -86,6 +87,9 @@ def main() -> int:
     w.add_argument("--out", type=Path, required=True, help="the YAML file to write")
     wr = roles.add_parser("workload-repos", help="after vending's apply, the workload repos' starter (once) and values (docs/vending.md)")
     wr.add_argument("--configs", type=Path, required=True, help="the folder of <key>.json that python3 -m mlz vending wrote")
+    o = roles.add_parser("owners", help="in a repo's checkout: fail on any line of its CODEOWNERS GitHub cannot use (tools/mlz/owners.py)")
+    o.add_argument("--repo", required=True, help="the repo, <owner>/<name>")
+    o.add_argument("--ref", required=True, help="the commit whose CODEOWNERS to check")
     d = roles.add_parser("decommission", help="after a landing zone's decommission is applied, offer the pull requests that delete its files")
     d.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout, at main")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
@@ -159,6 +163,14 @@ def main() -> int:
             return 1
         except ConfigError as error:
             print(f"mlz decommission: {error}", file=sys.stderr)
+            return 1
+        return 0
+
+    if args.role == "owners":
+        try:
+            owners.check(GitHub(), args.repo, args.ref, Path.cwd())
+        except ConfigError as error:
+            print(f"mlz owners: {error}", file=sys.stderr)
             return 1
         return 0
 
