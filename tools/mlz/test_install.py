@@ -45,13 +45,16 @@ WORKFLOW = ".github/workflows/mlz.yml"
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
-                 teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True):
+                 teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
+                 required_check=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
         self.teams, self.secret, self.granted = set(teams), set(secret), []
         self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
         self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
+        # And whether it requires the role's check to pass.
+        self.required_check = required_check
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
@@ -65,6 +68,7 @@ class FakeGitHub:
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
         self.created, self.commits, self.rulesets, self.pulls, self.branches = [], [], [], [], []
+        self.ruleset_bodies = {}
 
     def repo(self, repo):
         return self.repos.get(repo)
@@ -96,6 +100,7 @@ class FakeGitHub:
         if (repo, ruleset["name"]) in self.existing_rulesets:
             return False
         self.rulesets.append((repo, ruleset["name"]))
+        self.ruleset_bodies[repo] = ruleset
         return True
 
     def has_variable(self, repo, name):
@@ -115,7 +120,10 @@ class FakeGitHub:
         return self.owner_errors.get(repo, [])
 
     def branch_rules(self, repo, branch):
-        return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}}]
+        role = next(role for role, name in REPOS.items() if name == repo)
+        checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check else []
+        return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}},
+                {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": False, "required_status_checks": checks}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -393,7 +401,7 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         self.assertNotIn(("acme/mlz-platform", "main"), github.rulesets)  # the customer's own may be stricter
         self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
-                      "and requires a code owner's review (mlz install check says)", self.printed)
+                      "and requires a code owner's review and platform / check (mlz install check says)", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
         own = ("acme/mlz-governance", "customer.yaml")
@@ -424,9 +432,25 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(terraform.root, terraform.work / "bootstrap" / "terraform")
 
     def test_the_main_ruleset_allows_changes_through_pull_requests_only(self):
-        rules = {rule["type"] for rule in install.MAIN_RULESET["rules"]}
-        self.assertEqual(rules, {"deletion", "non_fast_forward", "pull_request"})
-        self.assertNotIn("bypass_actors", install.MAIN_RULESET)
+        ruleset = install.main_ruleset("platform")
+        rules = {rule["type"] for rule in ruleset["rules"]}
+        self.assertEqual(rules, {"deletion", "non_fast_forward", "pull_request", "required_status_checks"})
+        self.assertNotIn("bypass_actors", ruleset)
+
+    def test_a_merge_waits_for_the_role_s_check(self):
+        github = FakeGitHub()
+        install.step_repos(github, self.folder, self.out)
+        for role, repo in REPOS.items():
+            required = next(rule["parameters"] for rule in github.ruleset_bodies[repo]["rules"] if rule["type"] == "required_status_checks")
+            # By GitHub Actions, as the canary's runs named it; not strict, so a contract merges after main has moved on.
+            self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
+            self.assertFalse(required["strict_required_status_checks_policy"])
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed, "
+                      "no force push or deletion)", self.printed)
+        # The starter workflow's job gives the check its name.
+        for role in REPOS:
+            workflow = (install.CORE / "starter" / f"mlz-{role}" / WORKFLOW).read_text()
+            self.assertRegex(workflow, rf"\njobs:\n(?:  #.*\n)*  {role}:\n")
 
     def test_check_passes_when_the_app_is_set_everywhere(self):
         github = FakeGitHub(existing=REPOS.values(),
@@ -434,8 +458,9 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        # Per repo: the MLZ App, and its code owners.
-        self.assertEqual(len(self.printed), 8)
+        # Per repo: the MLZ App, its code owners, and its check.
+        self.assertEqual(len(self.printed), 11)
+        self.assertIn("acme/mlz-vending: vending / check must pass before a merge into main", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
                       "and a code owner's review is required on main", self.printed)
 
@@ -449,7 +474,7 @@ class InstallTest(unittest.TestCase):
             self.assertIn("*             @acme/platform\n", files[".github/CODEOWNERS"])
             self.assertIn("\n/_generated/\n", files[".github/CODEOWNERS"])
         self.assertEqual(sorted(github.granted), sorted(("platform", repo) for repo in REPOS.values()))
-        self.assertTrue(install.MAIN_RULESET["rules"][2]["parameters"]["require_code_owner_review"])
+        self.assertTrue(install.main_ruleset("platform")["rules"][2]["parameters"]["require_code_owner_review"])
 
     def test_a_team_that_can_write_already_keeps_its_access(self):
         github = FakeGitHub(existing=REPOS.values())
@@ -486,7 +511,7 @@ class InstallTest(unittest.TestCase):
         self.assertIn(".github/workflows/mlz.yml", offered)
 
     def test_check_lists_what_stops_the_code_owners(self):
-        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False,
+        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=False,
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()],
                             owner_errors={"acme/mlz-vending": [{"line": 3, "kind": "Unknown owner", "path": ".github/CODEOWNERS",
                                                                  "message": "Unknown owner on line 3: make sure the team @acme/network exists\n\n  /x @acme/network"}]})
@@ -495,6 +520,8 @@ class InstallTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
         self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
+        self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
+                      "refuses can still be merged", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
                       "A team needs write access to acme/mlz-vending before CODEOWNERS can name it", message)
 
@@ -900,7 +927,7 @@ class GitHubTest(unittest.TestCase):
     def test_a_ruleset_past_the_first_page_is_found_and_not_made_again(self):
         rulesets = [{"name": f"other-{n}"} for n in range(120)] + [{"name": "main"}]
         github = PagedGitHub({"repos/acme/mlz-platform/rulesets": rulesets})
-        self.assertFalse(github.add_ruleset("acme/mlz-platform", install.MAIN_RULESET))
+        self.assertFalse(github.add_ruleset("acme/mlz-platform", install.main_ruleset("platform")))
         self.assertEqual(github.posted, [])
 
     def test_every_page_of_releases_is_read(self):
