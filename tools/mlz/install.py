@@ -308,15 +308,17 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
 
 def required_check_problems(github, role: str, repo: str, out: Callable[[str], None]) -> list[str]:
     """Whether GitHub refuses a merge into the default branch until the pipeline's check has passed, by the rules it
-    enforces there from every active ruleset."""
+    enforces there from every active ruleset. Only from GitHub Actions: a check expected from another app never
+    passes, and one from any source can be passed by any token that may write statuses."""
     branch, check = github.default_branch(repo), required_check(role)
+    wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
     if any(rule.get("type") == "required_status_checks"
-           and any(required.get("context") == check for required in (rule.get("parameters") or {}).get("required_status_checks", []))
+           and any({key: required.get(key) for key in wanted} == wanted for required in (rule.get("parameters") or {}).get("required_status_checks", []))
            for rule in github.branch_rules(repo, branch)):
         out(f"{repo}: {check} must pass before a merge into {branch}")
         return []
     return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so a change the check refuses can still be merged; "
-            f"add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, Rulesets)."]
+            f"add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, Rulesets), with GitHub Actions as its source."]
 
 
 # bootstrap

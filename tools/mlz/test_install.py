@@ -121,7 +121,7 @@ class FakeGitHub:
 
     def branch_rules(self, repo, branch):
         role = next(role for role, name in REPOS.items() if name == repo)
-        checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check else []
+        checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check is True else self.required_check(role)
         return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}},
                 {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": False, "required_status_checks": checks}}]
 
@@ -511,7 +511,7 @@ class InstallTest(unittest.TestCase):
         self.assertIn(".github/workflows/mlz.yml", offered)
 
     def test_check_lists_what_stops_the_code_owners(self):
-        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=False,
+        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=lambda role: [],
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()],
                             owner_errors={"acme/mlz-vending": [{"line": 3, "kind": "Unknown owner", "path": ".github/CODEOWNERS",
                                                                  "message": "Unknown owner on line 3: make sure the team @acme/network exists\n\n  /x @acme/network"}]})
@@ -521,9 +521,18 @@ class InstallTest(unittest.TestCase):
         self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
         self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
         self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
-                      "refuses can still be merged", message)
+                      "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
+                      "Rulesets), with GitHub Actions as its source.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
                       "A team needs write access to acme/mlz-vending before CODEOWNERS can name it", message)
+
+    def test_check_counts_only_a_required_check_from_github_actions(self):
+        # Another app's check never comes; one from any source can be passed by any token that may write statuses.
+        for source in ({"integration_id": 12345}, {}):
+            github = FakeGitHub(existing=REPOS.values(), required_check=lambda role: [{"context": f"{role} / check", **source}],
+                                variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+            with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: no active ruleset requires vending / check to pass on main"):
+                install.step_check(github, self.folder, self.out)
 
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],

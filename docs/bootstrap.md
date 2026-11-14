@@ -163,8 +163,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
-   and an active ruleset requires a code owner's review on the default branch, and the pipeline's check. Making
-   the App needs a browser, so that step stays manual.
+   and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
+   GitHub Actions. Making the App needs a browser, so that step stays manual.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the
