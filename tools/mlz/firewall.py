@@ -11,6 +11,7 @@ network's own range, from the platform's config, for management's and identity's
 
     outbound:
       - name: card-processor
+        description: Card payments. # what the rule is for: required, as a person approves each rule
         to: [api.stripe.com]        # a name (lower case), *.name, an address or range, another landing zone,
                                     # an FQDN tag (WindowsUpdate) or a service tag (AzureMonitor, Storage.NorwayEast)
         ports: [https]              # https, http, a TCP port, or udp:<port>
@@ -39,8 +40,11 @@ from .files import read_setting, setting_names
 from .merge import ConfigError
 
 PARTITIONS = 30
-# A rules file holds `outbound`, a list of rules; a rule has these settings, the first three required.
-RULE_KEYS = ("name", "to", "ports", "description")
+# A rules file holds `outbound`, a list of rules; a rule has all of these. Every rule is approved by a person (the
+# platform repo's code owner), who reads why it is needed in its description.
+RULE_KEYS = ("name", "description", "to", "ports")
+# A rule may not reach the whole internet, or nearly: name what it needs instead.
+WIDEST_RANGE = 8
 PLATFORM_PRIORITY = 500
 FIRST_PARTITION_PRIORITY = 1000
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$")
@@ -142,9 +146,11 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     names, kept = set(), []
     for index, rule in enumerate(rules):
         at = f"{where}: outbound[{index}]"
-        if not isinstance(rule, dict) or set(rule) - set(RULE_KEYS) or not set(RULE_KEYS[:3]) <= set(rule):
-            problems.append(f"{at}: a rule has name, to and ports (and optionally description).")
+        if not isinstance(rule, dict) or set(rule) != set(RULE_KEYS):
+            problems.append(f"{at}: a rule has name, description, to and ports.")
             continue
+        if not isinstance(rule["description"], str) or not rule["description"].strip():
+            problems.append(f"{at}: description says what the rule is for, for whoever approves it.")
         name = rule["name"]
         if not isinstance(name, str) or not NAME.fullmatch(name):
             problems.append(f"{at}: name {name!r} is lower-case letters, digits and hyphens.")
@@ -180,6 +186,11 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             addresses.append(zones[target]["range"])
         elif target in (held or {}):
             problems.append(f"{at}: {target} is decommissioned or removed, and its range is no longer its own; take it out of this rule.")
+        elif target in ("*", "Internet"):
+            problems.append(f"{at}: {target} is the whole internet; name what the rule needs instead.")
+        elif zones is not None and LANDING_ZONE.fullmatch(target):
+            # A rule goes only to what exists: the file's own landing zone may wait for vending, its destinations not.
+            problems.append(f"{at}: {target} is no landing zone in the vending contract (_generated/vending.yaml), nor a name, an address or a tag.")
         elif target in FQDN_TAGS or target.startswith("Office365."):
             tags.append(target)
         elif SERVICE_TAG.fullmatch(target):
@@ -188,9 +199,14 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             names.append(target.lower())
         else:
             try:
-                addresses.append(str(IPv4Network(target)))
+                network = IPv4Network(target)
             except ValueError:
                 problems.append(f"{at}: {target!r} is not a name, an address or range, a landing zone or a tag.")
+                continue
+            if network.prefixlen < WIDEST_RANGE:
+                problems.append(f"{at}: {target} is wider than a /{WIDEST_RANGE}, nearly the whole internet; name what the rule needs instead.")
+            else:
+                addresses.append(str(network))
     web, tcp, udp = set(), set(), set()
     for port in rule["ports"]:
         text = str(port).lower()
@@ -312,19 +328,19 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         }
 
     keys = setting_names(folder / "landing-zones")
+    # A landing zone not known yet has no hub yet either: Basic's limits apply when every hub is Basic.
+    tiers = {(hub.get("firewall") or {}).get("sku_tier", "Standard") for hub in hubs.values()}
+    unknown_tier = "Basic" if tiers == {"Basic"} else "Standard"
     if zones is None:
         # The platform's first deployment comes before any landing zone, and vending needs the platform's
         # contract first, so refusing these files would stop the hub for good (met rebuilding the canary,
         # 2026-11-11). They are checked like any other, with landing zones by key left unresolved, and go into
         # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
         # in Azure changes, not even when the contract has gone missing from a platform already deployed.
-        # The zone's hub is not known yet: Basic's limits apply when every hub is Basic, and wait otherwise.
-        tiers = {(hub.get("firewall") or {}).get("sku_tier", "Standard") for hub in hubs.values()}
-        tier = "Basic" if tiers == {"Basic"} else "Standard"
         for key in keys:
             where = f"firewall/landing-zones/{key}"
             rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
-            collections(rules, [f"<landing zone {key}>"], where, key, None, 100, tier, problems)
+            collections(rules, [f"<landing zone {key}>"], where, key, None, 100, unknown_tier, problems)
         if keys and not problems:
             print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} are checked, and wait for it", file=sys.stderr)
         keys = []
@@ -336,7 +352,12 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
             print(f"mlz firewall: {where}.yaml is for {key}, decommissioned or removed: its rules are no longer applied; delete the file", file=sys.stderr)
             continue
         if key not in zones:
-            problems.append(f"{where}: no landing zone {key} in the vending contract (_generated/vending.yaml).")
+            # Its rules may come before the landing zone (docs/platform.md): checked now, merged, and applied by the
+            # first run after vending publishes it. A key vending never publishes waits for ever, named here each run.
+            rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
+            collections(rules, [f"<landing zone {key}>"], where, key, zones, 100, unknown_tier, problems, held)
+            print(f"mlz firewall: {where}.yaml is for {key}, which the vending contract does not list yet: its rules are checked, "
+                  "and wait until vending publishes it (a mistyped key waits for ever)", file=sys.stderr)
             continue
         region = zones[key]["region"]
         if region not in hubs:

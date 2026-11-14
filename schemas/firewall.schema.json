@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "outbound": {
-      "description": "The rules, each with name, to and ports.",
+      "description": "The rules, each with name, description, to and ports.",
       "type": [
         "array",
         "null"
@@ -17,6 +17,11 @@
             "type": "string",
             "description": "The rule's name, lower-case letters, digits and hyphens; unique in this file.",
             "pattern": "^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$"
+          },
+          "description": {
+            "type": "string",
+            "description": "What the rule is for: whoever approves it reads this.",
+            "minLength": 1
           },
           "to": {
             "description": "Where the traffic goes: names (api.example.com, *.example.com), addresses and ranges, other landing zones by key, FQDN tags (WindowsUpdate) or service tags (AzureMonitor, Storage.NorwayEast).",
@@ -43,15 +48,12 @@
                 }
               ]
             }
-          },
-          "description": {
-            "type": "string",
-            "description": "What the rule is for."
           }
         },
         "additionalProperties": false,
         "required": [
           "name",
+          "description",
           "to",
           "ports"
         ]

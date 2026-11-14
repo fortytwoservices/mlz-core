@@ -153,14 +153,14 @@ def firewall_rules() -> dict:
         "name": text("The rule's name, lower-case letters, digits and hyphens; unique in this file.", pattern=pattern(firewall.NAME)),
         "to": {"description": "Where the traffic goes: names (api.example.com, *.example.com), addresses and ranges, other landing zones by key, FQDN tags (WindowsUpdate) or service tags (AzureMonitor, Storage.NorwayEast).", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "ports": {"description": "https, http, TCP ports (8443) or udp:<port>.", "type": "array", "minItems": 1, "items": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 65535}, {"type": "string", "pattern": port_word}]}},
-        "description": text("What the rule is for."),
+        "description": text("What the rule is for: whoever approves it reads this.", minLength=1),
     }
-    rule = mapping({key: descriptions[key] for key in firewall.RULE_KEYS}, required=list(firewall.RULE_KEYS[:3]))
+    rule = mapping({key: descriptions[key] for key in firewall.RULE_KEYS}, required=list(firewall.RULE_KEYS))
     return {
         "$schema": DRAFT,
         "title": "MLZ firewall rules",
         "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one, firewall/management.yaml and firewall/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
-        **mapping({"outbound": or_empty({"description": "The rules, each with name, to and ports.", "type": "array", "items": rule})}),
+        **mapping({"outbound": or_empty({"description": "The rules, each with name, description, to and ports.", "type": "array", "items": rule})}),
     }
 
 
