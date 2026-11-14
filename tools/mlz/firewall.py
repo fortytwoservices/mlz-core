@@ -186,7 +186,7 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             addresses.append(zones[target]["range"])
         elif target in (held or {}):
             problems.append(f"{at}: {target} is decommissioned or removed, and its range is no longer its own; take it out of this rule.")
-        elif target in ("*", "Internet"):
+        elif target == "*" or target.lower() == "internet":  # Azure reads service tags in any case
             problems.append(f"{at}: {target} is the whole internet; name what the rule needs instead.")
         elif zones is not None and LANDING_ZONE.fullmatch(target):
             # A rule goes only to what exists: the file's own landing zone may wait for vending, its destinations not.

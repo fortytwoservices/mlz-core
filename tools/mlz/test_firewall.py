@@ -281,13 +281,14 @@ class FirewallTest(unittest.TestCase):
     def test_no_rule_reaches_the_whole_internet(self):
         self.write("firewall/platform.yaml", (
             "outbound:\n"
-            "  - name: everything\n    description: For the test.\n    to: ['*', Internet]\n    ports: [https]\n"
+            "  - name: everything\n    description: For the test.\n    to: ['*', Internet, INTERNET, InterNet]\n    ports: [https]\n"
             "  - name: everywhere\n    description: For the test.\n    to: [0.0.0.0/0, 128.0.0.0/1]\n    ports: [443]\n"
             "  - name: private\n    description: For the test.\n    to: [10.0.0.0/8]\n    ports: [443]\n"
         ))
         message = self.problems()
         self.assertIn("outbound[0]: * is the whole internet", message)
-        self.assertIn("outbound[0]: Internet is the whole internet", message)
+        for tag in ("Internet", "INTERNET", "InterNet"):  # in any case, as Azure reads it
+            self.assertIn(f"outbound[0]: {tag} is the whole internet", message)
         self.assertIn("outbound[1]: 0.0.0.0/0 is wider than a /8", message)
         self.assertIn("outbound[1]: 128.0.0.0/1 is wider than a /8", message)
         self.assertNotIn("outbound[2]", message)  # a /8 is as wide as a rule goes
