@@ -208,11 +208,12 @@ def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
         "repositories": mapping({role: text(f"The {role} repo's name.") for role in install.ROLES}, "The three repos, by role."),
+        "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
         "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "runner_size": text("The private runner's machine size at GitHub, for mlz install runners.", default="2-core", examples=["2-core", "4-core"]),
     }
     properties = {
-        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, reviewers and private runner."),
+        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, platform team, reviewers and private runner."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
         "names": or_empty({"description": "The bootstrap's own name for its resource group or state account, instead of the customer's template's (docs/naming.md): for a storage account name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
     }

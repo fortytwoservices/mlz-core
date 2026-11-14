@@ -1,6 +1,7 @@
 """Sets a new customer up, step by step; every step can be run again and changes only what is missing.
 
-    python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters
+    python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters,
+                                                                      the platform team as code owner
     python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo
     python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked;
                                                                       again after the platform's first apply, for the
@@ -38,7 +39,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, names, naming, platform, vending
+from . import contract, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -47,7 +48,9 @@ from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
 APP_VARIABLE, APP_SECRET = "MLZ_RELEASE_APP_CLIENT_ID", "MLZ_RELEASE_APP_PRIVATE_KEY"
-# Changes reach main only through pull requests; main is never rewritten or deleted (decided 2026-11-11).
+# Changes reach main only through pull requests; main is never rewritten or deleted (decided 2026-11-11). A change to
+# a file with a code owner needs that owner's approval (CODEOWNERS, tools/mlz/owners.py, decided 2026-11-14); a change
+# to one without, such as _generated/, needs none, so the contract pull requests still merge themselves.
 MAIN_RULESET = {
     "name": "main",
     "target": "branch",
@@ -59,7 +62,7 @@ MAIN_RULESET = {
         {"type": "pull_request", "parameters": {
             "required_approving_review_count": 0,
             "dismiss_stale_reviews_on_push": False,
-            "require_code_owner_review": False,
+            "require_code_owner_review": True,
             "require_last_push_approval": False,
             "required_review_thread_resolution": False,
         }},
@@ -67,7 +70,8 @@ MAIN_RULESET = {
 }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "repositories", "reviewers", "runner_size")
+GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runner_size")
+CODE_OWNERS_BRANCH = "mlz/code-owners"
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
 
@@ -106,14 +110,26 @@ def repositories(bootstrap: dict) -> dict[str, str]:
     return {role: f"{github['organization']}/{names[role]}" for role in ROLES}
 
 
+def platform_team(bootstrap: dict) -> tuple[str, str]:
+    """(organization, team slug): the GitHub team that owns the three repos, bootstrap.yaml's github.platform_team."""
+    github = bootstrap.get("github") or {}
+    team = github.get("platform_team")
+    if not isinstance(team, str) or not team:
+        raise ConfigError("bootstrap.yaml needs github.platform_team: the slug of the GitHub team that owns the three repos "
+                          "and approves their changes (docs/bootstrap.md).")
+    return github["organization"], team
+
+
 def release() -> str:
     return "v" + json.loads((CORE / ".release-please-manifest.json").read_text())["."]
 
 
 def starter_files(role: str, folder: Path) -> dict[str, str]:
-    """The role's starter as a new repo gets it, with the customer's own settings for governance."""
+    """The role's starter as a new repo gets it, with its code owners and, for governance, the customer's settings."""
+    _, bootstrap = settings(folder)
     base = CORE / "starter" / f"mlz-{role}"
     files = {str(p.relative_to(base)): RELEASE_PLEASE_MARKER.sub("", p.read_text()) for p in sorted(base.rglob("*")) if p.is_file()}
+    files[owners.PATH] = owners.render(*platform_team(bootstrap))
     if role == "governance":
         files.update({name: (folder / name).read_text() for name in ("customer.yaml", "bootstrap.yaml")})
     return files
@@ -135,7 +151,12 @@ def answer(question: str) -> str:
 
 def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None:
     _, bootstrap = settings(folder)
-    for role, repo in repositories(bootstrap).items():
+    repos = repositories(bootstrap)
+    org, team = platform_team(bootstrap)
+    if github.team(org, team) is None:
+        raise ConfigError(f"{org} has no team {team} (bootstrap.yaml's github.platform_team). Make it, and connect it to its "
+                          "Entra ID group if the organization syncs teams, then run this step again.")
+    for role, repo in repos.items():
         owner, name = repo.split("/")
         found = github.repo(repo)
         if found is None:
@@ -172,11 +193,28 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             out(f"{repo}: the {role} starter's missing files are offered in {url}")
         else:
             out(f"{repo}: exists, files left as they are")
+            if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+                # A repo set up before code owners: the file comes as a pull request, which a person merges.
+                url = github.open_pull(repo, CODE_OWNERS_BRANCH)
+                if not url:
+                    github.commit_files(repo, CODE_OWNERS_BRANCH, github.reset_branch(repo, CODE_OWNERS_BRANCH, branch),
+                                        {owners.PATH: owners.render(org, team)}, "chore: the platform team as code owner")
+                    url = github.create_pull(repo, CODE_OWNERS_BRANCH, branch, "chore: the platform team as code owner",
+                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` none "
+                                             "(docs/pipelines.md in mlz-core, Code owners).\n")
+                out(f"{repo}: {owners.PATH} is offered in {url}")
+        # A code owner needs write access; one with more (maintain, admin) keeps it.
+        if github.team_can_write(org, team, repo):
+            out(f"{repo}: {org}/{team} may write, as its code owner")
+        else:
+            github.grant_team(org, team, repo)
+            out(f"{repo}: {org}/{team} given write access, as its code owner")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
         if github.add_ruleset(repo, MAIN_RULESET):
-            out(f"{repo}: ruleset main (pull requests only, no force push or deletion)")
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, no force push or deletion)")
         else:
-            out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests")
+            out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
+                "and requires a code owner's review (mlz install check says)")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
@@ -208,8 +246,37 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
                             f"gh variable set {APP_VARIABLE} --repo {repo} --body <client ID>; gh secret set {APP_SECRET} --repo {repo} < <private key file>")
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
+        problems += code_owner_problems(github, bootstrap, repo, out)
     if problems:
         raise ConfigError("\n  ".join(["not ready for MLZ:"] + problems))
+
+
+def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str], None]) -> list[str]:
+    """What stops the repo's code owners from deciding: the platform team's access, the file as GitHub reads it, and
+    the ruleset that makes their approval required."""
+    try:
+        org, team = platform_team(bootstrap)
+    except ConfigError as error:
+        return [str(error)]
+    found = []
+    if not github.team_can_write(org, team, repo):
+        found.append(f"{repo}: {org}/{team} cannot write to it, so it cannot be its code owner; mlz install repos gives it access.")
+    branch = github.default_branch(repo)
+    if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+        found.append(f"{repo}: no {owners.PATH} on {branch}; mlz install repos offers one.")
+    else:
+        errors = github.codeowners_errors(repo, branch)
+        if errors is None:
+            found.append(f"{repo}: GitHub has not read {owners.PATH} yet; run this step again in a minute.")
+        found += [f"{repo}: {problem}" for problem in owners.problems(errors or [], repo)]
+    ruleset = github.ruleset(repo, MAIN_RULESET["name"]) or {}
+    review = next((rule.get("parameters") or {} for rule in ruleset.get("rules", []) if rule.get("type") == "pull_request"), {})
+    if not review.get("require_code_owner_review"):
+        found.append(f"{repo}: its ruleset main does not require a code owner's review, so CODEOWNERS only suggests reviewers; "
+                     "turn on 'Require review from Code Owners' in it (Settings, Rules, Rulesets).")
+    if not found:
+        out(f"{repo}: {org}/{team} owns it, and its approval is required")
+    return found
 
 
 # bootstrap

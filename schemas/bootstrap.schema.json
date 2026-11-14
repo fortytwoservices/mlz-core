@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "github": {
-      "description": "The customer's GitHub organization, repos, reviewers and private runner.",
+      "description": "The customer's GitHub organization, repos, platform team, reviewers and private runner.",
       "type": "object",
       "properties": {
         "organization": {
@@ -31,6 +31,11 @@
             }
           },
           "additionalProperties": false
+        },
+        "platform_team": {
+          "type": "string",
+          "description": "The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
         },
         "reviewers": {
           "description": "GitHub users who approve every apply.",

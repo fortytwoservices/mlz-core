@@ -19,8 +19,8 @@ RUNNER_SCOPES = "admin:org,manage_runners:org,read:network_configurations,write:
 
 
 class GitHub:
-    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
-        command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else [])
+    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False, accept: str | None = None):
+        command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else []) + (["-H", f"Accept: {accept}"] if accept else [])
         run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
@@ -134,6 +134,31 @@ class GitHub:
             return False
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True
+
+    def ruleset(self, repo: str, name: str) -> dict | None:
+        """The repo's own ruleset of that name, with its rules, or None."""
+        found = next((r for r in self._pages(f"repos/{repo}/rulesets?includes_parents=false") if r["name"] == name), None)
+        return self._api(f"repos/{repo}/rulesets/{found['id']}") if found else None
+
+    # Code owners (tools/mlz/owners.py)
+
+    def team(self, org: str, slug: str) -> dict | None:
+        return self._api(f"orgs/{org}/teams/{slug}", missing_ok=True)
+
+    def team_can_write(self, org: str, slug: str, repo: str) -> bool:
+        """Whether the team has write access to the repo or more (maintain, admin)."""
+        found = self._api(f"orgs/{org}/teams/{slug}/repos/{repo}", missing_ok=True, accept="application/vnd.github.v3.repository+json")
+        return bool(found and (found.get("permissions") or {}).get("push"))
+
+    def grant_team(self, org: str, slug: str, repo: str) -> None:
+        """Write access for the team: what a code owner needs. Only called when it has less, so it never lowers one."""
+        self._api(f"orgs/{org}/teams/{slug}/repos/{repo}", "PUT", {"permission": "push"})
+
+    def codeowners_errors(self, repo: str, ref: str) -> list[dict] | None:
+        """GitHub's errors in the repo's CODEOWNERS at ref, or None while GitHub has not read the file: it answers 404
+        for some seconds after a push, and for a repo without one."""
+        found = self._api(f"repos/{repo}/codeowners/errors?ref={ref}", missing_ok=True)
+        return None if found is None else found.get("errors") or []
 
     def has_variable(self, repo: str, name: str) -> bool:
         return self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True) is not None
