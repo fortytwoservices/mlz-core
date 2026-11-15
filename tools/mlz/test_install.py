@@ -46,7 +46,7 @@ class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True):
+                 required_check=True, strict=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -54,7 +54,7 @@ class FakeGitHub:
         self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
         self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
         # And whether it requires the role's check to pass.
-        self.required_check = required_check
+        self.required_check, self.strict = required_check, strict
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
@@ -123,7 +123,7 @@ class FakeGitHub:
         role = next(role for role, name in REPOS.items() if name == repo)
         checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check is True else self.required_check(role)
         return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}},
-                {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": False, "required_status_checks": checks}}]
+                {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": self.strict, "required_status_checks": checks}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -442,11 +442,12 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         for role, repo in REPOS.items():
             required = next(rule["parameters"] for rule in github.ruleset_bodies[repo]["rules"] if rule["type"] == "required_status_checks")
-            # By GitHub Actions, as the canary's runs named it; not strict, so a contract merges after main has moved on.
+            # By GitHub Actions, as the canary's runs named it; strict, so a pull request checked before a code owner
+            # handover merged is checked again against the new owners.
             self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
-            self.assertFalse(required["strict_required_status_checks_policy"])
-        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed, "
-                      "no force push or deletion)", self.printed)
+            self.assertTrue(required["strict_required_status_checks_policy"])
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed "
+                      "on a branch up to date with main, no force push or deletion)", self.printed)
         # The starter workflow's job gives the check its name.
         for role in REPOS:
             workflow = (install.CORE / "starter" / f"mlz-{role}" / WORKFLOW).read_text()
@@ -460,7 +461,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
         # Per repo: the MLZ App, its code owners, and its check.
         self.assertEqual(len(self.printed), 11)
-        self.assertIn("acme/mlz-vending: vending / check must pass before a merge into main", self.printed)
+        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before a merge into main", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
                       "and a code owner's review is required on main", self.printed)
 
@@ -522,7 +523,7 @@ class InstallTest(unittest.TestCase):
         self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
         self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
                       "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
-                      "Rulesets), with GitHub Actions as its source.", message)
+                      "Rulesets), with GitHub Actions as its source, and turn on 'Require branches to be up to date before merging'.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
                       "The run on main gives write access to a visible team of acme that CODEOWNERS names there", message)
 
@@ -533,6 +534,15 @@ class InstallTest(unittest.TestCase):
                                 variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
             with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: no active ruleset requires vending / check to pass on main"):
                 install.step_check(github, self.folder, self.out)
+
+    def test_check_wants_the_required_check_on_an_up_to_date_branch(self):
+        ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                     secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on "
+                                                 "a branch up to date with it"):
+            install.step_check(FakeGitHub(**ready, strict=False), self.folder, self.out)
+        install.step_check(FakeGitHub(**ready), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
 
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],

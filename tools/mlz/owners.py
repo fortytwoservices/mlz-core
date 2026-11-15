@@ -152,6 +152,6 @@ def without_new_teams(github, repo: str, ref: str, errors: list[dict], new_teams
         out(f"::notice::CODEOWNERS names {org}/{slug}, which cannot write to {repo} yet; the run on main after the merge gives it write access.")
     left += [error for slug in sorted(set(waiting) & set(on_main)) for error in waiting[slug]]
     blocked = [f"main names {org}/{slug}, which cannot write to {repo} yet, so its paths have no owner there: no pull request merges until "
-               "the run on main gives it write access (approve or reject the apply it waits behind, or run it again if it failed)."
+               "the run on main gives it write access (approve or reject the apply it waits behind, or run it again if it failed); then run this check again."
                for slug in sorted(on_main)]
     return left, blocked
