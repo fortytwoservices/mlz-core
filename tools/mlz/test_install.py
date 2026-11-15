@@ -524,7 +524,7 @@ class InstallTest(unittest.TestCase):
                       "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
                       "Rulesets), with GitHub Actions as its source.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
-                      "A team needs write access to acme/mlz-vending before CODEOWNERS can name it", message)
+                      "The run on main gives write access to a visible team of acme that CODEOWNERS names there", message)
 
     def test_check_counts_only_a_required_check_from_github_actions(self):
         # Another app's check never comes; one from any source can be passed by any token that may write statuses.

@@ -138,8 +138,9 @@ file, from `bootstrap.yaml`'s `platform_team`:
   and visible. A team can take its members from an Entra ID group: the organization's owner connects the two in
   the team's settings (team synchronization, on GitHub Enterprise Cloud), and GitHub refreshes it at least hourly.
 - **Handing an area over** to a team on the customer's side is a line below `*`, in a pull request the
-  current owner approves; the last line that matches a file wins. Give the team write access to the repo first.
-  Deleting the line hands the area back:
+  current owner approves; the last line that matches a file wins. The team needs write access to the repo, which
+  the run on `main` after the merge gives it; the pull request's check only notes that it has none yet. Deleting
+  the line hands the area back, and leaves the team's access as it is:
 
   ```
   *             @acme/platform
@@ -153,13 +154,17 @@ file, from `bootstrap.yaml`'s `platform_team`:
   has no write access, and the paths that line matches then have no owner at all; they do not fall back to the
   line above (tested on 14 November 2026). So any error stops the run, saying which line and why. A repo without
   the file is only noted.
+- **But a visible team of the organization that cannot write to the repo yet** is no error: a pull request's run
+  notes it, and the run on `main` after the merge gives it write access, as the MLZ App, and only to that repo.
+  GitHub reads its lines at once (tested on 15 November 2026). A person, a secret team, a team that does not exist
+  or another organization's still stops the run: MLZ never invites anyone. The daily check gives no access.
 
 ## What a repo needs
 
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
 | `.github/CODEOWNERS`, write access for the platform team, the ruleset `main` | `mlz install repos` ([code owners](#code-owners)) |
 
