@@ -50,24 +50,41 @@ CORE = Path(__file__).resolve().parents[2]
 APP_VARIABLE, APP_SECRET = "MLZ_RELEASE_APP_CLIENT_ID", "MLZ_RELEASE_APP_PRIVATE_KEY"
 # Changes reach main only through pull requests; main is never rewritten or deleted (decided 2026-11-11). A change to
 # a file with a code owner needs that owner's approval (CODEOWNERS, tools/mlz/owners.py, decided 2026-11-14); a change
-# to one without, such as _generated/, needs none, so the contract pull requests still merge themselves.
-MAIN_RULESET = {
-    "name": "main",
-    "target": "branch",
-    "enforcement": "active",
-    "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-    "rules": [
-        {"type": "deletion"},
-        {"type": "non_fast_forward"},
-        {"type": "pull_request", "parameters": {
-            "required_approving_review_count": 0,
-            "dismiss_stale_reviews_on_push": False,
-            "require_code_owner_review": True,
-            "require_last_push_approval": False,
-            "required_review_thread_resolution": False,
-        }},
-    ],
-}
+# to one without, such as _generated/, needs none, so the contract pull requests still merge themselves. And none
+# merges until the pipeline's check has passed on it (decided 2026-11-14), so what the check refuses never reaches main:
+# contract pull requests merge themselves only after it has passed anyway. Not the plan, which reaches Azure and can
+# fail for reasons of its own. Not strict either: a contract still merges after main has moved on.
+GITHUB_ACTIONS_APP = 15368  # the app that reports workflow jobs' checks, so no other app or token can pass one
+
+
+def required_check(role: str) -> str:
+    """The check GitHub knows the role's check job by: the starter workflow's job, named after the role, then
+    role.yml's own (as the canary's runs showed, 2026-11-14)."""
+    return f"{role} / check"
+
+
+def main_ruleset(role: str) -> dict:
+    return {
+        "name": "main",
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [
+            {"type": "deletion"},
+            {"type": "non_fast_forward"},
+            {"type": "pull_request", "parameters": {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews_on_push": False,
+                "require_code_owner_review": True,
+                "require_last_push_approval": False,
+                "required_review_thread_resolution": False,
+            }},
+            {"type": "required_status_checks", "parameters": {
+                "strict_required_status_checks_policy": False,
+                "required_status_checks": [{"context": required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
+            }},
+        ],
+    }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
 GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runner_size")
@@ -218,11 +235,11 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             github.grant_team(org, team, repo)
             out(f"{repo}: {org}/{team} given write access, as its code owner")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
-        if github.add_ruleset(repo, MAIN_RULESET):
-            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, no force push or deletion)")
+        if github.add_ruleset(repo, main_ruleset(role)):
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, {required_check(role)} passed, no force push or deletion)")
         else:
             out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
-                "and requires a code owner's review (mlz install check says)")
+                f"and requires a code owner's review and {required_check(role)} (mlz install check says)")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
@@ -255,6 +272,7 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
         problems += code_owner_problems(github, bootstrap, repo, out)
+        problems += required_check_problems(github, role, repo, out)
     if problems:
         raise ConfigError("\n  ".join(["not ready for MLZ:"] + problems))
 
@@ -286,6 +304,21 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
     if not found:
         out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}")
     return found
+
+
+def required_check_problems(github, role: str, repo: str, out: Callable[[str], None]) -> list[str]:
+    """Whether GitHub refuses a merge into the default branch until the pipeline's check has passed, by the rules it
+    enforces there from every active ruleset. Only from GitHub Actions: a check expected from another app never
+    passes, and one from any source can be passed by any token that may write statuses."""
+    branch, check = github.default_branch(repo), required_check(role)
+    wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
+    if any(rule.get("type") == "required_status_checks"
+           and any({key: required.get(key) for key in wanted} == wanted for required in (rule.get("parameters") or {}).get("required_status_checks", []))
+           for rule in github.branch_rules(repo, branch)):
+        out(f"{repo}: {check} must pass before a merge into {branch}")
+        return []
+    return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so a change the check refuses can still be merged; "
+            f"add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, Rulesets), with GitHub Actions as its source."]
 
 
 # bootstrap

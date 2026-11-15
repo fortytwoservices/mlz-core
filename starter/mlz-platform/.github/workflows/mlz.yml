@@ -23,6 +23,7 @@ permissions:
   issues: write # the daily check's drift issue
 
 jobs:
+  # The job's name is in its checks' names: main's ruleset requires platform / check to pass before a merge.
   platform:
     # Runs on main go one at a time, first in first out, so each one plans only after the one before has
     # applied, and the plan a reviewer approves already includes it. Pull requests and the daily drift check
