@@ -544,6 +544,15 @@ class InstallTest(unittest.TestCase):
         install.step_check(FakeGitHub(**ready), self.folder, self.out)
         self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
 
+        # Another ruleset, such as the organization's, strict about a check of its own keeps the branch up to date too.
+        class Layered(FakeGitHub):
+            def branch_rules(self, repo, branch):
+                return super().branch_rules(repo, branch) + [{"type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": True, "required_status_checks": [{"context": "security / scan"}]}}]
+        self.printed.clear()
+        install.step_check(Layered(**ready, strict=False), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])

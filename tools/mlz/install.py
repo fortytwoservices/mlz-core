@@ -315,13 +315,15 @@ def required_check_problems(github, role: str, repo: str, out: Callable[[str], N
     passes, and one from any source can be passed by any token that may write statuses."""
     branch, check = github.default_branch(repo), required_check(role)
     wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
-    requiring = [rule.get("parameters") or {} for rule in github.branch_rules(repo, branch)
-                 if rule.get("type") == "required_status_checks"
-                 and any({key: required.get(key) for key in wanted} == wanted for required in (rule.get("parameters") or {}).get("required_status_checks", []))]
-    if any(parameters.get("strict_required_status_checks_policy") for parameters in requiring):
+    # Each rule apart: GitHub applies the strictest of them, so one that is strict about another check keeps every
+    # branch up to date too.
+    rules = [rule.get("parameters") or {} for rule in github.branch_rules(repo, branch) if rule.get("type") == "required_status_checks"]
+    required = any({key: each.get(key) for key in wanted} == wanted for rule in rules for each in rule.get("required_status_checks", []))
+    strict = any(rule.get("strict_required_status_checks_policy") for rule in rules)
+    if required and strict:
         out(f"{repo}: {check} must pass, on a branch up to date with {branch}, before a merge into {branch}")
         return []
-    if requiring:
+    if required:
         return [f"{repo}: {check} must pass before a merge into {branch}, but not on a branch up to date with it, so a pull request "
                 f"checked before a code owner handover merged can merge without its new owner's approval; turn on 'Require branches "
                 f"to be up to date before merging' for it in its ruleset main (Settings, Rules, Rulesets)."]
