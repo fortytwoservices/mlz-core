@@ -139,9 +139,23 @@ class OwnersTest(unittest.TestCase):
         github = FakeGitHub(self.errors(), teams={"network": "closed"}, base_errors=[unknown(3, "/net/ @acme/network", "@acme/network")])
         with self.assertRaises(ConfigError) as caught:
             self.check(github, "note")
-        self.assertIn("main names acme/network already, and it cannot write to acme/mlz-platform yet, so its paths have no owner there: "
+        self.assertIn("main names acme/network, which cannot write to acme/mlz-platform yet, so its paths have no owner there: "
                       "no pull request merges until the run on main gives it write access", str(caught.exception))
         self.assertEqual(github.calls, [("acme/mlz-platform", "abc123"), ("acme/mlz-platform", "base123")])
+
+    def test_a_pull_request_that_drops_the_team_still_waits_for_main(self):
+        # It would change the file, owned on main by nobody while the team cannot write, with nobody's approval.
+        self.owned()
+        github = FakeGitHub([], teams={"network": "closed"}, base_errors=[unknown(1, "* @acme/network", "@acme/network")])
+        with self.assertRaisesRegex(ConfigError, "main names acme/network, which cannot write to acme/mlz-platform yet"):
+            self.check(github, "note")
+
+    def test_a_pull_request_passes_while_main_names_only_teams_that_can_write(self):
+        self.owned()
+        github = FakeGitHub([], teams={"network": "closed"})
+        self.check(github, "note")
+        self.assertEqual(github.calls, [("acme/mlz-platform", "abc123"), ("acme/mlz-platform", "base123")])
+        self.assertEqual(self.printed, [".github/CODEOWNERS: GitHub reads every line"])
 
     def test_the_first_codeowners_is_checked_against_a_base_without_one(self):
         # Such as the file mlz install repos offers a repo it adopts: GitHub answers 404 at its base, as it does before

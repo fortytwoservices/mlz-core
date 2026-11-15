@@ -106,25 +106,30 @@ def without_new_teams(github, repo: str, ref: str, errors: list[dict], new_teams
     """The errors left once the visible teams of the organization that cannot write to the repo yet are noted or given
     write access, and what else stops the run. GitHub reads the line again as soon as the team may write (tested
     2026-11-15)."""
-    org, left, waiting, visible = repo.split("/")[0], [], {}, {}
-    for error in errors:
-        slug = team_of(error, org)
-        if slug and slug not in visible:
-            found = github.team(org, slug)
-            visible[slug] = bool(found) and found.get("privacy") != "secret"
-        if slug and visible[slug]:
-            waiting.setdefault(slug, []).append(error)
-        else:
-            left.append(error)
-    if not waiting:
-        return left, []
-    if new_teams == "grant" and github.head(repo, "main") != ref:
-        # A run of an older commit, such as one run again: CODEOWNERS may name other teams now, or an admin may have
-        # taken a team's access away. The run of main's latest commit decides.
-        for slug in sorted(waiting):
-            out(f"::notice::CODEOWNERS at {ref} names {org}/{slug}, which cannot write to {repo}; main has moved on, and its latest run decides.")
-        return left, []
+    org, visible = repo.split("/")[0], {}
+
+    def waiting_for_access(found: list[dict]) -> tuple[dict[str, list[dict]], list[dict]]:
+        """The errors about visible teams of the organization, by team, and the rest."""
+        teams, rest = {}, []
+        for error in found:
+            slug = team_of(error, org)
+            if slug and slug not in visible:
+                team = github.team(org, slug)
+                visible[slug] = bool(team) and team.get("privacy") != "secret"
+            if slug and visible[slug]:
+                teams.setdefault(slug, []).append(error)
+            else:
+                rest.append(error)
+        return teams, rest
+
+    waiting, left = waiting_for_access(errors)
     if new_teams == "grant":
+        if waiting and github.head(repo, "main") != ref:
+            # A run of an older commit, such as one run again: CODEOWNERS may name other teams now, or an admin may have
+            # taken a team's access away. The run of main's latest commit decides.
+            for slug in sorted(waiting):
+                out(f"::notice::CODEOWNERS at {ref} names {org}/{slug}, which cannot write to {repo}; main has moved on, and its latest run decides.")
+            return left, []
         for slug in sorted(waiting):
             # Looked at again: an admin may have given it more than write (maintain, admin) since, which a grant would lower.
             if github.team_can_write(org, slug, repo):
@@ -133,20 +138,19 @@ def without_new_teams(github, repo: str, ref: str, errors: list[dict], new_teams
                 github.grant_team(org, slug, repo)
                 out(f"{org}/{slug} given write access to {repo}: CODEOWNERS names it, and a code owner needs it")
         return left, []
-    # A pull request. A team its base names already has no access yet because the run on main has not given it (it may wait
-    # behind an apply's approval, or have failed): main has paths with no owner, which this pull request must not slip through.
+    # A pull request. While main names a team the run on main has not given access yet (it may wait behind an apply's
+    # approval, or have failed), that team's paths have no owner on main, and GitHub takes the code owners from main:
+    # a pull request could change them, or the file itself, with nobody's approval. So none passes until the access is
+    # given, whatever it changes, the line included. GitHub answers 404 both before it has read a file and at a commit
+    # without one, so a base without one is told apart first: the pull request that brings the first CODEOWNERS.
     if not base:
         raise ConfigError("a pull request's check needs its base commit (--base) to tell the teams it names from those main names already")
-    # GitHub answers 404 both before it has read a file and when there is none, so a base without one is told apart
-    # first: the pull request that brings the first CODEOWNERS names no team main names already.
     has_file = any(github.file(repo, location, base)[0] is not None for location in LOCATIONS)
-    named_on_main = {team_of(error, org) for error in read_errors(github, repo, base, wait)} if has_file else set()
-    blocked = []
-    for slug in sorted(waiting):
-        if slug in named_on_main:
-            left += waiting[slug]
-            blocked.append(f"main names {org}/{slug} already, and it cannot write to {repo} yet, so its paths have no owner there: no pull "
-                           "request merges until the run on main gives it write access (approve or reject the apply it waits behind, or run it again if it failed).")
-        else:
-            out(f"::notice::CODEOWNERS names {org}/{slug}, which cannot write to {repo} yet; the run on main after the merge gives it write access.")
+    on_main, _ = waiting_for_access(read_errors(github, repo, base, wait) if has_file else [])
+    for slug in sorted(set(waiting) - set(on_main)):
+        out(f"::notice::CODEOWNERS names {org}/{slug}, which cannot write to {repo} yet; the run on main after the merge gives it write access.")
+    left += [error for slug in sorted(set(waiting) & set(on_main)) for error in waiting[slug]]
+    blocked = [f"main names {org}/{slug}, which cannot write to {repo} yet, so its paths have no owner there: no pull request merges until "
+               "the run on main gives it write access (approve or reject the apply it waits behind, or run it again if it failed)."
+               for slug in sorted(on_main)]
     return left, blocked
