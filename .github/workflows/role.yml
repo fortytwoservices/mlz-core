@@ -128,9 +128,10 @@ jobs:
       # the run (docs/pipelines.md, Code owners). At github.sha, the commit checked out: on a pull request, the merge
       # commit GitHub makes of it, which the errors API reads too (tested in fortytwo-test, 2026-11-14).
       # But one: a visible team of the organization that cannot write to the repo yet. A pull request's run only
-      # notes it; the run on main after the merge, which its code owner approved, gives it write access. Both look
-      # the team up as the MLZ App, since GitHub's own token cannot read teams, and only the run on main may give
-      # access. The daily check does neither (tested in fortytwo-test, 2026-11-15).
+      # notes it, if the pull request is what names it; the run of main's latest commit after the merge, which its
+      # code owner approved, gives it write access. Both look the team up as the MLZ App, since GitHub's own token
+      # cannot read teams, and only the run on main may give access. The daily check does neither (tested in
+      # fortytwo-test, 2026-11-15).
       - id: owners-reader
         if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -159,7 +160,12 @@ jobs:
           GH_TOKEN: ${{ steps.owners-granter.outputs.token || steps.owners-reader.outputs.token || github.token }}
           REF: ${{ github.sha }}
           NEW_TEAMS: ${{ steps.owners-granter.outputs.token && 'grant' || steps.owners-reader.outputs.token && 'note' || '' }}
-        run: PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF" ${NEW_TEAMS:+--new-teams "$NEW_TEAMS"}
+          BASE: ${{ github.event.pull_request.base.sha }} # a pull request's: which teams main names already
+        run: |
+          args=()
+          if [[ -n $NEW_TEAMS ]]; then args+=(--new-teams "$NEW_TEAMS"); fi
+          if [[ $NEW_TEAMS == note ]]; then args+=(--base "$BASE"); fi
+          PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF" "${args[@]}"
 
       - name: Check the YAML
         id: check

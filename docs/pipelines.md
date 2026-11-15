@@ -154,10 +154,14 @@ file, from `bootstrap.yaml`'s `platform_team`:
   has no write access, and the paths that line matches then have no owner at all; they do not fall back to the
   line above (tested on 14 November 2026). So any error stops the run, saying which line and why. A repo without
   the file is only noted.
-- **But a visible team of the organization that cannot write to the repo yet** is no error: a pull request's run
-  notes it, and the run on `main` after the merge gives it write access, as the MLZ App, and only to that repo.
-  GitHub reads its lines at once (tested on 15 November 2026). A person, a secret team, a team that does not exist
-  or another organization's still stops the run: MLZ never invites anyone. The daily check gives no access.
+- **But a visible team of the organization that cannot write to the repo yet** is no error in the pull request
+  that names it: its run notes it, and the run of `main`'s latest commit after the merge gives it write access, as
+  the MLZ App, and only to that repo. GitHub reads its lines at once (tested on 15 November 2026). A person, a
+  secret team, a team that does not exist or another organization's still stops the run: MLZ never invites anyone.
+  The daily check gives no access, and a run of an older commit leaves it to the latest one.
+- **Until that run has given access, no other pull request merges:** the team's paths have no owner on `main`,
+  so a change to them would need nobody's approval, and every pull request's check stops on it. The run waits
+  behind any apply waiting for its reviewer: approve or reject that apply, or run it again if it failed.
 
 ## What a repo needs
 

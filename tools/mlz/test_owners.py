@@ -25,13 +25,23 @@ class FakeGitHub:
     """GitHub's answers about CODEOWNERS, one per call: None until it has read the file, then its errors. And the
     organization's teams: slug to privacy."""
 
-    def __init__(self, *answers, teams=None):
+    def __init__(self, *answers, teams=None, base_errors=(), head="abc123", writers=()):
         self.answers, self.calls = list(answers), []
         self.teams, self.granted, self.looked_up = teams or {}, [], []
+        # The errors at a pull request's base commit, main's latest commit, and the teams that can write meanwhile.
+        self.base_errors, self.main_head, self.writers = list(base_errors), head, set(writers)
 
     def codeowners_errors(self, repo, ref):
         self.calls.append((repo, ref))
+        if ref == "base123":
+            return self.base_errors
         return self.answers.pop(0) if self.answers else None
+
+    def head(self, repo, branch):
+        return self.main_head
+
+    def team_can_write(self, org, slug, repo):
+        return slug in self.writers
 
     def team(self, org, slug):
         self.looked_up.append((org, slug))
@@ -51,7 +61,8 @@ class OwnersTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def check(self, github, new_teams=None):
-        owners.check(github, "acme/mlz-platform", "abc123", self.repo, self.printed.append, self.waits.append, new_teams)
+        base = "base123" if new_teams == "note" else None
+        owners.check(github, "acme/mlz-platform", "abc123", self.repo, self.printed.append, self.waits.append, new_teams, base)
 
     def owned(self, text: str = "* @acme/platform\n") -> None:
         (self.repo / ".github").mkdir(exist_ok=True)
@@ -116,6 +127,40 @@ class OwnersTest(unittest.TestCase):
                 with self.assertRaisesRegex(ConfigError, "line 2: Unknown owner"):
                     self.check(github, "grant")
                 self.assertEqual(github.granted, [])
+
+    def test_on_a_pull_request_a_team_main_names_already_stops_it(self):
+        # main's run has not given it access yet (it waits behind an apply's approval, or failed), so its paths have
+        # no owner on main: a pull request touching them would need nobody's approval.
+        self.owned()
+        github = FakeGitHub(self.errors(), teams={"network": "closed"}, base_errors=[unknown(3, "/net/ @acme/network", "@acme/network")])
+        with self.assertRaises(ConfigError) as caught:
+            self.check(github, "note")
+        self.assertIn("main names acme/network already, and it cannot write to acme/mlz-platform yet, so its paths have no owner there: "
+                      "no pull request merges until the run on main gives it write access", str(caught.exception))
+        self.assertEqual(github.calls, [("acme/mlz-platform", "abc123"), ("acme/mlz-platform", "base123")])
+
+    def test_a_pull_request_s_check_needs_its_base(self):
+        self.owned()
+        with self.assertRaisesRegex(ConfigError, "needs its base commit"):
+            owners.check(FakeGitHub(self.errors(), teams={"network": "closed"}), "acme/mlz-platform", "abc123", self.repo,
+                         self.printed.append, self.waits.append, "note")
+
+    def test_a_run_of_an_older_commit_gives_no_access(self):
+        # Such as one run again: CODEOWNERS may name other teams now, or an admin may have taken the access away.
+        self.owned()
+        github = FakeGitHub(self.errors(), teams={"network": "closed"}, head="newer456")
+        self.check(github, "grant")
+        self.assertEqual(github.granted, [])
+        self.assertIn("::notice::CODEOWNERS at abc123 names acme/network, which cannot write to acme/mlz-platform; main has moved on, "
+                      "and its latest run decides.", self.printed)
+
+    def test_a_team_given_access_meanwhile_keeps_what_it_has(self):
+        # An admin may have given it maintain or admin since GitHub's errors were read; a grant would lower it to write.
+        self.owned()
+        github = FakeGitHub(self.errors(), teams={"network": "closed"}, writers=["network"])
+        self.check(github, "grant")
+        self.assertEqual(github.granted, [])
+        self.assertIn("acme/network can write to acme/mlz-platform already", self.printed)
 
     def test_without_new_teams_a_team_without_access_is_an_error(self):
         # The daily check, or a run of another branch: it neither notes nor gives access.

@@ -65,49 +65,85 @@ def owner(error: dict) -> str:
 
 
 def check(github, repo: str, ref: str, folder: Path, out: Callable[[str], None] = print,
-          wait: Callable[[float], None] = time.sleep, new_teams: str | None = None) -> None:
+          wait: Callable[[float], None] = time.sleep, new_teams: str | None = None, base: str | None = None) -> None:
     """Every run's check: the repo's CODEOWNERS at ref, as GitHub reads it. A repo without one is only noted.
     new_teams says what becomes of a visible team of the organization that cannot write to the repo yet: "note" (a
-    pull request: it is noted, and gets access once merged), "grant" (main: it gets write access now) or None (an
-    error, like any other)."""
+    pull request, whose base commit is base: noted, if the pull request is what names it), "grant" (main: given
+    write access) or None (an error, like any other)."""
     if not any((folder / location).is_file() for location in LOCATIONS):
         out(f"::notice::No {PATH}: anyone with write access may approve a change to this repo. mlz install repos offers one (docs/pipelines.md).")
         return
-    for attempt in range(TRIES):
-        errors = github.codeowners_errors(repo, ref)
-        if errors is not None:
-            break
-        if attempt < TRIES - 1:
-            wait(WAIT)
-    else:
-        raise ConfigError(f"GitHub has not read {PATH} at {ref} yet; run the check again in a minute.")
+    errors = read_errors(github, repo, ref, wait)
+    blocked = []
     if new_teams:
-        errors = without_new_teams(github, repo, errors, new_teams, out)
-    found = problems(errors, repo)
+        errors, blocked = without_new_teams(github, repo, ref, errors, new_teams, out, wait, base)
+    found = problems(errors, repo) + blocked
     if found:
         raise ConfigError("GitHub cannot use every line of CODEOWNERS, and a path whose line it skips has no owner at all:\n  "
                           + "\n  ".join(found))
     out(f"{PATH}: GitHub reads every line")
 
 
-def without_new_teams(github, repo: str, errors: list[dict], new_teams: str, out: Callable[[str], None]) -> list[dict]:
+def read_errors(github, repo: str, ref: str, wait: Callable[[float], None]) -> list[dict]:
+    """GitHub's errors in the file at ref, once it has read it."""
+    for attempt in range(TRIES):
+        errors = github.codeowners_errors(repo, ref)
+        if errors is not None:
+            return errors
+        if attempt < TRIES - 1:
+            wait(WAIT)
+    raise ConfigError(f"GitHub has not read {PATH} at {ref} yet; run the check again in a minute.")
+
+
+def team_of(error: dict, org: str) -> str | None:
+    """The team of the organization an "Unknown owner" error is about, if it is about one."""
+    match = TEAM.fullmatch(owner(error)) if error.get("kind") == "Unknown owner" else None
+    return match[2].lower() if match and match[1].lower() == org.lower() else None
+
+
+def without_new_teams(github, repo: str, ref: str, errors: list[dict], new_teams: str, out: Callable[[str], None],
+                      wait: Callable[[float], None], base: str | None) -> tuple[list[dict], list[str]]:
     """The errors left once the visible teams of the organization that cannot write to the repo yet are noted or given
-    write access. GitHub reads the line again as soon as the team may write (tested 2026-11-15)."""
-    org, left, teams = repo.split("/")[0], [], {}
+    write access, and what else stops the run. GitHub reads the line again as soon as the team may write (tested
+    2026-11-15)."""
+    org, left, waiting, visible = repo.split("/")[0], [], {}, {}
     for error in errors:
-        match = TEAM.fullmatch(owner(error)) if error.get("kind") == "Unknown owner" else None
-        if match and match[1].lower() == org.lower():
-            slug = match[2].lower()
-            if slug not in teams:
-                found = github.team(org, slug)
-                teams[slug] = bool(found) and found.get("privacy") != "secret"
-            if teams[slug]:
-                continue
-        left.append(error)
-    for slug in sorted(slug for slug, visible in teams.items() if visible):
-        if new_teams == "grant":
-            github.grant_team(org, slug, repo)
-            out(f"{org}/{slug} given write access to {repo}: CODEOWNERS names it, and a code owner needs it")
+        slug = team_of(error, org)
+        if slug and slug not in visible:
+            found = github.team(org, slug)
+            visible[slug] = bool(found) and found.get("privacy") != "secret"
+        if slug and visible[slug]:
+            waiting.setdefault(slug, []).append(error)
+        else:
+            left.append(error)
+    if not waiting:
+        return left, []
+    if new_teams == "grant" and github.head(repo, "main") != ref:
+        # A run of an older commit, such as one run again: CODEOWNERS may name other teams now, or an admin may have
+        # taken a team's access away. The run of main's latest commit decides.
+        for slug in sorted(waiting):
+            out(f"::notice::CODEOWNERS at {ref} names {org}/{slug}, which cannot write to {repo}; main has moved on, and its latest run decides.")
+        return left, []
+    if new_teams == "grant":
+        for slug in sorted(waiting):
+            # Looked at again: an admin may have given it more than write (maintain, admin) since, which a grant would lower.
+            if github.team_can_write(org, slug, repo):
+                out(f"{org}/{slug} can write to {repo} already")
+            else:
+                github.grant_team(org, slug, repo)
+                out(f"{org}/{slug} given write access to {repo}: CODEOWNERS names it, and a code owner needs it")
+        return left, []
+    # A pull request. A team its base names already has no access yet because the run on main has not given it (it may wait
+    # behind an apply's approval, or have failed): main has paths with no owner, which this pull request must not slip through.
+    if not base:
+        raise ConfigError("a pull request's check needs its base commit (--base) to tell the teams it names from those main names already")
+    named_on_main = {team_of(error, org) for error in read_errors(github, repo, base, wait)}
+    blocked = []
+    for slug in sorted(waiting):
+        if slug in named_on_main:
+            left += waiting[slug]
+            blocked.append(f"main names {org}/{slug} already, and it cannot write to {repo} yet, so its paths have no owner there: no pull "
+                           "request merges until the run on main gives it write access (approve or reject the apply it waits behind, or run it again if it failed).")
         else:
             out(f"::notice::CODEOWNERS names {org}/{slug}, which cannot write to {repo} yet; the run on main after the merge gives it write access.")
-    return left
+    return left, blocked
