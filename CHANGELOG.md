@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/fortytwoservices/mlz-core/compare/v0.8.0...v0.8.1) (2026-11-15)
+
+
+### Features
+
+* **owners:** the run on main gives a team CODEOWNERS names write access ([#79](https://github.com/fortytwoservices/mlz-core/issues/79)) ([75d5aa5](https://github.com/fortytwoservices/mlz-core/commit/75d5aa5c507caf04847199092426d2d75d6096e6))
+
 ## [0.8.0](https://github.com/fortytwoservices/mlz-core/compare/v0.7.0...v0.8.0) (2026-11-15)
 
 
