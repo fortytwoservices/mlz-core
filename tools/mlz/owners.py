@@ -69,11 +69,11 @@ def check(github, repo: str, ref: str, folder: Path, out: Callable[[str], None] 
     """Every run's check: the repo's CODEOWNERS at ref, as GitHub reads it. A repo without one is only noted.
     new_teams says what becomes of a visible team of the organization that cannot write to the repo yet: "note" (a
     pull request, whose base commit is base: noted, if the pull request is what names it), "grant" (main: given
-    write access) or None (an error, like any other)."""
-    if not any((folder / location).is_file() for location in LOCATIONS):
+    write access) or None (an error, like any other). A pull request that deletes the file still waits for main."""
+    owned = any((folder / location).is_file() for location in LOCATIONS)
+    if not owned:
         out(f"::notice::No {PATH}: anyone with write access may approve a change to this repo. mlz install repos offers one (docs/pipelines.md).")
-        return
-    errors = read_errors(github, repo, ref, wait)
+    errors = read_errors(github, repo, ref, wait) if owned else []
     blocked = []
     if new_teams:
         errors, blocked = without_new_teams(github, repo, ref, errors, new_teams, out, wait, base)
@@ -81,7 +81,8 @@ def check(github, repo: str, ref: str, folder: Path, out: Callable[[str], None] 
     if found:
         raise ConfigError("GitHub cannot use every line of CODEOWNERS, and a path whose line it skips has no owner at all:\n  "
                           + "\n  ".join(found))
-    out(f"{PATH}: GitHub reads every line")
+    if owned:
+        out(f"{PATH}: GitHub reads every line")
 
 
 def read_errors(github, repo: str, ref: str, wait: Callable[[float], None]) -> list[dict]:

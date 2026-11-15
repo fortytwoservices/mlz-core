@@ -161,7 +161,14 @@ jobs:
           REF: ${{ github.sha }}
           NEW_TEAMS: ${{ steps.owners-granter.outputs.token && 'grant' || steps.owners-reader.outputs.token && 'note' || '' }}
           BASE: ${{ github.event.pull_request.base.sha }} # a pull request's: which teams main names already
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
+          # A fork's run gets none of the repo's secrets, so it cannot read teams as the MLZ App, nor see that main
+          # waits for a team's access: it would pass a pull request that must wait.
+          if [[ $GITHUB_EVENT_NAME == pull_request && $HEAD_REPO != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::$HEAD_REPO is a fork, whose run cannot check the code owners as the MLZ App. Push the branch to $GITHUB_REPOSITORY and open the pull request from there."
+            exit 1
+          fi
           args=()
           if [[ -n $NEW_TEAMS ]]; then args+=(--new-teams "$NEW_TEAMS"); fi
           if [[ $NEW_TEAMS == note ]]; then args+=(--base "$BASE"); fi

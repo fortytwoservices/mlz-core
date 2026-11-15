@@ -160,8 +160,11 @@ file, from `bootstrap.yaml`'s `platform_team`:
   secret team, a team that does not exist or another organization's still stops the run: MLZ never invites anyone.
   The daily check gives no access, and a run of an older commit leaves it to the latest one.
 - **Until that run has given access, no other pull request merges:** the team's paths have no owner on `main`,
-  so a change to them would need nobody's approval, and every pull request's check stops on it. The run waits
-  behind any apply waiting for its reviewer: approve or reject that apply, or run it again if it failed.
+  so a change to them would need nobody's approval, and every pull request's check stops on it, one that deletes
+  the file too. The run waits behind any apply waiting for its reviewer: approve or reject that apply, or run it
+  again if it failed.
+- **A pull request from a fork stops at the check:** its run gets none of the repo's secrets, so it cannot look
+  teams up as the MLZ App. Push the branch to the repo itself and open the pull request from there.
 
 ## What a repo needs
 

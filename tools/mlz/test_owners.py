@@ -150,6 +150,12 @@ class OwnersTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "main names acme/network, which cannot write to acme/mlz-platform yet"):
             self.check(github, "note")
 
+    def test_a_pull_request_that_deletes_the_file_still_waits_for_main(self):
+        github = FakeGitHub(teams={"network": "closed"}, base_errors=[unknown(1, "* @acme/network", "@acme/network")])
+        with self.assertRaisesRegex(ConfigError, "main names acme/network, which cannot write to acme/mlz-platform yet"):
+            self.check(github, "note")
+        self.assertEqual(github.calls, [("acme/mlz-platform", "base123")])  # main's errors only: the pull request has none
+
     def test_a_pull_request_passes_while_main_names_only_teams_that_can_write(self):
         self.owned()
         github = FakeGitHub([], teams={"network": "closed"})
