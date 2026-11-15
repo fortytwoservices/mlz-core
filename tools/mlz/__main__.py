@@ -13,6 +13,7 @@
                             [--billing-scope <scope>] [--yes]
     python3 -m mlz schema   --out schemas
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
+                            [--new-teams note --base <commit> | --new-teams grant]
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -90,6 +91,9 @@ def main() -> int:
     o = roles.add_parser("owners", help="in a repo's checkout: fail on any line of its CODEOWNERS GitHub cannot use (tools/mlz/owners.py)")
     o.add_argument("--repo", required=True, help="the repo, <owner>/<name>")
     o.add_argument("--ref", required=True, help="the commit whose CODEOWNERS to check")
+    o.add_argument("--new-teams", choices=("note", "grant"),
+                   help="a visible team of the organization that cannot write yet: note it (a pull request), or give it write access (main)")
+    o.add_argument("--base", help="with --new-teams note: the pull request's base commit")
     d = roles.add_parser("decommission", help="after a landing zone's decommission is applied, offer the pull requests that delete its files")
     d.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout, at main")
     c = roles.add_parser("contract", help="a root's `contract` output (JSON on stdin) as the commented YAML file")
@@ -168,7 +172,7 @@ def main() -> int:
 
     if args.role == "owners":
         try:
-            owners.check(GitHub(), args.repo, args.ref, Path.cwd())
+            owners.check(GitHub(), args.repo, args.ref, Path.cwd(), new_teams=args.new_teams, base=args.base)
         except ConfigError as error:
             print(f"mlz owners: {error}", file=sys.stderr)
             return 1

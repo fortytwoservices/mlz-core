@@ -53,7 +53,10 @@ APP_VARIABLE, APP_SECRET = "MLZ_RELEASE_APP_CLIENT_ID", "MLZ_RELEASE_APP_PRIVATE
 # to one without, such as _generated/, needs none, so the contract pull requests still merge themselves. And none
 # merges until the pipeline's check has passed on it (decided 2026-11-14), so what the check refuses never reaches main:
 # contract pull requests merge themselves only after it has passed anyway. Not the plan, which reaches Azure and can
-# fail for reasons of its own. Not strict either: a contract still merges after main has moved on.
+# fail for reasons of its own. And strict (decided by the user on 2026-11-15): a pull request merges only once it is
+# up to date with main and checked there, so one checked before a code owner handover merged is checked again against
+# the new owners (tools/mlz/owners.py). A contract another merge left behind is brought up to date by its run, and
+# the run of that merge merges it (tools/ci/merge.sh).
 GITHUB_ACTIONS_APP = 15368  # the app that reports workflow jobs' checks, so no other app or token can pass one
 
 
@@ -80,7 +83,7 @@ def main_ruleset(role: str) -> dict:
                 "required_review_thread_resolution": False,
             }},
             {"type": "required_status_checks", "parameters": {
-                "strict_required_status_checks_policy": False,
+                "strict_required_status_checks_policy": True,
                 "required_status_checks": [{"context": required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
             }},
         ],
@@ -236,7 +239,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             out(f"{repo}: {org}/{team} given write access, as its code owner")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
         if github.add_ruleset(repo, main_ruleset(role)):
-            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, {required_check(role)} passed, no force push or deletion)")
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, {required_check(role)} passed on a branch up to date with main, no force push or deletion)")
         else:
             out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
                 f"and requires a code owner's review and {required_check(role)} (mlz install check says)")
@@ -312,13 +315,21 @@ def required_check_problems(github, role: str, repo: str, out: Callable[[str], N
     passes, and one from any source can be passed by any token that may write statuses."""
     branch, check = github.default_branch(repo), required_check(role)
     wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
-    if any(rule.get("type") == "required_status_checks"
-           and any({key: required.get(key) for key in wanted} == wanted for required in (rule.get("parameters") or {}).get("required_status_checks", []))
-           for rule in github.branch_rules(repo, branch)):
-        out(f"{repo}: {check} must pass before a merge into {branch}")
+    # Each rule apart: GitHub applies the strictest of them, so one that is strict about another check keeps every
+    # branch up to date too.
+    rules = [rule.get("parameters") or {} for rule in github.branch_rules(repo, branch) if rule.get("type") == "required_status_checks"]
+    required = any({key: each.get(key) for key in wanted} == wanted for rule in rules for each in rule.get("required_status_checks", []))
+    strict = any(rule.get("strict_required_status_checks_policy") for rule in rules)
+    if required and strict:
+        out(f"{repo}: {check} must pass, on a branch up to date with {branch}, before a merge into {branch}")
         return []
+    if required:
+        return [f"{repo}: {check} must pass before a merge into {branch}, but not on a branch up to date with it, so a pull request "
+                f"checked before a code owner handover merged can merge without its new owner's approval; turn on 'Require branches "
+                f"to be up to date before merging' for it in its ruleset main (Settings, Rules, Rulesets)."]
     return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so a change the check refuses can still be merged; "
-            f"add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, Rulesets), with GitHub Actions as its source."]
+            f"add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, Rulesets), with GitHub Actions as its "
+            f"source, and turn on 'Require branches to be up to date before merging'."]
 
 
 # bootstrap

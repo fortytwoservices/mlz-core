@@ -127,11 +127,52 @@ jobs:
       # A line of CODEOWNERS that GitHub cannot use leaves its paths with no owner at all, so any error in it stops
       # the run (docs/pipelines.md, Code owners). At github.sha, the commit checked out: on a pull request, the merge
       # commit GitHub makes of it, which the errors API reads too (tested in fortytwo-test, 2026-11-14).
+      # But one: a visible team of the organization that cannot write to the repo yet. A pull request's run only
+      # notes it, if the pull request is what names it; the run of main's latest commit after the merge, which its
+      # code owner approved, gives it write access. Both look the team up as the MLZ App, since GitHub's own token
+      # cannot read teams, and only the run on main may give access. The daily check does neither (tested in
+      # fortytwo-test, 2026-11-15).
+      - id: owners-reader
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read # the CODEOWNERS errors
+          permission-members: read
+
+      - id: owners-granter
+        if: contains(fromJSON('["push", "workflow_dispatch"]'), github.event_name) && github.ref == 'refs/heads/main'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-administration: write # to give a team write access to this repo, and no other
+          permission-contents: read
+          permission-members: read
+
       - name: Check the code owners
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.owners-granter.outputs.token || steps.owners-reader.outputs.token || github.token }}
           REF: ${{ github.sha }}
-        run: PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF"
+          NEW_TEAMS: ${{ steps.owners-granter.outputs.token && 'grant' || steps.owners-reader.outputs.token && 'note' || '' }}
+          BASE: ${{ github.event.pull_request.base.sha }} # a pull request's: which teams main names already
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          # A fork's run gets none of the repo's secrets, so it cannot read teams as the MLZ App, nor see that main
+          # waits for a team's access: it would pass a pull request that must wait.
+          if [[ $GITHUB_EVENT_NAME == pull_request && $HEAD_REPO != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::$HEAD_REPO is a fork, whose run cannot check the code owners as the MLZ App. Push the branch to $GITHUB_REPOSITORY and open the pull request from there."
+            exit 1
+          fi
+          args=()
+          if [[ -n $NEW_TEAMS ]]; then args+=(--new-teams "$NEW_TEAMS"); fi
+          if [[ $NEW_TEAMS == note ]]; then args+=(--base "$BASE"); fi
+          PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF" "${args[@]}"
 
       - name: Check the YAML
         id: check
@@ -643,4 +684,5 @@ jobs:
           GH_TOKEN: ${{ steps.merger.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_REF: ${{ github.base_ref }}
         run: .mlz-core/tools/ci/merge.sh
