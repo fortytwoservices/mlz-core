@@ -137,7 +137,10 @@ def without_new_teams(github, repo: str, ref: str, errors: list[dict], new_teams
     # behind an apply's approval, or have failed): main has paths with no owner, which this pull request must not slip through.
     if not base:
         raise ConfigError("a pull request's check needs its base commit (--base) to tell the teams it names from those main names already")
-    named_on_main = {team_of(error, org) for error in read_errors(github, repo, base, wait)}
+    # GitHub answers 404 both before it has read a file and when there is none, so a base without one is told apart
+    # first: the pull request that brings the first CODEOWNERS names no team main names already.
+    has_file = any(github.file(repo, location, base)[0] is not None for location in LOCATIONS)
+    named_on_main = {team_of(error, org) for error in read_errors(github, repo, base, wait)} if has_file else set()
     blocked = []
     for slug in sorted(waiting):
         if slug in named_on_main:

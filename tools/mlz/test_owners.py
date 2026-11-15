@@ -25,17 +25,21 @@ class FakeGitHub:
     """GitHub's answers about CODEOWNERS, one per call: None until it has read the file, then its errors. And the
     organization's teams: slug to privacy."""
 
-    def __init__(self, *answers, teams=None, base_errors=(), head="abc123", writers=()):
+    def __init__(self, *answers, teams=None, base_errors=(), head="abc123", writers=(), base_owned=True):
         self.answers, self.calls = list(answers), []
         self.teams, self.granted, self.looked_up = teams or {}, [], []
         # The errors at a pull request's base commit, main's latest commit, and the teams that can write meanwhile.
         self.base_errors, self.main_head, self.writers = list(base_errors), head, set(writers)
+        self.base_owned = base_owned  # whether the base commit has a CODEOWNERS (GitHub answers 404 without one)
 
     def codeowners_errors(self, repo, ref):
         self.calls.append((repo, ref))
         if ref == "base123":
-            return self.base_errors
+            return self.base_errors if self.base_owned else None
         return self.answers.pop(0) if self.answers else None
+
+    def file(self, repo, path, ref):
+        return ("* @acme/platform\n" if self.base_owned and path == ".github/CODEOWNERS" else None), None
 
     def head(self, repo, branch):
         return self.main_head
@@ -138,6 +142,16 @@ class OwnersTest(unittest.TestCase):
         self.assertIn("main names acme/network already, and it cannot write to acme/mlz-platform yet, so its paths have no owner there: "
                       "no pull request merges until the run on main gives it write access", str(caught.exception))
         self.assertEqual(github.calls, [("acme/mlz-platform", "abc123"), ("acme/mlz-platform", "base123")])
+
+    def test_the_first_codeowners_is_checked_against_a_base_without_one(self):
+        # Such as the file mlz install repos offers a repo it adopts: GitHub answers 404 at its base, as it does before
+        # it has read a file, so the check looks for the file there first rather than wait for it.
+        self.owned()
+        github = FakeGitHub(self.errors(), teams={"network": "closed"}, base_owned=False)
+        self.check(github, "note")
+        self.assertEqual(github.calls, [("acme/mlz-platform", "abc123")])
+        self.assertEqual(self.waits, [])
+        self.assertEqual(self.printed[-1], ".github/CODEOWNERS: GitHub reads every line")
 
     def test_a_pull_request_s_check_needs_its_base(self):
         self.owned()
