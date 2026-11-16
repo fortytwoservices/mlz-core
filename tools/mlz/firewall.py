@@ -89,6 +89,13 @@ RUNNERS = [
         "to": ["registry.terraform.io", "releases.hashicorp.com"],
         "ports": ["https"],
     },
+    {
+        # Not among GitHub's Actions domains: self-hosted runners fetch it once, at boot (az-tf-mlz-github-runners).
+        "name": "runner-registration",
+        "description": "mlz-core: Fortytwo's runner registration script, pinned to a commit and checked against its hash.",
+        "to": ["raw.githubusercontent.com"],
+        "ports": ["https"],
+    },
 ]
 RUNNER_SUBNETS = ("github-runners", "runners")
 # Management's and identity's own rules, after the required ones and firewall/platform.yaml's.

@@ -248,6 +248,7 @@ class RunnersGitHub(FakeGitHub):
         self.owner, self.fail_configuration = owner, fail_configuration
         self.configurations, self.groups, self.runners = list(configurations), list(groups), list(runners)
         self.group_repositories, self.values, self.calls = {}, {}, []
+        self.online = []  # the self-hosted runners registered in the group
 
     def is_owner(self, org):
         return self.owner
@@ -283,6 +284,9 @@ class RunnersGitHub(FakeGitHub):
     def hosted_runner(self, org, name):
         return next((r for r in self.runners if r["name"] == name), None)
 
+    def group_runners(self, org, group):
+        return self.online
+
     def create_hosted_runner(self, org, body):
         self.calls.append(("runner", body))
 
@@ -298,6 +302,54 @@ MANAGEMENT = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups
 # By the names tools/mlz/names.py gives them, from the customer's template.
 NETWORK_SETTINGS = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/GitHub.Network/networkSettings/ghns-acme-mgt-pd-nwe-01"
 STATE_ENDPOINT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.Network/privateEndpoints/pep-acme-mlz-state-pd-nwe-01"
+
+
+VAULT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.KeyVault/vaults/kv-acme-mlz-pd-nwe-01"
+RUNNERS_SUBNET = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/Microsoft.Network/virtualNetworks/vnet-acme-mgt-pd-nwe-01/subnets/snet-runners"
+APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEnotarealkey\n-----END RSA PRIVATE KEY-----\n"
+UPLOAD = "https://kv-acme-mlz-pd-nwe-01.vault.azure.net/secrets/github-runner-app-key?api-version=7.4"
+
+
+def refused(code, message, status=403):
+    """Key Vault's answer to a refused write, as its data plane sends it."""
+    body = json.dumps({"error": {"code": "Forbidden", "message": message, "innererror": {"code": code}}}).encode()
+    return urllib.error.HTTPError(UPLOAD, status, "Forbidden", {}, io.BytesIO(body))
+
+
+class SelfHostedAzure(FakeAzure):
+    """Management's network, the bootstrap's vault, Key Vault's data plane and the subscription's prerequisites."""
+
+    def __init__(self, secret=False, endpoint=True, refusals=(), feature="Registered", accepted=False, vault=True, subnet=True):
+        resources = {}
+        if subnet:
+            resources[RUNNERS_SUBNET] = {"name": "snet-runners"}
+        if vault:
+            resources[VAULT] = {"properties": {"vaultUri": "https://kv-acme-mlz-pd-nwe-01.vault.azure.net/",
+                                               "networkAcls": {"defaultAction": "Deny", "bypass": "None", "ipRules": []}}}
+        if secret:
+            resources[f"{VAULT}/secrets/github-runner-app-key"] = {"name": "github-runner-app-key"}
+        if endpoint:
+            resources[STATE_ENDPOINT] = {"properties": {"provisioningState": "Succeeded"}}
+        super().__init__(resources=resources)
+        self.refusals, self.feature, self.accepted = list(refusals), feature, accepted
+        self.calls, self.uploads = [], []
+
+    def object_id(self):
+        return "33333333-3333-3333-3333-333333333333"
+
+    def request(self, method, url, body=None):
+        self.calls.append((method, url.split("?")[0], body))
+        if method == "GET" and url.split("?")[0].endswith("/agreements/current"):
+            return {"name": "ubuntu-latest-gen2", "properties": {"accepted": self.accepted, "signature": "SIGNED"}}
+        if method == "GET" and "/features/EncryptionAtHost" in url:
+            return {"properties": {"state": self.feature}}
+        return {}
+
+    def vault(self, method, url, body=None):
+        if self.refusals:
+            raise self.refusals.pop(0)
+        self.uploads.append((method, url, body))
+        return {}
 
 
 def runners_azure(endpoint=True):
@@ -597,6 +649,10 @@ class InstallTest(unittest.TestCase):
         plan = next(call for call in terraform.calls if call[0] == "plan")
         self.assertIn(f"names_file={self.work / 'names.json'}", plan)
         self.assertEqual(json.loads((self.work / "names.json").read_text())["storage_account"], "stacmemlzstatepdnwe01")
+        # So do the runner settings, checked and with their defaults: the root never reads them raw.
+        self.assertIn(f"runners_file={self.work / 'runners.json'}", plan)
+        self.assertEqual(json.loads((self.work / "runners.json").read_text()),
+                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None})
         self.assertIn("bootstrap: all 3 subjects match what GitHub issues", self.printed)
 
     def test_a_state_that_will_not_move_stays_local_and_the_next_run_moves_it(self):
@@ -814,9 +870,13 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "no vending apply identity"):
             self.subscriptions(BillingAzure(), contract={})
 
-    # runners
+    # runners: GitHub-hosted, joined to management's network
+
+    def hosted(self, runners: str = ""):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "  runners:\n    kind: github-hosted\n" + runners)
 
     def test_the_runners_step_makes_the_three_and_moves_the_repos_onto_them(self):
+        self.hosted()
         github = RunnersGitHub()
         install.step_runners(github, runners_azure(), self.folder, self.out)
         calls = dict((call[0], call[1]) for call in github.calls if call[0] != "variable")
@@ -830,6 +890,7 @@ class InstallTest(unittest.TestCase):
                       "To go back to GitHub's public runners: gh variable delete MLZ_RUNS_ON --repo <repo>.", self.printed)
 
     def test_the_repos_stay_on_public_runners_until_the_state_has_its_private_endpoint(self):
+        self.hosted()
         github = RunnersGitHub()
         install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
         self.assertEqual([call[0] for call in github.calls], ["configuration", "group", "runner"])
@@ -837,6 +898,7 @@ class InstallTest(unittest.TestCase):
         self.assertTrue(any("run mlz install bootstrap again, then this step" in line for line in self.printed))
 
     def test_a_second_run_changes_nothing_in_place_and_narrows_a_widened_group(self):
+        self.hosted()
         github = RunnersGitHub(
             configurations=[{"name": "mlz", "id": "CONFIG", "network_settings_ids": ["GHID123"]}],
             groups=[{"name": "mlz", "id": 7, "visibility": "all", "network_configuration_id": "CONFIG"}],
@@ -852,6 +914,7 @@ class InstallTest(unittest.TestCase):
         ])
 
     def test_someone_who_is_not_an_owner_gets_the_commands_and_changes_nothing(self):
+        self.hosted()
         github = RunnersGitHub(owner=False)
         install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
         self.assertEqual(github.calls, [])
@@ -867,31 +930,30 @@ class InstallTest(unittest.TestCase):
                       "only through it: run mlz install bootstrap again, then run these:", text)
         self.assertIn("gh variable set MLZ_RUNS_ON --repo acme/mlz-vending --body mlz", text)
 
-    def test_a_value_from_yaml_stays_one_argument_in_the_commands(self):
-        hostile = "2-core'; printf INJECTED; #"
-        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", f'  reviewers: [acme-lead]\n  runner_size: "{hostile}"\n'))
-        install.step_runners(RunnersGitHub(owner=False), runners_azure(), self.folder, self.out)
-        line = next(line for block in self.printed for line in block.split("\n") if "hosted-runners" in line)
-        words = shlex.split(line)
-        self.assertIn(f"size={hostile}", words)
-        self.assertNotIn("printf", words)
+    def test_a_size_that_is_no_size_is_refused_before_it_reaches_a_command(self):
+        self.hosted("    size: \"2-core'; printf INJECTED; #\"\n")
+        with self.assertRaisesRegex(ConfigError, "github.runners.size is one of GitHub's runner sizes for github-hosted runners, such as 2-core"):
+            install.step_runners(RunnersGitHub(owner=False), runners_azure(), self.folder, self.out)
 
     def test_the_runner_size_comes_from_bootstrap_yaml(self):
-        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", "  reviewers: [acme-lead]\n  runner_size: 4-core\n"))
+        self.hosted("    size: 4-core\n")
         github = RunnersGitHub()
         install.step_runners(github, runners_azure(), self.folder, self.out)
         self.assertEqual(dict(call[:2] for call in github.calls)["runner"]["size"], "4-core")
 
     def test_no_runners_where_github_does_not_join_them_to_a_network(self):
+        self.hosted()
         (self.folder / "customer.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
         with self.assertRaisesRegex(ConfigError, "only in some regions, not westeurope"):
             install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
 
     def test_the_network_settings_come_first(self):
+        self.hosted()
         with self.assertRaisesRegex(ConfigError, "no GitHub network settings yet \\(ghns-acme-mgt-pd-nwe-01\\)"):
             install.step_runners(RunnersGitHub(), FakeAzure(), self.folder, self.out)
 
     def test_another_network_configuration_named_mlz_is_not_taken_over(self):
+        self.hosted()
         for found in ({"network_settings_ids": ["ELSEWHERE"]}, {"network_settings_ids": ["ELSEWHERE", "GHID123"]},
                       {"network_settings_ids": ["GHID123"], "failover_network_enabled": True, "failover_network_settings_ids": ["ELSEWHERE"]}):
             github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", **found}])
@@ -900,8 +962,165 @@ class InstallTest(unittest.TestCase):
             self.assertEqual(github.calls, [])
 
     def test_a_refused_network_configuration_names_the_enterprise_policy(self):
+        self.hosted()
         with self.assertRaisesRegex(ConfigError, "Policies, Hosted compute networking"):
             install.step_runners(RunnersGitHub(fail_configuration=True), runners_azure(), self.folder, self.out)
+
+
+    # runners: self-hosted, the default
+
+    def self_hosted(self, runners: str = "    app_client_id: Iv23liRunners\n"):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "  runners:\n" + runners)
+        key = Path(self.tmp.name) / "runners.private-key.pem"
+        key.write_text(APP_KEY)
+        return key
+
+    def run_self_hosted(self, github, azure, app_key=None):
+        waits = []
+        with unittest.mock.patch.object(install, "apply_bootstrap") as apply:
+            install.step_runners(github, azure, self.folder, self.out, terraform="terraform", app_key=app_key, wait=waits.append)
+        return apply, waits
+
+    def test_the_runner_settings_default_to_self_hosted_on_fortytwo_s_image_size(self):
+        self.assertEqual(install.runner_settings({"github": {}}), {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None})
+        self.assertEqual(install.runner_settings({"github": {"runners": {"kind": "github-hosted"}}}),
+                         {"kind": "github-hosted", "size": "2-core", "instances": 1, "app_client_id": None})
+
+    def test_runner_settings_that_would_reach_a_command_or_a_script_are_checked(self):
+        for given, problem in (({"kind": "ephemeral"}, "kind is self-hosted or github-hosted, not 'ephemeral'"),
+                               ({"size": "Standard_D2'; rm -rf /"}, "size is an Azure virtual machine size for self-hosted runners"),
+                               ({"instances": 101}, "instances is a whole number of runners from 0 to 100"),
+                               ({"instances": True}, "instances is a whole number"),
+                               ({"app_client_id": "Iv23\"; x"}, "app_client_id is the runner App's client ID"),
+                               ({"kind": "github-hosted", "instances": 2}, "instances is for self-hosted runners"),
+                               ({"labels": ["x"]}, "github.runners.labels is not a setting")):
+            with self.assertRaisesRegex(ConfigError, problem):
+                install.runner_settings({"github": {"runners": given}})
+
+    def test_self_hosted_runners_need_the_runner_app(self):
+        self.self_hosted("    instances: 2\n")
+        with self.assertRaisesRegex(ConfigError, "needs github.runners.app_client_id: the client ID of the customer's runner App"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure())
+
+    def test_the_group_the_key_the_runners_and_then_the_repos(self):
+        key = self.self_hosted()
+        github = RunnersGitHub()
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online"}]
+        # The vault's firewall refuses this address first, then Key Vault has not seen the new role yet.
+        azure = SelfHostedAzure(refusals=[
+            refused("ForbiddenByFirewall", "Client address is not authorized and caller is not a trusted service.\r\nClient address: 203.0.113.7\r\nCaller: x"),
+            refused("ForbiddenByRbac", "Caller is not authorized to perform action on resource."),
+        ])
+        apply, waits = self.run_self_hosted(github, azure, key)
+        workflow = f"fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/{install.release()}"
+        self.assertEqual(dict(github.calls[:1])["group"], {
+            "name": "mlz", "visibility": "selected", "selected_repository_ids": [101, 102, 103], "allows_public_repositories": False,
+            "restricted_to_workflows": True, "selected_workflows": [workflow]})
+        self.assertEqual(azure.uploads, [("PUT", UPLOAD, {"value": APP_KEY, "contentType": "application/x-pem-file"})])
+        steps = [(method, url.rsplit("/", 1)[-1] if "roleAssignments" not in url else "roleAssignment") for method, url, _ in azure.calls]
+        self.assertEqual(steps, [("PUT", "roleAssignment"), ("PATCH", "kv-acme-mlz-pd-nwe-01"), ("PATCH", "kv-acme-mlz-pd-nwe-01"),
+                                 ("DELETE", "roleAssignment"), ("GET", "current"), ("PUT", "current"), ("GET", "EncryptionAtHost"),
+                                 ("POST", "register")])
+        role, opened, closed = azure.calls[0][2], azure.calls[1][2], azure.calls[2][2]
+        self.assertEqual(role["properties"]["principalId"], "33333333-3333-3333-3333-333333333333")
+        self.assertTrue(role["properties"]["roleDefinitionId"].endswith("/roleDefinitions/b86a8fe4-44ce-4948-aee5-eccb2c155cd7"))
+        self.assertEqual(opened["properties"]["networkAcls"]["ipRules"], [{"value": "203.0.113.7"}])
+        self.assertEqual(closed["properties"]["networkAcls"]["ipRules"], [])
+        self.assertTrue(azure.calls[5][2]["properties"]["accepted"])
+        self.assertEqual(azure.calls[5][2]["properties"]["signature"], "SIGNED")  # the terms as Azure gave them
+        self.assertEqual(waits, [10, 10])
+        apply.assert_called_once()
+        self.assertEqual(github.values, {(repo, "MLZ_RUNS_ON"): "mlz" for repo in REPOS.values()})
+        self.assertFalse(any("MIIE" in line for line in self.printed))  # the key is never printed
+        self.assertTrue(any("Delete the .pem file now, and never send it on" in line for line in self.printed))
+
+    def test_an_upload_that_fails_still_takes_the_role_and_the_address_away(self):
+        key = self.self_hosted()
+        azure = SelfHostedAzure(refusals=[
+            refused("ForbiddenByFirewall", "Client address: 203.0.113.7"),
+            refused("BadParameter", "The request is not valid.", status=400),
+        ])
+        with self.assertRaisesRegex(ConfigError, "Key Vault refused the key \\(HTTP 400\\): The request is not valid."):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual([method for method, _, _ in azure.calls], ["PUT", "PATCH", "PATCH", "DELETE"])
+        self.assertEqual(azure.calls[2][2]["properties"]["networkAcls"]["ipRules"], [])
+
+    def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
+        key = self.self_hosted()
+        key.write_text("ssh-ed25519 AAAA not a GitHub App key\n")
+        azure = SelfHostedAzure()
+        with self.assertRaisesRegex(ConfigError, "is not a private key file: use the .pem file the runner App's settings page downloads"):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual(azure.calls, [])
+
+    def test_without_a_key_in_the_vault_the_step_asks_for_one(self):
+        self.self_hosted()
+        with self.assertRaisesRegex(ConfigError, "the runner App's key is not in kv-acme-mlz-pd-nwe-01 yet: run this step with --app-key"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure())
+
+    def test_a_key_already_in_the_vault_is_kept(self):
+        self.self_hosted()
+        azure = SelfHostedAzure(secret=True, accepted=True)
+        apply, _ = self.run_self_hosted(RunnersGitHub(), azure)
+        self.assertEqual(azure.uploads, [])
+        self.assertEqual([method for method, _, _ in azure.calls], ["GET", "GET", "POST"])  # the terms, the feature, the provider
+        apply.assert_called_once()
+
+    def test_someone_who_is_not_an_owner_gets_the_group_command_and_nothing_else_happens(self):
+        key = self.self_hosted()
+        azure = SelfHostedAzure()
+        apply, _ = self.run_self_hosted(RunnersGitHub(owner=False), azure, key)
+        apply.assert_not_called()
+        self.assertEqual(azure.calls, [])
+        text = "\n".join(self.printed)
+        self.assertIn("gh api -X POST orgs/acme/actions/runner-groups -f name=mlz -f visibility=selected -F 'selected_repository_ids[]=101' "
+                      "-F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' -F allows_public_repositories=false "
+                      f"-F restricted_to_workflows=true -f 'selected_workflows[]=fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/{install.release()}'", text)
+        self.assertIn("Then run this step again.", text)
+
+    def test_a_group_made_for_github_hosted_runners_is_not_taken_over(self):
+        key = self.self_hosted()
+        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "network_configuration_id": "CONFIG"}])
+        with self.assertRaisesRegex(ConfigError, "runner group mlz is for GitHub-hosted runners"):
+            self.run_self_hosted(github, SelfHostedAzure(), key)
+
+    def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
+        self.self_hosted()
+        older = "fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/v0.1.0"
+        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [older]}])
+        github.group_repositories[7] = {101, 102, 103}
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.calls, [("update group", {"visibility": "selected", "allows_public_repositories": False, "restricted_to_workflows": True,
+                                                          "selected_workflows": sorted([older, install.allowed_workflow(install.release())])})])
+
+    def test_encryption_at_host_still_registering_stops_before_the_apply(self):
+        self.self_hosted()
+        for state, registers in (("NotRegistered", True), ("Registering", False)):
+            azure = SelfHostedAzure(secret=True, accepted=True, feature=state)
+            apply, _ = self.run_self_hosted(RunnersGitHub(), azure)
+            apply.assert_not_called()
+            self.assertEqual(("POST", "register") in [(m, u.rsplit("/", 1)[-1]) for m, u, _ in azure.calls], registers)
+        self.assertIn("runners: encryption at host is being registered on the management subscription, which takes a few minutes. "
+                      "Run this step again then.", self.printed)
+
+    def test_the_repos_wait_until_a_runner_is_online_and_the_state_has_its_endpoint(self):
+        self.self_hosted()
+        github = RunnersGitHub()
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "offline"}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("none is online in the runner group mlz yet" in line for line in self.printed))
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online"}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True, endpoint=False))
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("the state account has no private endpoint yet" in line for line in self.printed))
+
+    def test_the_runners_wait_for_their_subnet_and_their_vault(self):
+        self.self_hosted()
+        with self.assertRaisesRegex(ConfigError, "management's network has no snet-runners yet"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure(subnet=False))
+        with self.assertRaisesRegex(ConfigError, "the runners' vault kv-acme-mlz-pd-nwe-01 is not there yet"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure(vault=False))
 
 
 class PrepareTest(unittest.TestCase):

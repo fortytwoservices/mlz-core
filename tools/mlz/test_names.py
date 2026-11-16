@@ -51,6 +51,20 @@ class ApartTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "governance-plan and governance-apply would both be id-acme-mlz-pd-nwe-01, and Azure needs the pipeline identities"):
             names.bootstrap(settings(templates={"user_assigned_identity": FLAT}), "norwayeast")
 
+    def test_the_runners_identity_and_the_vault_s_endpoint_beside_the_bootstrap_s_own(self):
+        # A template whose identities and endpoints carry no {purpose}: the six pipeline identities meet first.
+        with self.assertRaisesRegex(ConfigError, "the state account's endpoint and the vault's endpoint would both be pep-acme-mlz-pd-nwe-01"):
+            names.bootstrap(settings(templates={"private_endpoint": FLAT}), "norwayeast")
+        named = names.bootstrap(settings(), "norwayeast", {"key_vault": "kv-acme-runners"})
+        self.assertEqual({key: named[key] for key in ("key_vault", "vault_endpoint", "vault_endpoint_nic", "runners", "runners_identity", "runners_nsg", "runners_subnet")}, {
+            "key_vault": "kv-acme-runners", "vault_endpoint": "pep-acme-mlz-vault-pd-nwe-01", "vault_endpoint_nic": "nic-acme-mlz-vault-pd-nwe-01",
+            "runners": "vmss-acme-mlz-pd-nwe-01", "runners_identity": "id-acme-mlz-runners-pd-nwe-01", "runners_nsg": "nsg-acme-mlz-runners-pd-nwe-01",
+            "runners_subnet": "snet-runners"})
+
+    def test_a_vault_named_in_bootstrap_yaml_is_checked_as_azure_would(self):
+        with self.assertRaisesRegex(ConfigError, "names.key_vault: key_vault name kv_runners has characters Azure does not allow"):
+            names.bootstrap_explicit({"key_vault": "kv_runners"})
+
     def test_the_defaults_are_apart(self):
         names.governance(settings(), "norwayeast")
         names.bootstrap(settings(), "norwayeast")

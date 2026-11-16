@@ -11,7 +11,9 @@ release notes in between, breaking changes first. Merging changes nothing in Azu
 release would change, and the apply waits for the repo's reviewer.
 
 Runs on the engineer's own GitHub login (the gh CLI), which needs the workflow scope, since the pull request
-changes a workflow file: gh auth refresh -h github.com -s workflow.
+changes a workflow file: gh auth refresh -h github.com -s workflow. With self-hosted runners, the organization's
+runner group mlz admits only mlz-core's role.yml at the releases it lists, so the upgrade adds the target first,
+which needs an owner's admin:org scope; anyone else gets the command for one.
 """
 
 from __future__ import annotations
@@ -136,6 +138,26 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
     return "\n".join(lines).rstrip() + "\n"
 
 
+RUNNER_GROUP = "mlz"  # install.RUNNER: the self-hosted runners' group, when the customer has them
+
+
+def admit_release(github, org: str, core: str, target: str, out: Callable[[str], None] = print) -> None:
+    """The runner group mlz, when it admits only some workflows (self-hosted runners), admits the target's role.yml
+    too, before the pull request whose jobs run it: they would wait for a runner forever. The releases it admits
+    already stay, for the repos still on them."""
+    workflow = f"{core}/.github/workflows/role.yml@refs/tags/{target}"
+    try:
+        group = github.runner_group(org, RUNNER_GROUP)
+        if group is None or not group.get("restricted_to_workflows") or workflow in (group.get("selected_workflows") or []):
+            return
+        github.update_runner_group(org, group["id"], {"restricted_to_workflows": True,
+                                                      "selected_workflows": sorted({*group["selected_workflows"], workflow})})
+        out(f"{org}: the runner group {RUNNER_GROUP} admits {workflow}")
+    except ConfigError:
+        out(f"{org}: if it has self-hosted runners, an owner must let the runner group {RUNNER_GROUP} run {target}'s role.yml, or the "
+            f"upgrade's jobs wait for a runner: Settings, Actions, Runner groups, {RUNNER_GROUP}, add {workflow}.")
+
+
 def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
     """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened."""
     base = github.default_branch(repo)
@@ -174,6 +196,7 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             out("".join(difflib.unified_diff((before[path] or "").splitlines(True), (after or "").splitlines(True), f"a/{path}", f"b/{path}")))
         out(body)
         return None
+    admit_release(github, repo.split("/")[0], core, target, out)
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:

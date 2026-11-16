@@ -203,6 +203,10 @@ class GitHub:
     def set_runner_group_repositories(self, org: str, group: int, repositories: list[int]) -> None:
         self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories", "PUT", {"selected_repository_ids": repositories})
 
+    def group_runners(self, org: str, group: int) -> list[dict]:
+        """The self-hosted runners registered in a runner group, with their status (online or offline)."""
+        return list(self._pages(f"orgs/{org}/actions/runner-groups/{group}/runners", "runners"))
+
     def hosted_runner(self, org: str, name: str) -> dict | None:
         return next((r for r in self._pages(f"orgs/{org}/actions/hosted-runners", "runners") if r["name"] == name), None)
 

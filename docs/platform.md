@@ -107,7 +107,9 @@ pipeline names the organization by its ID (`GITHUB_REPOSITORY_OWNER_ID`); a plan
 `-var github_business_id=<id>` (`gh api orgs/<organization> --jq .id`). The stack's `networks` output
 holds the resource's ID at GitHub, which the organization's network configuration names. The runners take
 no connections, so the subnet's network security group refuses every one opened to them; their own
-connections out still get their replies. Elsewhere the subnet stays undelegated, for self-hosted runners.
+connections out still get their replies. Elsewhere the subnet stays undelegated. They are used only with
+`bootstrap.yaml`'s `runners.kind: github-hosted`: self-hosted runners, the default, are the bootstrap's, in
+`snet-runners` ([bootstrap](bootstrap.md#private-runners)).
 
 The state account's private endpoint, through which the runners reach the state, is the bootstrap's
 ([bootstrap](bootstrap.md#running-it-again)), and `mlz install runners` sets up GitHub's side and moves the
@@ -196,6 +198,8 @@ From `snet-github-runners` and `snet-runners`, in the primary hub's `platform` g
   accounts, named one by one. A name one label below a wildcard in the same list is left out.
 - **Entra ID and Azure Resource Manager**: the `AzureActiveDirectory` and `AzureResourceManager` service tags.
 - **Terraform**: `registry.terraform.io` and `releases.hashicorp.com`, for Terraform, its providers and modules.
+- **Runner registration**: `raw.githubusercontent.com`, where self-hosted runners fetch Fortytwo's registration
+  script when they boot, pinned to a commit and checked against its hash. GitHub does not list it for Actions.
 
 The platform's check reads GitHub's list on every run, and stops if it cannot: the rule is never planned
 without it. GitHub lists a name at least a week before using it. When the list changes, the next plan

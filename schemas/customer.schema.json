@@ -221,6 +221,7 @@
               "storage_account",
               "subscription",
               "user_assigned_identity",
+              "virtual_machine_scale_set",
               "virtual_network"
             ]
           },

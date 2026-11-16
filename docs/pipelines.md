@@ -81,8 +81,10 @@ backend. Only the apply job uses the backend itself.
 Applies of the same stack never run at the same time, and one is never cancelled halfway.
 
 `plan`, `apply` and `publish` reach Azure and the state. They run on the repo variable `MLZ_RUNS_ON` when it is
-set: the private runner in management's network, which `mlz install runners` sets up and switches the
-repos to ([bootstrap](bootstrap.md#private-runners)). Until then, and once it is deleted again, they run on
+set: the runners in management's network, self-hosted unless `bootstrap.yaml` asks for GitHub-hosted ones,
+which `mlz install runners` sets up and switches the repos to ([bootstrap](bootstrap.md#private-runners)).
+Self-hosted runners take only jobs from mlz-core's `role.yml` at the release a repo pins, so a job a pull
+request adds to `mlz.yml` gets none. Until then, and once it is deleted again, they run on
 GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
 runners.
 
@@ -178,7 +180,7 @@ file, from `bootstrap.yaml`'s `platform_team`:
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
-| Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
+| Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
 | `.github/CODEOWNERS`, write access for the platform team, the ruleset `main` | `mlz install repos` ([code owners](#code-owners)) |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in

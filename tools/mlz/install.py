@@ -5,12 +5,16 @@
     python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo
     python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked;
                                                                       again after the platform's first apply, for the
-                                                                      state account's private endpoint
+                                                                      state account's private endpoint and the
+                                                                      runners' vault
     python3 -m mlz install handover  --settings <dir> --tenant <id>   the platform subscriptions into the top group
     python3 -m mlz install publish   --settings <dir>                 bootstrap.yaml offered to the governance repo
-    python3 -m mlz install runners   --settings <dir> --tenant <id>   GitHub's side of the private runners, then
-                                                                      the repos moved onto them (an owner of the
-                                                                      organization; others get the commands to send)
+    python3 -m mlz install runners   --settings <dir> --tenant <id>   the runners in management's network, then the
+             [--app-key <file>]                                       repos moved onto them. Self-hosted: the runner
+                                                                      group, the runner App's key into the vault, and
+                                                                      the bootstrap's apply; GitHub-hosted: GitHub's
+                                                                      side (an owner of the organization; others get
+                                                                      the commands to send)
     python3 -m mlz install subscriptions --settings <dir> --tenant <id> --billing-scope <scope>
                                                                       vending's apply identity may make subscriptions
                                                                       there (a billing owner; others get the command
@@ -21,13 +25,15 @@ customer a folder of the two files before the repos exist (repos then commits th
 Run from an mlz-core checkout (PYTHONPATH=tools), signed in to gh (admin on the customer's repos, workflow
 scope) and, for bootstrap and handover, to the Azure CLI as someone who may create the top group.
 
-The MLZ App itself is made by hand (GitHub needs a browser for that); check says whether it is set.
+The MLZ App and the runner App are made by hand (GitHub needs a browser for that); check says whether the MLZ App is set.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -90,7 +96,12 @@ def main_ruleset(role: str) -> dict:
     }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runner_size")
+GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runners")
+# bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
+# a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
+RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id")
+RUNNER_KINDS = {"self-hosted": "Standard_D2ds_v6", "github-hosted": "2-core"}  # each kind's default size
+RUNNER_INSTANCES = 1
 CODE_OWNERS_BRANCH = "mlz/code-owners"
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
@@ -120,6 +131,38 @@ def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
         raise ConfigError(f"customer.yaml: {error} is required.") from None
     except ConfigError as error:
         raise ConfigError(f"names: {error}") from None
+
+
+def runner_settings(bootstrap: dict) -> dict:
+    """bootstrap.yaml's github.runners, checked, with the defaults filled in; ConfigError with every problem."""
+    given = (bootstrap.get("github") or {}).get("runners")
+    if given is None:
+        given = {}
+    if not isinstance(given, dict):
+        raise ConfigError(f"bootstrap.yaml: github.runners takes {', '.join(RUNNER_SETTINGS)}.")
+    problems = [f"bootstrap.yaml: github.runners.{key} is not a setting; it takes {', '.join(RUNNER_SETTINGS)}." for key in given if key not in RUNNER_SETTINGS]
+    kind = given.get("kind", "self-hosted")
+    if kind not in RUNNER_KINDS:
+        problems.append(f"bootstrap.yaml: github.runners.kind is self-hosted or github-hosted, not {kind!r}.")
+        kind = "self-hosted"
+    size = given.get("size", RUNNER_KINDS[kind])
+    # Each is written into a command or a script, so only the characters the names need.
+    if kind == "self-hosted" and not (isinstance(size, str) and re.fullmatch(r"Standard_[A-Za-z0-9_]+", size)):
+        problems.append(f"bootstrap.yaml: github.runners.size is an Azure virtual machine size for self-hosted runners, such as {RUNNER_KINDS[kind]}, not {size!r}.")
+    if kind == "github-hosted" and not (isinstance(size, str) and re.fullmatch(r"[0-9]+-core(-[a-z0-9-]+)?", size)):
+        problems.append(f"bootstrap.yaml: github.runners.size is one of GitHub's runner sizes for github-hosted runners, such as {RUNNER_KINDS[kind]}, not {size!r}.")
+    instances = given.get("instances", RUNNER_INSTANCES)
+    if kind == "self-hosted" and not (isinstance(instances, int) and not isinstance(instances, bool) and 0 <= instances <= 100):
+        problems.append(f"bootstrap.yaml: github.runners.instances is a whole number of runners from 0 to 100, not {instances!r}.")
+    client_id = given.get("app_client_id")
+    if client_id is not None and not (isinstance(client_id, str) and re.fullmatch(r"[A-Za-z0-9.]+", client_id)):
+        problems.append(f"bootstrap.yaml: github.runners.app_client_id is the runner App's client ID (letters, digits and dots), not {client_id!r}.")
+    for key in ("instances", "app_client_id"):
+        if kind == "github-hosted" and key in given:
+            problems.append(f"bootstrap.yaml: github.runners.{key} is for self-hosted runners; GitHub's own scale and register themselves.")
+    if problems:
+        raise ConfigError("\n  ".join(problems))
+    return {"kind": kind, "size": size, "instances": instances, "app_client_id": client_id}
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:
@@ -377,11 +420,24 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
                    ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
     """Plans and applies the bootstrap, with a local state the first time; then moves the state into the account
     the bootstrap created, and checks that the identities trust the subjects GitHub issues."""
+    apply_bootstrap(github, terraform, folder, yes, out, ask, wait)
+    if json.loads(terraform.output("state_private_endpoint")):
+        out("bootstrap: the state account has its private endpoint in management's network.")
+    else:
+        out("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.")
+    out("bootstrap: done. Next: mlz install handover, then mlz install publish.")
+
+
+def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Callable[[str], None] = print,
+                    ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
+    """The bootstrap's plan and apply, for the bootstrap step and the runners step."""
     customer, bootstrap = settings(folder)
-    # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md).
-    names_file = terraform.work / "names.json"
+    # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
+    # bootstrap.yaml's runner settings, checked, with their defaults.
+    names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"
     names_file.parent.mkdir(parents=True, exist_ok=True)
     names_file.write_text(json.dumps(bootstrap_names(customer, bootstrap), indent=2) + "\n")
+    runners_file.write_text(json.dumps(runner_settings(bootstrap), indent=2) + "\n")
     terraform.prepare()
     backend, pending = terraform.work / "backend.hcl", terraform.work / "backend.hcl.pending"
     override = terraform.root / "backend_override.tf"
@@ -393,7 +449,7 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
         raise ConfigError("terraform init failed; see above.")
     plan = terraform.work / "bootstrap.tfplan"
     variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
-                 "-var", f"names_file={names_file}"]
+                 "-var", f"names_file={names_file}", "-var", f"runners_file={runners_file}"]
     status = terraform.run("plan", "-input=false", "-detailed-exitcode", f"-out={plan}", *variables).returncode
     if status == 1:
         raise ConfigError("terraform plan failed; see above.")
@@ -405,11 +461,6 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     if local:
         move_state(terraform, backend, pending, override, out, wait)
     check_subjects(github, json.loads(terraform.output("oidc_subjects")), repositories(bootstrap), out)
-    if json.loads(terraform.output("state_private_endpoint")):
-        out("bootstrap: the state account has its private endpoint in management's network.")
-    else:
-        out("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.")
-    out("bootstrap: done. Next: mlz install handover, then mlz install publish.")
 
 
 def move_state(terraform, backend: Path, pending: Path, override: Path, out, wait) -> None:
@@ -448,8 +499,27 @@ class Azure:
     """Azure Resource Manager in one tenant, with the Azure CLI's sign-in for that tenant."""
 
     def __init__(self, tenant: str):
-        self.token = subprocess.run(["az", "account", "get-access-token", "--tenant", tenant, "--resource", "https://management.azure.com",
-                                     "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
+        self.tenant = tenant
+        self.token = self.access_token("https://management.azure.com")
+
+    def access_token(self, resource: str) -> str:
+        return subprocess.run(["az", "account", "get-access-token", "--tenant", self.tenant, "--resource", resource,
+                               "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
+
+    def object_id(self) -> str:
+        """The signed-in principal's object ID, from its own token: no Graph call, which a guest's sign-in may not make."""
+        payload = self.token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["oid"]
+
+    def vault(self, method: str, url: str, body: dict | None = None) -> dict:
+        """Key Vault's data plane, as the signed-in principal. The value sent is never logged."""
+        if not getattr(self, "vault_token", None):
+            self.vault_token = self.access_token("https://vault.azure.net")
+        request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         headers={"Authorization": f"Bearer {self.vault_token}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(request) as response:
+            answer = response.read()
+        return json.loads(answer) if answer else {}
 
     def request(self, method: str, url: str, body: dict | None = None) -> dict:
         # Without no-cache, getEntities answered from a cache for minutes after a move: three subscriptions just
@@ -515,9 +585,17 @@ def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], N
 
 # runners
 
-RUNNER = "mlz"  # the organization's network configuration, runner group and runner, and the label jobs run on
+RUNNER = "mlz"  # the organization's runner group, the label jobs run on, and GitHub's network configuration and runner
 RUNS_ON = "MLZ_RUNS_ON"  # the repo variable the workflow runs its Azure jobs on, when set (.github/workflows/role.yml)
-RUNNER_SIZE, MAXIMUM_RUNNERS = "2-core", 10
+MAXIMUM_RUNNERS = 10  # GitHub-hosted: at most this many at a time
+# Self-hosted: the vault secret the runners read their GitHub App's key from, and the only workflow the runner group
+# admits, at the release the repos pin (docs/bootstrap.md, private runners).
+APP_KEY_SECRET = "github-runner-app-key"
+CORE_WORKFLOW = "fortytwoservices/mlz-core/.github/workflows/role.yml"
+VAULT_API = "2024-11-01"
+SECRETS_OFFICER = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"  # Key Vault Secrets Officer, held only for the key's upload
+# Fortytwo's runner image's plan, whose terms the management subscription accepts once.
+IMAGE_PLAN = {"publisher": "amestofortytwoas1653635920536", "offer": "self_hosted_runner_github", "plan": "ubuntu-latest-gen2"}
 
 
 def gh_fields(body: dict, prefix: str = "") -> list[str]:
@@ -536,10 +614,26 @@ def gh_fields(body: dict, prefix: str = "") -> list[str]:
     return fields
 
 
-def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print) -> None:
-    """GitHub's side of the private runners, in the customer's organization: a network configuration naming the
-    network settings resource in management's network, a runner group for the three repos only, and a
-    GitHub-hosted runner in it. Then, once the state account has its private endpoint, the repos run their Azure
+def allowed_workflow(release: str) -> str:
+    """The workflow the runner group admits: mlz-core's role.yml at a release, which the repos' mlz.yml calls."""
+    return f"{CORE_WORKFLOW}@refs/tags/{release}"
+
+
+def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print, terraform=None, app_key: Path | None = None,
+                 yes: bool = False, wait: Callable[[float], None] = time.sleep) -> None:
+    """Moves the pipelines' Azure jobs onto runners in management's network, of the kind bootstrap.yaml's
+    github.runners says: self-hosted (the default) or GitHub-hosted."""
+    _, bootstrap = settings(folder)
+    if runner_settings(bootstrap)["kind"] == "github-hosted":
+        github_hosted_runners(github, azure, folder, out)
+    else:
+        self_hosted_runners(github, azure, terraform, folder, app_key, yes, out, wait)
+
+
+def github_hosted_runners(github, azure, folder: Path, out: Callable[[str], None] = print) -> None:
+    """GitHub-hosted runners joined to management's network. In the customer's organization: a network
+    configuration naming the network settings resource in management's network, a runner group for the three
+    repos only, and a GitHub-hosted runner in it. Then, once the state account has its private endpoint, the repos run their Azure
     jobs on that runner. Only an owner of the organization may make the three: anyone else gets them as
     commands to send to one, filled in, and changes nothing."""
     customer, bootstrap = settings(folder)
@@ -563,7 +657,7 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
     configuration = {"name": RUNNER, "compute_service": "actions", "network_settings_ids": [github_id]}
     group = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False}
     runner = {"name": RUNNER, "image": {"id": "ubuntu-latest", "source": "github"},
-              "size": bootstrap["github"].get("runner_size") or RUNNER_SIZE, "maximum_runners": MAXIMUM_RUNNERS}
+              "size": runner_settings(bootstrap)["size"], "maximum_runners": MAXIMUM_RUNNERS}
     switch = [f"gh variable set {RUNS_ON} --repo {shlex.quote(repo)} --body {RUNNER}" for repo in repos.values()]
 
     if not github.is_owner(org):
@@ -624,6 +718,163 @@ def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print
             github.set_variable(repo, RUNS_ON, RUNNER)
     out(f"runners: the three repos run their plans, applies and publications on {RUNNER} from their next run. "
         f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
+
+
+def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | None, yes: bool, out: Callable[[str], None],
+                        wait: Callable[[float], None]) -> None:
+    """Self-hosted runners in management's network: Fortytwo's runner image on a scale set that the bootstrap
+    deploys (az-tf-mlz-github-runners), registered as the customer's runner App into the organization's runner
+    group mlz. The group admits only the three repos, and only mlz-core's role.yml at the release they pin, so a
+    pull request cannot put a job of its own on the runners, where the App's key is within reach (decided
+    2026-11-16). In order: the group, the App's key into the bootstrap's vault, the subscription's prerequisites,
+    the bootstrap's apply, and once a runner is online, the repos' switch."""
+    customer, bootstrap = settings(folder)
+    runners = runner_settings(bootstrap)
+    org, repos = bootstrap["github"]["organization"], repositories(bootstrap)
+    if not runners["app_client_id"]:
+        raise ConfigError("bootstrap.yaml needs github.runners.app_client_id: the client ID of the customer's runner App, which an owner of "
+                          f"{org} makes with one permission, Organization > Self-hosted runners: write (docs/bootstrap.md, private runners).")
+    named = bootstrap_names(customer, bootstrap)
+    management = f"/subscriptions/{customer['subscriptions']['management']}"
+    network = (f"{management}/resourceGroups/{named['network_resource_groups']['management']}/providers/Microsoft.Network/"
+               f"virtualNetworks/{named['management_network']}")
+    if azure.resource(f"{network}/subnets/{named['runners_subnet']}", "2024-07-01") is None:
+        raise ConfigError(f"management's network has no {named['runners_subnet']} yet: the platform's management stack makes it. "
+                          "Run the platform's pipeline on main, then this step again.")
+    vault_id = f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.KeyVault/vaults/{named['key_vault']}"
+    vault = azure.resource(vault_id, VAULT_API)
+    if vault is None:
+        raise ConfigError(f"the runners' vault {named['key_vault']} is not there yet: the bootstrap makes it once management's network and the "
+                          "hub's zones exist. Run mlz install bootstrap again, then this step.")
+
+    group = self_hosted_group(github, org, repos, out)
+    if group is None:
+        return
+
+    secret_id = f"{vault_id}/secrets/{APP_KEY_SECRET}"
+    if app_key is not None:
+        upload_app_key(azure, vault_id, vault, app_key, out, wait)
+    elif azure.resource(secret_id, VAULT_API) is None:
+        raise ConfigError(f"the runner App's key is not in {named['key_vault']} yet: run this step with --app-key <the .pem file from the App's "
+                          "settings page>, as the person who downloaded it (docs/bootstrap.md, private runners).")
+
+    if not runner_prerequisites(azure, management, out):
+        return
+    apply_bootstrap(github, terraform, folder, yes, out)
+
+    online = [runner for runner in github.group_runners(org, group["id"]) if runner.get("status") == "online"]
+    if not online:
+        out(f"runners: {runners['instances']} {named['runners']} instance(s) deployed; none is online in the runner group {RUNNER} yet "
+            "(each registers within minutes of booting). Run this step again to move the repos onto them.")
+        return
+    endpoint = azure.resource(f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.Network/privateEndpoints/{named['state_endpoint']}", "2024-07-01")
+    if ((endpoint or {}).get("properties") or {}).get("provisioningState") != "Succeeded":
+        out("runners: the repos stay on GitHub's public runners: the state account has no private endpoint yet, and the runners reach the "
+            "state only through it. Run mlz install bootstrap again, then this step.")
+        return
+    for repo in repos.values():
+        if github.variable(repo, RUNS_ON) != RUNNER:
+            github.set_variable(repo, RUNS_ON, RUNNER)
+    out(f"runners: {len(online)} online; the three repos run their plans, applies and publications on them from their next run. "
+        f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
+
+
+def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[str], None]) -> dict | None:
+    """The organization's runner group mlz, for the three repos and mlz-core's role.yml at this release only. Only
+    an owner may make it: anyone else gets the command to send to one, and None."""
+    repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
+    workflow = allowed_workflow(release())
+    body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
+            "restricted_to_workflows": True, "selected_workflows": [workflow]}
+    if not github.is_owner(org):
+        out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
+            f"{RUNNER}, for the three repos and mlz-core's {workflow} only. Then run this step again.\n")
+        out("\n".join([f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
+                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(body))}"]) + "\n")
+        return None
+    made = github.runner_group(org, RUNNER)
+    if made is None:
+        made = github.create_runner_group(org, body)
+        out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
+        return made
+    if made.get("network_configuration_id"):
+        raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
+                          "self-hosted runners, or set github.runners.kind: github-hosted in bootstrap.yaml.")
+    # Kept narrow: a wider group would let other repos, or a job a pull request adds, run where the App's key is.
+    # Releases admitted before stay, for repos that have not moved yet; each is mlz-core's own workflow.
+    workflows = sorted(set(made.get("selected_workflows") or []) | {workflow})
+    if (made.get("visibility") != "selected" or made.get("allows_public_repositories") or not made.get("restricted_to_workflows")
+            or workflows != sorted(made.get("selected_workflows") or [])):
+        github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
+                                                     "restricted_to_workflows": True, "selected_workflows": workflows})
+    if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
+        github.set_runner_group_repositories(org, made["id"], repo_ids)
+    out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
+    return made
+
+
+def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callable[[str], None], wait: Callable[[float], None]) -> None:
+    """Writes the runner App's private key into the vault, straight to Key Vault's data plane: never through
+    Terraform, so never in a state or a plan, and never printed. The vault's firewall admits nobody and its roles
+    give nobody secrets, so for the write only, the signed-in person holds Key Vault Secrets Officer on it and
+    their address passes its firewall; both go again whatever happens."""
+    try:
+        key = app_key.expanduser().read_text()
+    except OSError as error:
+        raise ConfigError(f"--app-key {app_key}: {error.strerror}.") from None
+    if "-----BEGIN" not in key or "PRIVATE KEY-----" not in key:
+        raise ConfigError(f"--app-key {app_key} is not a private key file: use the .pem file the runner App's settings page downloads.")
+    subscription = vault_id.split("/")[2]
+    assignment = f"{vault_id}/providers/Microsoft.Authorization/roleAssignments/{uuid.uuid5(uuid.NAMESPACE_URL, vault_id + '/upload/' + azure.object_id())}"
+    azure.request("PUT", f"{assignment}?api-version=2022-04-01", {"properties": {
+        "roleDefinitionId": f"/subscriptions/{subscription}/providers/Microsoft.Authorization/roleDefinitions/{SECRETS_OFFICER}",
+        "principalId": azure.object_id()}})
+    acls = (vault.get("properties") or {}).get("networkAcls") or {}
+    opened = None
+    url = f"{vault['properties']['vaultUri'].rstrip('/')}/secrets/{APP_KEY_SECRET}?api-version=7.4"
+    try:
+        for attempt in range(30):
+            try:
+                azure.vault("PUT", url, {"value": key, "contentType": "application/x-pem-file"})
+                break
+            except urllib.error.HTTPError as error:
+                text = error.read().decode(errors="replace")
+                address = re.search(r"Client address: ([0-9a-fA-F.:]+)", text)
+                if "ForbiddenByFirewall" in text and address and opened is None:
+                    opened = address.group(1)
+                    azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}",
+                                  {"properties": {"networkAcls": {**acls, "ipRules": [*(acls.get("ipRules") or []), {"value": opened}]}}})
+                    out(f"runners: {opened} may reach the vault for the upload")
+                elif error.code != 403 or attempt == 29:  # a new role can take minutes to reach Key Vault
+                    raise ConfigError(f"Key Vault refused the key (HTTP {error.code}): {json.loads(text).get('error', {}).get('message', text) if text.startswith('{') else text}") from None
+                wait(10)
+    finally:
+        if opened is not None:
+            azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}", {"properties": {"networkAcls": acls}})
+        azure.request("DELETE", f"{assignment}?api-version=2022-04-01")
+    out(f"runners: the runner App's key is in the vault as {APP_KEY_SECRET}; your role and address are gone from it again. Delete the .pem "
+        "file now, and never send it on: the App's settings page makes a new key whenever one is needed.")
+
+
+def runner_prerequisites(azure, management: str, out: Callable[[str], None]) -> bool:
+    """What Fortytwo's image needs from the management subscription, once: its plan's terms accepted, and
+    encryption at host registered. Registration can take a while: False until it has finished."""
+    terms = (f"{management}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/{IMAGE_PLAN['publisher']}"
+             f"/offers/{IMAGE_PLAN['offer']}/plans/{IMAGE_PLAN['plan']}/agreements/current?api-version=2021-01-01")
+    agreement = azure.request("GET", terms)
+    if not (agreement.get("properties") or {}).get("accepted"):
+        azure.request("PUT", terms, {**agreement, "properties": {**(agreement.get("properties") or {}), "accepted": True}})
+        out(f"runners: the terms of Fortytwo's runner image ({IMAGE_PLAN['plan']}) are accepted for the management subscription")
+    feature = f"{management}/providers/Microsoft.Features/providers/Microsoft.Compute/features/EncryptionAtHost"
+    state = (azure.request("GET", f"{feature}?api-version=2021-07-01").get("properties") or {}).get("state")
+    if state != "Registered":
+        if state != "Registering":
+            azure.request("POST", f"{feature}/register?api-version=2021-07-01")
+        out("runners: encryption at host is being registered on the management subscription, which takes a few minutes. Run this step again then.")
+        return False
+    # A registered feature takes effect once its provider is registered again; again changes nothing.
+    azure.request("POST", f"{management}/providers/Microsoft.Compute/register?api-version=2021-04-01")
+    return True
 
 
 # publish

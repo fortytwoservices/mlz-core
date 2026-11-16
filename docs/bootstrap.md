@@ -15,7 +15,11 @@ github:
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
-  # runner_size: 4-core            # the private runner's size at GitHub (mlz install runners); 2-core if unset
+  runners:                         # where the pipelines' Azure jobs run (mlz install runners)
+    kind: self-hosted              # self-hosted (the default) or github-hosted
+    size: Standard_D2ds_v6         # an Azure VM size (the default); for github-hosted, GitHub's: 2-core, 4-core
+    instances: 1                   # self-hosted: how many runners, each billed while it exists
+    app_client_id: Iv23liExample   # self-hosted: the client ID of the customer's runner App
 
 state_operators:                   # people who may run Terraform by hand, by Entra object ID
   platform-lead: 00000000-0000-0000-0000-000000000010
@@ -26,10 +30,12 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Where | What |
 |---|---|
 | Tenant | The top management group, `<root>`, below the tenant root or `parent_management_group_id`. Governance builds everything below it, so its pipeline never needs rights at the tenant root. |
-| Management subscription | `rg-acme-mlz-pd-nwe-01`, holding the state account and the six pipeline identities. `rg-acme-mgt-net-pd-nwe-01`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub's hosted runners in that network. |
+| Management subscription | `rg-acme-mlz-pd-nwe-01`, holding the state account, the six pipeline identities and the self-hosted runners. `rg-acme-mgt-net-pd-nwe-01`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub-hosted runners in that network. |
 | Identity subscription | `rg-acme-idn-net-pd-nwe-01`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
 | State account | `stacmemlzstatepdnwe01`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners use the private endpoint. Never replaced: see [names](#names). |
 | State account's private endpoint | `pep-acme-mlz-state-pd-nwe-01`, beside the account, in management's `snet-private-endpoints`, with its name in the hub's `privatelink.blob.core.windows.net` zone, and that zone linked to management's network, so the name resolves there whether management asks the hub or, behind a Basic firewall without a resolver, Azure's own DNS. Made on the first run after the platform has built that network and zone ([below](#running-it-again)); until then there is none. |
+| Runners' vault | `kv-acme-mlz-pd-nwe-01`, for self-hosted runners: the runner App's private key and nothing else. Roles only, given to nobody but the runners' identity; purge protection; a firewall that admits no address, and a private endpoint in management's `snet-private-endpoints` (`pep-acme-mlz-vault-pd-nwe-01`) with its name in the hub's `privatelink.vaultcore.azure.net` zone. Made on the same run as the state account's endpoint; set `names.key_vault` for a name taken elsewhere. |
+| Self-hosted runners | `vmss-acme-mlz-pd-nwe-01` in management's `snet-runners`, with `id-acme-mlz-runners-pd-nwe-01` and `nsg-acme-mlz-runners-pd-nwe-01` ([az-tf-mlz-github-runners](https://github.com/fortytwoservices/az-tf-mlz-github-runners)): made once the runner App's key is in the vault ([private runners](#private-runners)). |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
 | GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
 
@@ -49,7 +55,8 @@ region. The examples above are for a customer whose code is `acme`. `mlz install
     storage_account: stacmemlzstatepdnwe01   # also for a name another tenant already took: they are global
   ```
 
-- **`names.resource_group`** does the same for the bootstrap's resource group.
+- **`names.resource_group`** does the same for the bootstrap's resource group, and **`names.key_vault`** for the
+  runners' vault, whose name is global too, and at most 24 characters.
 - The identities and the networks' groups follow the template: renamed, they are replaced on the next run, which
   shows them in its plan for the person running it to approve.
 
@@ -205,13 +212,70 @@ The EA assignment is named after the scope and the identity, so sending the comm
 
 ### Private runners
 
-Once the platform's first apply has built management's network, and the bootstrap has run again for the
-state account's private endpoint ([below](#running-it-again)), `mlz install runners --settings <dir>
---tenant <id>` moves the pipelines' Azure jobs onto a GitHub-hosted runner in that network:
+The pipelines' Azure jobs (`plan`, `apply`, `publish`) move onto runners in management's network once the
+platform's first apply has built it and the bootstrap has run again, for the state account's private endpoint and
+the runners' vault ([below](#running-it-again)): `mlz install runners --settings <dir> --tenant <id>`. Then the
+state is reached through its private endpoint. `bootstrap.yaml`'s `github.runners` says which kind of runner.
+
+#### Self-hosted runners, the default
+
+Fortytwo's runner image from Azure Marketplace on a scale set, `vmss-acme-mlz-pd-nwe-01` in `snet-runners`, which
+the bootstrap deploys with [az-tf-mlz-github-runners](https://github.com/fortytwoservices/az-tf-mlz-github-runners),
+never a pipeline that runs on it. Each instance registers with GitHub when it boots, as the customer's **runner
+App**, and reads the App's private key from the runners' vault with an identity that may read that one secret.
+
+1. **An owner of the customer's organization makes the runner App** in the browser (the organization's
+   Settings, Developer settings, GitHub Apps): no webhook, one permission, **Organization > Self-hosted runners:
+   write**, installed on the organization. It is a separate App from the MLZ App on purpose: a job on the
+   runners can reach its key, so the key may do nothing but manage runners. Its client ID goes into
+   `bootstrap.yaml` as `github.runners.app_client_id`.
+2. **The same person downloads its private key** (Generate a private key, on the App's page) and runs, in one
+   sitting, `mlz install runners --settings <dir> --tenant <id> --app-key <the .pem file>`, then deletes the
+   file. **The key is never sent to anyone,** by mail, chat or otherwise: whoever runs the step holds the file
+   for minutes, and the vault is its only copy. The step needs an owner of the organization, and Owner on the
+   management subscription; the organization owner may be a Fortytwo engineer during the install, or the
+   customer's owner runs this one step.
+3. **What the step does,** in order, stopping where something is missing and saying what:
+   - In GitHub, the **runner group `mlz`**: only the three repos may use it, and only jobs defined in
+     mlz-core's `role.yml` at the release the repos pin (`fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/<release>`).
+     A pull request that adds a job of its own to `mlz.yml`, or points it at another `role.yml`, gets no runner
+     (decided 2026-11-16; the first customer install is the first test of it). Run by anyone but an owner, the
+     step changes nothing and prints the command for one. A group `mlz` made for GitHub-hosted runners is not
+     taken over.
+   - **The key, into the vault** as `github-runner-app-key`, straight to Key Vault: never through Terraform, so
+     never in a state or a plan, and never printed. For the write alone, the person running it holds Key Vault
+     Secrets Officer on the vault and their address passes its firewall; both are taken away again whatever
+     happens, and the bootstrap's next apply takes out any address left behind. Without `--app-key`, a key
+     already in the vault is kept.
+   - **The management subscription,** once: the terms of the image's plan accepted, and encryption at host
+     registered. That registration takes minutes; the step says so and stops, and a run again goes on.
+   - **The bootstrap's apply,** which now makes the runners: `runners.instances` of `runners.size`, its plan
+     shown and applied as in `mlz install bootstrap` (`--yes` without asking).
+   - Once a runner is online and the state account has its private endpoint, **`MLZ_RUNS_ON`** is set to `mlz`
+     in the three repos, and their next runs plan, apply and publish on the runners
+     ([pipelines](pipelines.md#what-runs-when)). Until then, the step says what it waits for: run it again.
+
+Running it again changes only what is missing. **A new key** (rotation): generate one on the App's page, run the
+step with `--app-key`, delete the old key there. **A change to `size` or `instances`:** `mlz install bootstrap`.
+Instances already running keep their model until reimaged (`az vmss reimage`, while no job runs on them); a
+changed instance count takes effect at once.
+
+**Upgrades:** `mlz upgrade` lets the runner group run the target release's `role.yml` before it opens the
+upgrade's pull request, whose jobs run that release; the releases the group admits already stay, for the repos
+not yet moved. Changing a runner group needs an owner's `admin:org` scope: anyone else is told what to add.
+
+**Cost:** each instance is billed for its compute and for Fortytwo's hourly image fee from the moment it exists,
+whether or not a job runs; `instances: 0` removes them all and stops both.
+
+#### GitHub-hosted runners: `kind: github-hosted`
+
+GitHub's own runners, joined to management's network (`snet-github-runners`). Nothing of the customer's runs
+them, and nothing is billed while no job runs, but GitHub offers them in some regions only, and MLZ has not run
+them yet. `mlz install runners --settings <dir> --tenant <id>`:
 
 - In the customer's organization it makes a network configuration `mlz`, naming the network settings
   resource the platform made (`ghns-acme-mgt-pd-nwe-01`), a runner group `mlz` that only the three
-  repos may use, and a runner `mlz` in it: Ubuntu, `runner_size` from `bootstrap.yaml` (2-core unless set),
+  repos may use, and a runner `mlz` in it: Ubuntu, `runners.size` from `bootstrap.yaml` (2-core unless set),
   at most 10 at a time. A run again changes only what is missing, and narrows the group back to the three
   repos if it was widened.
 - Then, once the state account has its private endpoint, it sets `MLZ_RUNS_ON` to `mlz` in the three repos,
@@ -232,7 +296,7 @@ configurations until an enterprise owner allows it, once: the enterprise's Setti
 compute networking, then Enable. An organization on GitHub Team needs nothing from anyone. The runners
 are GitHub's larger runners, which need GitHub Team or Enterprise Cloud.
 
-To go back to GitHub's public runners, delete the variable: `gh variable delete MLZ_RUNS_ON --repo <repo>`.
+To go back to GitHub's public runners, whichever the kind, delete the variable: `gh variable delete MLZ_RUNS_ON --repo <repo>`.
 
 ### Running it again
 

@@ -10,7 +10,7 @@
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
     python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
-                            [--billing-scope <scope>] [--yes]
+                            [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
@@ -112,6 +112,7 @@ def main() -> int:
     i.add_argument("--billing-scope", help="subscriptions: the billing scope vending makes subscriptions in, as billing_scope says")
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, move the subscriptions, or give the billing role, without asking")
+    i.add_argument("--app-key", type=Path, help="runners: the runner App's private key (.pem), put into the runners' vault; delete the file afterwards")
     args = parser.parse_args()
 
     if args.role == "schema":
@@ -129,14 +130,14 @@ def main() -> int:
                     raise ConfigError(f"install {args.step} needs --tenant <the customer's Entra tenant ID>.")
                 if args.step == "handover":
                     install.step_handover(install.Azure(args.tenant), args.settings, args.yes)
-                elif args.step == "runners":
-                    install.step_runners(GitHub(), install.Azure(args.tenant), args.settings)
                 else:
                     customer, _ = install.settings(args.settings)
                     # A root ID is unique only within its tenant: two customers may both be "mlz".
                     work = args.work or Path.home() / ".mlz" / "install" / args.tenant / customer["root_id"]
                     terraform = install.Terraform(work, args.tenant)
-                    if args.step == "bootstrap":
+                    if args.step == "runners":
+                        install.step_runners(GitHub(), install.Azure(args.tenant), args.settings, terraform=terraform, app_key=args.app_key, yes=args.yes)
+                    elif args.step == "bootstrap":
                         install.step_bootstrap(GitHub(), terraform, args.settings, args.yes)
                     elif args.step == "subscriptions":
                         if not args.billing_scope:

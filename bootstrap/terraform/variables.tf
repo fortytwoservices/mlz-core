@@ -15,3 +15,9 @@ variable "names_file" {
   description = "Every name the bootstrap gives, and the names of the platform's it points at: a JSON file mlz install writes from customer.yaml's naming and bootstrap.yaml's names: (tools/mlz/names.py)."
   nullable    = false
 }
+
+variable "runners_file" {
+  type        = string
+  description = "bootstrap.yaml's github.runners, checked and with their defaults: a JSON file mlz install writes (kind, size, instances, app_client_id)."
+  nullable    = false
+}

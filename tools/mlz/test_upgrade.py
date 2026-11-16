@@ -36,7 +36,7 @@ def editor(role: str, path: str, tag: str) -> str:
 
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
-                 editor_from: str = "v0.1.7", repo_files: dict | None = None):
+                 editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -50,6 +50,15 @@ class FakeGitHub:
         self._releases = releases
         self._open_pull = open_pull
         self.writes: list[tuple] = []
+        self.group, self.refuse_groups = group, refuse_groups  # the self-hosted runners' group, if any
+
+    def runner_group(self, org, name):
+        if self.refuse_groups:
+            raise ConfigError("gh api orgs/acme/actions/runner-groups: HTTP 403")
+        return self.group if self.group and self.group["name"] == name else None
+
+    def update_runner_group(self, org, group, body):
+        self.writes.append(("runner group", org, group, body))
 
     def default_branch(self, repo):
         return "main"
@@ -226,6 +235,28 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.6", printed)
         self.assertIn("+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.7", printed)
         self.assertIn("## Before you merge", printed)
+
+    def test_self_hosted_runners_admit_the_target_before_its_pull_request(self):
+        older = f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.6"
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": [older]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        _, printed = self.run_upgrade(github)
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {
+            "restricted_to_workflows": True, "selected_workflows": [older, f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.7"]}))
+        self.assertEqual(github.writes[1][0], "branch")  # then the pull request
+        self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@refs/tags/v0.1.7", printed)
+
+    def test_a_group_that_admits_every_workflow_or_none_at_all_is_left_alone(self):
+        for group in (None, {"name": "mlz", "id": 7, "restricted_to_workflows": False}):
+            github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+            self.run_upgrade(github)
+            self.assertNotIn("runner group", [write[0] for write in github.writes])
+
+    def test_someone_who_may_not_read_the_groups_is_told_what_an_owner_does(self):
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
+        url, printed = self.run_upgrade(github)
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
 
     def test_refuses_a_target_that_is_not_a_release(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""})

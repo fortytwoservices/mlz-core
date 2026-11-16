@@ -152,7 +152,7 @@ code is `acme`, with its primary region Norway East):
 | `dns` | `rg-acme-dns-pd-nwe-01`, the Private Link zones' group |
 | `mgt`, management | governance's `rg-acme-mgt-pd-nwe-01`, `log-acme-mgt-pd-nwe-01`, `id-acme-mgt-ama-pd-nwe-01`, `dcr-acme-mgt-changetracking-pd-nwe-01` (`vminsights`, `defendersql`); the network's `rg-acme-mgt-net-pd-nwe-01`, `vnet-`, `rt-`, `ghns-acme-mgt-pd-nwe-01` and an NSG per subnet, `nsg-acme-mgt-private-endpoints-pd-nwe-01` |
 | `idn`, identity | `rg-acme-idn-net-pd-nwe-01`, and in each region with identity's network `vnet-acme-idn-pd-sdc-01` and the rest |
-| `mlz`, the bootstrap | `rg-acme-mlz-pd-nwe-01`, `stacmemlzstatepdnwe01`, `id-acme-mlz-govplan-pd-nwe-01` (`govapply`, `platplan`, `platapply`, `vendplan`, `vendapply`), `pep-` and `nic-acme-mlz-state-pd-nwe-01` |
+| `mlz`, the bootstrap | `rg-acme-mlz-pd-nwe-01`, `stacmemlzstatepdnwe01`, `id-acme-mlz-govplan-pd-nwe-01` (`govapply`, `platplan`, `platapply`, `vendplan`, `vendapply`), `pep-` and `nic-acme-mlz-state-pd-nwe-01`; the self-hosted runners' `kv-acme-mlz-pd-nwe-01` with `pep-` and `nic-acme-mlz-vault-pd-nwe-01`, `vmss-acme-mlz-pd-nwe-01`, `id-` and `nsg-acme-mlz-runners-pd-nwe-01` |
 
 `tools/mlz/names.py` works them all out, and each root's loader puts its own in its config (`render_library.py`
 for governance, `mlz platform` for the platform's roots, `mlz install` for the bootstrap). A name two roots share,
