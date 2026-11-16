@@ -86,6 +86,15 @@
               "type": "string",
               "description": "Self-hosted: the client ID of the customer's runner App, which has only Organization > Self-hosted runners: write.",
               "pattern": "^[A-Za-z0-9.]+$"
+            },
+            "image": {
+              "type": "string",
+              "description": "Self-hosted: fortytwo, Fortytwo's runner image, billed per instance and hour (the default); or dev, its dev plan, for Fortytwo's own tests in its own tenants.",
+              "enum": [
+                "fortytwo",
+                "dev"
+              ],
+              "default": "fortytwo"
             }
           },
           "additionalProperties": false
