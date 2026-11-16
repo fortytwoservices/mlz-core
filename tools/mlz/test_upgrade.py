@@ -224,6 +224,7 @@ class UpgradeTest(unittest.TestCase):
 
     def test_an_open_upgrade_is_not_opened_twice(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
         url, printed = self.run_upgrade(github)
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
         self.assertEqual(github.writes, [])
@@ -289,6 +290,25 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
         files = next(write for write in github.writes if write[0] == "files")[4]
         self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.0"))
+
+    def test_an_open_upgrade_that_calls_mlz_core_itself_is_moved_onto_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": "", "v0.9.1": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.9.1")] = (caller("governance", "v0.9.1"), "sha")  # calls mlz-core itself
+        printed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: None):
+            url = upgrade(github, "acme/mlz-governance", "v0.9.1", False, printed.append, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))
+        self.assertIn("acme/mlz-governance: the upgrade to v0.9.1 in https://github.com/acme/mlz-governance/pull/3 now calls acme/mlz-core", printed)
+
+    def test_a_repo_already_on_its_release_still_gets_the_tag_into_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": ""})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", False, lambda line: None, core="acme/mlz-core"))
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", True, lambda line: None, core="acme/mlz-core"))  # a dry run pushes nothing
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
 
     def test_a_repo_on_the_copy_never_moves_back_past_the_first_release_that_reads_it(self):
         github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.8.1": "", "v0.9.0": ""})
