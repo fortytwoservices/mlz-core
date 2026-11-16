@@ -49,7 +49,7 @@ from . import contract, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW
+from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW, pin_of, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -102,6 +102,8 @@ GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers",
 RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id")
 RUNNER_KINDS = {"self-hosted": "Standard_D2ds_v6", "github-hosted": "2-core"}  # each kind's default size
 RUNNER_INSTANCES = 1
+# As many as snet-runners holds: one address each, of a /26 less the five Azure keeps (tools/mlz/platform.py).
+MAXIMUM_INSTANCES = 2 ** (32 - platform.NETWORKS["management"][1]["runners"][1]) - 5
 CODE_OWNERS_BRANCH = "mlz/code-owners"
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
@@ -152,8 +154,9 @@ def runner_settings(bootstrap: dict) -> dict:
     if kind == "github-hosted" and not (isinstance(size, str) and re.fullmatch(r"[0-9]+-core(-[a-z0-9-]+)?", size)):
         problems.append(f"bootstrap.yaml: github.runners.size is one of GitHub's runner sizes for github-hosted runners, such as {RUNNER_KINDS[kind]}, not {size!r}.")
     instances = given.get("instances", RUNNER_INSTANCES)
-    if kind == "self-hosted" and not (isinstance(instances, int) and not isinstance(instances, bool) and 0 <= instances <= 100):
-        problems.append(f"bootstrap.yaml: github.runners.instances is a whole number of runners from 0 to 100, not {instances!r}.")
+    if kind == "self-hosted" and not (isinstance(instances, int) and not isinstance(instances, bool) and 0 <= instances <= MAXIMUM_INSTANCES):
+        problems.append(f"bootstrap.yaml: github.runners.instances is a whole number of runners from 0 to {MAXIMUM_INSTANCES}, as many as "
+                        f"snet-runners holds, not {instances!r}.")
     client_id = given.get("app_client_id")
     if client_id is not None and not (isinstance(client_id, str) and re.fullmatch(r"[A-Za-z0-9.]+", client_id)):
         problems.append(f"bootstrap.yaml: github.runners.app_client_id is the runner App's client ID (letters, digits and dots), not {client_id!r}.")
@@ -785,13 +788,35 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
 
 
+def pinned_releases(github, repos: dict[str, str]) -> set[str]:
+    """The releases of mlz-core's role.yml that the repos' workflows call on their default branches: the only
+    workflows the runner group admits. A repo on anything else could never use the runners."""
+    found, problems = set(), []
+    for repo in repos.values():
+        text, _ = github.file(repo, WORKFLOW, github.default_branch(repo))
+        try:
+            core, ref = pin_of(text or "")
+        except ConfigError:
+            problems.append(f"{repo}: its {WORKFLOW} does not call mlz-core's role.yml.")
+            continue
+        if f"{core}/.github/workflows/role.yml" != CORE_WORKFLOW or version(ref) is None:
+            problems.append(f"{repo}: its {WORKFLOW} calls {core}'s role.yml at {ref}, which the runner group cannot admit: only "
+                            f"{CORE_WORKFLOW} at a release. python3 -m mlz upgrade {repo} moves it onto one.")
+            continue
+        found.add(ref)
+    if problems:
+        raise ConfigError("\n  ".join(problems))
+    return found
+
+
 def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[str], None]) -> dict | None:
-    """The organization's runner group mlz, for the three repos and mlz-core's role.yml at this release only. Only
-    an owner may make it: anyone else gets the command to send to one, and None."""
+    """The organization's runner group mlz, for the three repos and mlz-core's role.yml at the releases they pin
+    only. Only an owner may make it: anyone else gets the command to send to one, and None."""
     repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
-    workflow = allowed_workflow(release())
+    pinned = sorted(allowed_workflow(ref) for ref in pinned_releases(github, repos))
+    workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
-            "restricted_to_workflows": True, "selected_workflows": [workflow]}
+            "restricted_to_workflows": True, "selected_workflows": pinned}
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
             f"{RUNNER}, for the three repos and mlz-core's {workflow} only. Then run this step again.\n")
@@ -808,7 +833,7 @@ def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[st
                           "self-hosted runners, or set github.runners.kind: github-hosted in bootstrap.yaml.")
     # Kept narrow: a wider group would let other repos, or a job a pull request adds, run where the App's key is.
     # mlz-core's releases admitted before stay, for repos that have not moved yet; any other workflow goes.
-    workflows = sorted(core_releases(made.get("selected_workflows")) | {workflow})
+    workflows = sorted(core_releases(made.get("selected_workflows")) | set(pinned))
     if (made.get("visibility") != "selected" or made.get("allows_public_repositories") or not made.get("restricted_to_workflows")
             or workflows != sorted(made.get("selected_workflows") or [])):
         github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
@@ -854,6 +879,9 @@ def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callab
                 elif error.code != 403 or attempt == 29:  # a new role can take minutes to reach Key Vault
                     raise ConfigError(f"Key Vault refused the key (HTTP {error.code}): {json.loads(text).get('error', {}).get('message', text) if text.startswith('{') else text}") from None
                 wait(10)
+        else:
+            raise ConfigError("Key Vault did not take the key within five minutes: its firewall or the new role had not reached it yet. "
+                              "Run this step again with --app-key.")
     finally:
         # Each tried whatever the other does. A failed one says what to undo by hand; the bootstrap's next apply
         # also takes an address left in the firewall out again.

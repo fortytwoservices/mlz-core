@@ -73,6 +73,8 @@ resource "azapi_resource" "vault" {
     }
   }
   response_export_values = []
+
+  depends_on = [azapi_resource_action.register]
 }
 
 resource "azapi_resource" "vault_endpoint" {
@@ -150,5 +152,5 @@ module "runners" {
   tags = local.tags
 
   # Each instance reads the key on its first boot, through the vault's private endpoint and its name in the zone.
-  depends_on = [azapi_resource.vault_endpoint_dns, azapi_resource.vault_zone_link]
+  depends_on = [azapi_resource.vault_endpoint_dns, azapi_resource.vault_zone_link, azapi_resource_action.register]
 }

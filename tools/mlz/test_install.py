@@ -241,8 +241,12 @@ class BillingAzure:
 class RunnersGitHub(FakeGitHub):
     """The organization's runner settings, as an owner (or not) sees them."""
 
-    def __init__(self, owner=True, configurations=(), groups=(), runners=(), fail_configuration=False, **kwargs):
+    def __init__(self, owner=True, configurations=(), groups=(), runners=(), fail_configuration=False, pins=None, **kwargs):
         super().__init__(existing=REPOS.values(), **kwargs)
+        # Each repo's workflow calls mlz-core's role.yml at the release it pins (this one, unless given).
+        for repo in REPOS.values():
+            pin = (pins or {}).get(repo, install.release())
+            self.files[(repo, WORKFLOW)] = (f"jobs:\n  check:\n    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@{pin} # x\n", "sha")
         for number, repo in enumerate(REPOS.values()):
             self.repos[repo]["id"] = 101 + number
         self.owner, self.fail_configuration = owner, fail_configuration
@@ -990,7 +994,7 @@ class InstallTest(unittest.TestCase):
         for given, problem in (({"kind": "ephemeral"}, "kind is self-hosted or github-hosted, not 'ephemeral'"),
                                ({"kind": []}, "kind is self-hosted or github-hosted, not \\[\\]"),
                                ({"size": "Standard_D2'; rm -rf /"}, "size is an Azure virtual machine size for self-hosted runners"),
-                               ({"instances": 101}, "instances is a whole number of runners from 0 to 100"),
+                               ({"instances": 60}, "instances is a whole number of runners from 0 to 59, as many as snet-runners holds"),
                                ({"instances": True}, "instances is a whole number"),
                                ({"app_client_id": "Iv23\"; x"}, "app_client_id is the runner App's client ID"),
                                ({"kind": "github-hosted", "instances": 2}, "instances is for self-hosted runners"),
@@ -1063,6 +1067,31 @@ class InstallTest(unittest.TestCase):
         self.assertIn("these could not be undone after the upload; run them now:\naz keyvault network-rule remove --name kv-acme-mlz-pd-nwe-01 "
                       "--ip-address 203.0.113.7", text)
         self.assertNotIn("your role and address are gone", text)
+
+    def test_a_key_key_vault_never_took_is_not_reported_as_stored(self):
+        key = self.self_hosted()
+        # Every write refused while the new role spreads, until the attempts run out.
+        azure = SelfHostedAzure(refusals=[refused("ForbiddenByRbac", "not yet")] * 29 + [refused("ForbiddenByFirewall", "Client address: 203.0.113.7")])
+        with self.assertRaisesRegex(ConfigError, "Key Vault did not take the key within five minutes"):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual(azure.uploads, [])
+        self.assertFalse(any("Delete the .pem file now" in line for line in self.printed))
+        self.assertEqual([method for method, _, _ in azure.calls][-2:], ["PATCH", "DELETE"])  # cleaned up all the same
+
+    def test_the_group_admits_the_releases_the_repos_pin(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-governance": "v0.8.0", "acme/mlz-platform": "v0.8.0"})
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(dict(github.calls[:1])["group"]["selected_workflows"],
+                         sorted([install.allowed_workflow("v0.8.0"), install.allowed_workflow(install.release())]))
+
+    def test_a_repo_pinned_to_anything_but_a_release_of_mlz_core_stops_the_step(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-vending": "main"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml at main, "
+                                                 "which the runner group cannot admit"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.calls, [])
 
     def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
         key = self.self_hosted()

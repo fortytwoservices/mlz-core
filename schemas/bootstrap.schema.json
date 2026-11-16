@@ -74,7 +74,7 @@
               "description": "Self-hosted: how many runners. Each is billed for its compute and Fortytwo's image from the moment it exists; 0 removes them.",
               "type": "integer",
               "minimum": 0,
-              "maximum": 100,
+              "maximum": 59,
               "default": 1
             },
             "app_client_id": {

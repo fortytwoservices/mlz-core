@@ -18,7 +18,7 @@ github:
   runners:                         # where the pipelines' Azure jobs run (mlz install runners)
     kind: self-hosted              # self-hosted (the default) or github-hosted
     size: Standard_D2ds_v6         # an Azure VM size (the default); for github-hosted, GitHub's: 2-core, 4-core
-    instances: 1                   # self-hosted: how many runners, each billed while it exists
+    instances: 1                   # self-hosted: how many runners (at most 59), each billed while it exists
     app_client_id: Iv23liExample   # self-hosted: the client ID of the customer's runner App
 
 state_operators:                   # people who may run Terraform by hand, by Entra object ID
@@ -237,7 +237,8 @@ App**, and reads the App's private key from the runners' vault with an identity 
    customer's owner runs this one step.
 3. **What the step does,** in order, stopping where something is missing and saying what:
    - In GitHub, the **runner group `mlz`**: only the three repos may use it, and only jobs defined in
-     mlz-core's `role.yml` at the release the repos pin (`fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/<release>`).
+     mlz-core's `role.yml` at the releases the repos pin (`fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/<release>`);
+     a repo pinned to anything but a release of mlz-core stops the step.
      A pull request that adds a job of its own to `mlz.yml`, or points it at another `role.yml`, gets no runner
      (decided 2026-11-16; the first customer install is the first test of it). Run by anyone but an owner, the
      step changes nothing and prints the command for one. A group `mlz` made for GitHub-hosted runners is not
@@ -249,7 +250,8 @@ App**, and reads the App's private key from the runners' vault with an identity 
      already in the vault is kept.
    - **The management subscription,** once: the terms of the image's plan accepted, and encryption at host
      registered. That registration takes minutes; the step says so and stops, and a run again goes on.
-   - **The bootstrap's apply,** which now makes the runners: `runners.instances` of `runners.size`, its plan
+   - **The bootstrap's apply,** which now makes the runners: `runners.instances` of `runners.size` (at most 59, as many as
+     `snet-runners` holds), its plan
      shown and applied as in `mlz install bootstrap` (`--yes` without asking).
    - Once a runner is online and the state account has its private endpoint, **`MLZ_RUNS_ON`** is set to `mlz`
      in the three repos, and their next runs plan, apply and publish on the runners
