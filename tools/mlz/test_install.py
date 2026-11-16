@@ -1173,15 +1173,17 @@ class InstallTest(unittest.TestCase):
     def test_a_subscription_the_dev_image_is_not_for_is_told_so(self):
         self.self_hosted("    app_client_id: Iv23liRunners\n    image: dev\n")
 
-        class Refusing(SelfHostedAzure):
-            def request(self, method, url, body=None):
-                if url.split("?")[0].endswith("/agreements/current"):
-                    raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b"{}"))
-                return super().request(method, url, body)
+        # Azure may refuse reading the plan's terms, or accepting them once read.
+        for refused_method, code in (("GET", 404), ("PUT", 403)):
+            class Refusing(SelfHostedAzure):
+                def request(self, method, url, body=None):
+                    if method == refused_method and url.split("?")[0].endswith("/agreements/current"):
+                        raise urllib.error.HTTPError(url, code, "Refused", {}, io.BytesIO(b"{}"))
+                    return super().request(method, url, body)
 
-        with self.assertRaisesRegex(ConfigError, "the management subscription may not use Fortytwo's dev image \\(self_hosted_runner_ado, "
-                                                 "ubuntu-latest-dev-gen2; HTTP 404\\): it is for Fortytwo's own tenants"):
-            self.run_self_hosted(RunnersGitHub(), Refusing(secret=True))
+            with self.assertRaisesRegex(ConfigError, "the management subscription may not use Fortytwo's dev image \\(self_hosted_runner_ado, "
+                                                     f"ubuntu-latest-dev-gen2; HTTP {code}\\): it is for Fortytwo's own tenants"):
+                self.run_self_hosted(RunnersGitHub(), Refusing(secret=True))
 
     def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
         key = self.self_hosted()

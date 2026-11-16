@@ -947,16 +947,17 @@ def runner_prerequisites(azure, management: str, image: str, out: Callable[[str]
     plan = RUNNER_IMAGES[image]
     terms = (f"{management}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/{plan['publisher']}"
              f"/offers/{plan['offer']}/plans/{plan['sku']}/agreements/current?api-version=2021-01-01")
+    # Reading the terms or accepting them: Azure may refuse either for a plan the subscription may not use.
     try:
         agreement = azure.request("GET", terms)
+        if not (agreement.get("properties") or {}).get("accepted"):
+            azure.request("PUT", terms, {**agreement, "properties": {**(agreement.get("properties") or {}), "accepted": True}})
+            out(f"runners: the terms of Fortytwo's runner image ({plan['offer']}, {plan['sku']}) are accepted for the management subscription")
     except urllib.error.HTTPError as error:
         if image == "dev" and error.code in (400, 403, 404):
             raise ConfigError(f"the management subscription may not use Fortytwo's dev image ({plan['offer']}, {plan['sku']}; HTTP {error.code}): "
                               "it is for Fortytwo's own tenants. Leave github.runners.image out for Fortytwo's runner image.") from None
         raise
-    if not (agreement.get("properties") or {}).get("accepted"):
-        azure.request("PUT", terms, {**agreement, "properties": {**(agreement.get("properties") or {}), "accepted": True}})
-        out(f"runners: the terms of Fortytwo's runner image ({plan['offer']}, {plan['sku']}) are accepted for the management subscription")
     feature = f"{management}/providers/Microsoft.Features/providers/Microsoft.Compute/features/EncryptionAtHost"
     state = (azure.request("GET", f"{feature}?api-version=2021-07-01").get("properties") or {}).get("state")
     if state != "Registered":
