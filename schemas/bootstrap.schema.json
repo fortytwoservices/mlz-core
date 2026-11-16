@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "github": {
-      "description": "The customer's GitHub organization, repos, platform team, reviewers and private runner.",
+      "description": "The customer's GitHub organization, repos, platform team, reviewers and runners.",
       "type": "object",
       "properties": {
         "organization": {
@@ -14,7 +14,7 @@
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
         "repositories": {
-          "description": "The three repos, by role.",
+          "description": "The three repos, by role, and the organization's copy of mlz-core.",
           "type": "object",
           "properties": {
             "governance": {
@@ -28,6 +28,11 @@
             "vending": {
               "type": "string",
               "description": "The vending repo's name."
+            },
+            "core": {
+              "type": "string",
+              "description": "The organization's own copy of mlz-core, which the three repos' pipelines call.",
+              "default": "mlz-core"
             }
           },
           "additionalProperties": false
@@ -45,14 +50,45 @@
           },
           "minItems": 1
         },
-        "runner_size": {
-          "type": "string",
-          "description": "The private runner's machine size at GitHub, for mlz install runners.",
-          "default": "2-core",
-          "examples": [
-            "2-core",
-            "4-core"
-          ]
+        "runners": {
+          "description": "Where the pipelines' Azure jobs run, for mlz install runners (docs/bootstrap.md, private runners).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "description": "self-hosted: Fortytwo's runner image on a scale set in management's network (the default). github-hosted: GitHub's own runners, joined to that network.",
+              "enum": [
+                "self-hosted",
+                "github-hosted"
+              ],
+              "default": "self-hosted"
+            },
+            "size": {
+              "type": "string",
+              "description": "An Azure virtual machine size for self-hosted runners (Standard_D2ds_v6 unless set), or GitHub's runner size for github-hosted ones (2-core unless set).",
+              "examples": [
+                "Standard_D2ds_v6",
+                "Standard_D4ds_v6",
+                "4-core"
+              ]
+            },
+            "instances": {
+              "description": "Self-hosted: how many runners. Each is billed for its compute and Fortytwo's image from the moment it exists; 0 removes them.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 59,
+              "default": 1
+            },
+            "app_client_id": {
+              "type": "string",
+              "description": "Self-hosted: the client ID of the customer's runner App, which has only Organization > Self-hosted runners: write.",
+              "pattern": "^[A-Za-z0-9.]+$"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -70,7 +106,7 @@
       }
     },
     "names": {
-      "description": "The bootstrap's own name for its resource group or state account, instead of the customer's template's (docs/naming.md): for a storage account name taken elsewhere in Azure, or one to keep.",
+      "description": "The bootstrap's own name for its resource group, state account or runners' vault, instead of the customer's template's (docs/naming.md): for a storage account or vault name taken elsewhere in Azure, or one to keep.",
       "type": [
         "object",
         "null"
@@ -78,7 +114,8 @@
       "propertyNames": {
         "enum": [
           "resource_group",
-          "storage_account"
+          "storage_account",
+          "key_vault"
         ]
       },
       "additionalProperties": {

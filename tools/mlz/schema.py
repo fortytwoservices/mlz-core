@@ -207,15 +207,25 @@ def customer() -> dict:
 def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
-        "repositories": mapping({role: text(f"The {role} repo's name.") for role in install.ROLES}, "The three repos, by role."),
+        "repositories": mapping({**{role: text(f"The {role} repo's name.") for role in install.ROLES},
+                                 "core": text("The organization's own copy of mlz-core, which the three repos' pipelines call.", default="mlz-core")},
+                                "The three repos, by role, and the organization's copy of mlz-core."),
         "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
         "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
-        "runner_size": text("The private runner's machine size at GitHub, for mlz install runners.", default="2-core", examples=["2-core", "4-core"]),
+        "runners": or_empty(mapping({
+            "kind": text("self-hosted: Fortytwo's runner image on a scale set in management's network (the default). github-hosted: GitHub's own runners, joined to that network.",
+                         enum=list(install.RUNNER_KINDS), default="self-hosted"),
+            "size": text(f"An Azure virtual machine size for self-hosted runners ({install.RUNNER_KINDS['self-hosted']} unless set), or GitHub's runner size for github-hosted ones ({install.RUNNER_KINDS['github-hosted']} unless set).",
+                         examples=["Standard_D2ds_v6", "Standard_D4ds_v6", "4-core"]),
+            "instances": {"description": "Self-hosted: how many runners. Each is billed for its compute and Fortytwo's image from the moment it exists; 0 removes them.",
+                          "type": "integer", "minimum": 0, "maximum": install.MAXIMUM_INSTANCES, "default": install.RUNNER_INSTANCES},
+            "app_client_id": text("Self-hosted: the client ID of the customer's runner App, which has only Organization > Self-hosted runners: write.", pattern="^[A-Za-z0-9.]+$"),
+        }, "Where the pipelines' Azure jobs run, for mlz install runners (docs/bootstrap.md, private runners).")),
     }
     properties = {
-        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, platform team, reviewers and private runner."),
+        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, platform team, reviewers and runners."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
-        "names": or_empty({"description": "The bootstrap's own name for its resource group or state account, instead of the customer's template's (docs/naming.md): for a storage account name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
+        "names": or_empty({"description": "The bootstrap's own name for its resource group, state account or runners' vault, instead of the customer's template's (docs/naming.md): for a storage account or vault name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
     }
     return {
         "$schema": DRAFT,

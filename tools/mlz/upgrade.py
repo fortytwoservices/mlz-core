@@ -11,7 +11,9 @@ release notes in between, breaking changes first. Merging changes nothing in Azu
 release would change, and the apply waits for the repo's reviewer.
 
 Runs on the engineer's own GitHub login (the gh CLI), which needs the workflow scope, since the pull request
-changes a workflow file: gh auth refresh -h github.com -s workflow.
+changes a workflow file: gh auth refresh -h github.com -s workflow. With self-hosted runners, the organization's
+runner group mlz admits only mlz-core's role.yml at the releases it lists, so the upgrade adds the target first,
+which needs an owner's admin:org scope; anyone else gets the command for one.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import difflib
 import re
 from typing import Callable
 
+from . import mirror
 from .github import GitHub  # noqa: F401  (re-exported for python3 -m mlz upgrade)
 from .merge import ConfigError
 
@@ -136,34 +139,74 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
     return "\n".join(lines).rstrip() + "\n"
 
 
-def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
-    """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened."""
+RUNNER_GROUP = "mlz"  # install.RUNNER: the self-hosted runners' group, when the customer has them
+
+
+def admit_release(github, org: str, core: str, target: str, out: Callable[[str], None] = print) -> None:
+    """The runner group mlz, when it admits only some workflows (self-hosted runners), admits the target's role.yml
+    too, before the pull request whose jobs run it: they would wait for a runner forever. mlz-core's releases it
+    admits already stay, for the repos still on them; any other workflow goes, as mlz install runners does."""
+    prefix = mirror.workflow(core, "")
+    workflow = prefix + target
+    try:
+        group = github.runner_group(org, RUNNER_GROUP)
+        if group is None or not group.get("restricted_to_workflows"):
+            return
+        admitted = group.get("selected_workflows") or []
+        wanted = sorted({w for w in admitted if w.startswith(prefix) and version(w[len(prefix):])} | {workflow})
+        if wanted == sorted(admitted):
+            return
+        github.update_runner_group(org, group["id"], {"restricted_to_workflows": True, "selected_workflows": wanted})
+        out(f"{org}: the runner group {RUNNER_GROUP} admits {workflow}")
+    except ConfigError:
+        out(f"{org}: if it has self-hosted runners, an owner must let the runner group {RUNNER_GROUP} run {target}'s role.yml, or the "
+            f"upgrade's jobs wait for a runner: Settings, Actions, Runner groups, {RUNNER_GROUP}, add {workflow}.")
+
+
+def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print,
+            core: str | None = None) -> str | None:
+    """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened. core moves the
+    repo onto another copy of mlz-core, such as the organization's (tools/mlz/mirror.py); by default it stays on
+    the one it calls."""
     base = github.default_branch(repo)
     current_text, _ = github.file(repo, WORKFLOW, base)
     if current_text is None:
         raise ConfigError(f"{repo} has no {WORKFLOW} on {base}: is it an MLZ repo?")
-    core, current = pin_of(current_text)
+    called, current = pin_of(current_text)
+    core = core or called
     role = role_of(current_text)
-    releases = {tag: notes for tag, notes in github.releases(core).items() if version(tag)}
+    # A repo that calls the organization's copy of mlz-core (tools/mlz/mirror.py) moves to one of mlz-core's own
+    # releases, which the copy gets before the pull request; the copy has no releases of its own.
+    source = mirror.UPSTREAM if core != mirror.UPSTREAM else core
+    releases = {tag: notes for tag, notes in github.releases(source).items() if version(tag)}
     if not releases:
-        raise ConfigError(f"{core} has no releases.")
+        raise ConfigError(f"{source} has no releases.")
     target = target or max(releases, key=version)
     if target not in releases:
-        raise ConfigError(f"{target} is not a release of {core}; releases: {', '.join(sorted(releases, key=version))}.")
-    if current == target:
+        raise ConfigError(f"{target} is not a release of {source}; releases: {', '.join(sorted(releases, key=version))}.")
+    if core != mirror.UPSTREAM and version(target) < version(mirror.FIRST_RELEASE):
+        raise ConfigError(f"{target} cannot run from {core}: releases before {mirror.FIRST_RELEASE} read mlz-core's code without a token, "
+                          f"so not from a private copy. Choose {mirror.FIRST_RELEASE} or later, or move the repo back onto mlz-core "
+                          f"itself with --core {mirror.UPSTREAM}.")
+    if current == target and called == core:
+        # A repo on its release already: the copy is still made to hold it, which a tag that never arrived would
+        # keep the runner group from admitting.
+        if core != mirror.UPSTREAM and not dry_run:
+            mirror.push_release(github, core, target, out)
         out(f"{repo}: already on {target}")
         return None
     # Each file mlz-core owns: the target's version. Where the target has none, the repo's copy is removed
     # only if the release it leaves put it there; a file no release of mlz-core gave is the customer's own.
     changes, before = {}, {}
     for path in OWNED:
-        starter, _ = github.file(core, f"starter/mlz-{role}/{path}", target)
+        starter, _ = github.file(source, f"starter/mlz-{role}/{path}", target)
         if starter is None and path == WORKFLOW:
-            raise ConfigError(f"{core} {target} has no starter for the {role} role.")
+            raise ConfigError(f"{source} {target} has no starter for the {role} role.")
         before[path] = current_text if path == WORKFLOW else github.file(repo, path, base)[0]
-        if starter is None and github.file(core, f"starter/mlz-{role}/{path}", current)[0] is None:
+        if starter is None and github.file(source, f"starter/mlz-{role}/{path}", current)[0] is None:
             continue
-        after = None if starter is None else RELEASE_PLEASE_MARKER.sub("", starter)
+        after = None if starter is None else RELEASE_PLEASE_MARKER.sub("", starter).replace(
+            f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
         if after != before[path]:
             changes[path] = after
     title = f"chore: mlz-core {target}"
@@ -174,10 +217,20 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             out("".join(difflib.unified_diff((before[path] or "").splitlines(True), (after or "").splitlines(True), f"a/{path}", f"b/{path}")))
         out(body)
         return None
+    if core != mirror.UPSTREAM:
+        mirror.push_release(github, core, target, out)
+    admit_release(github, repo.split("/")[0], core, target, out)
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:
-        out(f"{repo}: the upgrade to {target} is already open: {existing}")
+        # The open one, if it already calls this copy of mlz-core at the target; otherwise, as when --core moves a
+        # repo whose upgrade is open already, its branch is made again with this one's files.
+        pinned = github.file(repo, WORKFLOW, branch)[0]
+        if pinned is not None and pin_of(pinned) == (core, target):
+            out(f"{repo}: the upgrade to {target} is already open: {existing}")
+            return existing
+        github.commit_files(repo, branch, github.reset_branch(repo, branch, base), changes, title)
+        out(f"{repo}: the upgrade to {target} in {existing} now calls {core}")
         return existing
     head = github.reset_branch(repo, branch, base)
     github.commit_files(repo, branch, head, changes, title)

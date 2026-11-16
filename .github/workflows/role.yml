@@ -63,6 +63,7 @@ jobs:
       contents: read
     outputs:
       core-repository: ${{ steps.core.outputs.repository }}
+      core-name: ${{ steps.core.outputs.name }}
       core-ref: ${{ steps.core.outputs.ref }}
       stacks: ${{ steps.check.outputs.stacks }}
     steps:
@@ -86,14 +87,30 @@ jobs:
             exit 1
           fi
           echo "$WORKFLOW_REPOSITORY ${WORKFLOW_REF#*@} at $WORKFLOW_SHA"
-          echo "repository=$WORKFLOW_REPOSITORY" >> "$GITHUB_OUTPUT"
-          echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+          {
+            echo "repository=$WORKFLOW_REPOSITORY"
+            echo "name=${WORKFLOW_REPOSITORY#*/}"
+            echo "ref=$WORKFLOW_SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(steps.core.outputs.repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.core.outputs.name }}
+          permission-contents: read
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ steps.core.outputs.repository }}
           ref: ${{ steps.core.outputs.ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
@@ -207,11 +224,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -333,11 +363,24 @@ jobs:
       contents: read
       issues: write
     steps:
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       # None when no plan job got to plan: drift.sh then reports every stack as not planned.
@@ -423,11 +466,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -502,11 +558,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       # The mlz tools read YAML through terraform console (tools/mlz/files.py), and vending's contract comes
@@ -562,11 +631,24 @@ jobs:
         with:
           persist-credentials: false
 
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       # The mlz tools read YAML through terraform console (tools/mlz/files.py).
@@ -618,11 +700,24 @@ jobs:
     permissions:
       contents: read
     steps:
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       # The landing zones' configs, as the check worked them out.
@@ -662,11 +757,24 @@ jobs:
     timeout-minutes: 5
     permissions: {}
     steps:
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.check.outputs.core-repository }}
           ref: ${{ needs.check.outputs.core-ref }}
           path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
       - id: merger

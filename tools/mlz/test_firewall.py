@@ -385,6 +385,9 @@ class FirewallTest(unittest.TestCase):
         self.assertEqual(github["destination_fqdns"], sorted(GITHUB))
         self.assertEqual(github["protocols"], [{"type": "Https", "port": 443}])
         self.assertEqual(application["rules"]["terraform"]["destination_fqdns"], ["registry.terraform.io", "releases.hashicorp.com"])
+        # Self-hosted runners download Fortytwo's registration script at boot, from a host GitHub does not list for Actions.
+        self.assertEqual(application["rules"]["runner-registration"]["destination_fqdns"], ["raw.githubusercontent.com"])
+        self.assertNotIn("raw.githubusercontent.com", GITHUB)
         azure = group["network"]["runners-network"]["rules"]["azure"]
         self.assertEqual(azure["destination_addresses"], ["AzureActiveDirectory", "AzureResourceManager"])
         self.assertEqual((azure["source_addresses"], azure["destination_ports"]), (["10.99.4.0/25", "10.99.4.128/26"], ["443"]))

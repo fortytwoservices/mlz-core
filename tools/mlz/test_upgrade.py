@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import unittest
+import unittest.mock
 from pathlib import Path
 
+from mlz import mirror
 from mlz.merge import ConfigError
 from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, breaking_changes, pin_of, releases_between, role_of, upgrade, version
 
@@ -13,11 +15,11 @@ STARTERS = Path(__file__).resolve().parents[2] / "starter"
 CORE = "fortytwoservices/mlz-core"
 
 
-def caller(role: str, ref: str) -> str:
-    """A customer's workflow: the starter of a role, pinned to ref."""
+def caller(role: str, ref: str, core: str = CORE) -> str:
+    """A customer's workflow: the starter of a role, pinned to ref, in mlz-core or in the organization's copy of it."""
     text = (STARTERS / f"mlz-{role}" / WORKFLOW).read_text()
-    core, pinned = pin_of(text)
-    return text.replace(f"{core}/.github/workflows/role.yml@{pinned}", f"{CORE}/.github/workflows/role.yml@{ref}")
+    called, pinned = pin_of(text)
+    return text.replace(f"{called}/.github/workflows/role.yml@{pinned}", f"{core}/.github/workflows/role.yml@{ref}")
 
 
 def notes(tag: str, *, breaking: str | None = None) -> str:
@@ -36,7 +38,7 @@ def editor(role: str, path: str, tag: str) -> str:
 
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
-                 editor_from: str = "v0.1.7", repo_files: dict | None = None):
+                 editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -50,6 +52,15 @@ class FakeGitHub:
         self._releases = releases
         self._open_pull = open_pull
         self.writes: list[tuple] = []
+        self.group, self.refuse_groups = group, refuse_groups  # the self-hosted runners' group, if any
+
+    def runner_group(self, org, name):
+        if self.refuse_groups:
+            raise ConfigError("gh api orgs/acme/actions/runner-groups: HTTP 403")
+        return self.group if self.group and self.group["name"] == name else None
+
+    def update_runner_group(self, org, group, body):
+        self.writes.append(("runner group", org, group, body))
 
     def default_branch(self, repo):
         return "main"
@@ -213,6 +224,7 @@ class UpgradeTest(unittest.TestCase):
 
     def test_an_open_upgrade_is_not_opened_twice(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
         url, printed = self.run_upgrade(github)
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
         self.assertEqual(github.writes, [])
@@ -226,6 +238,87 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.6", printed)
         self.assertIn("+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.7", printed)
         self.assertIn("## Before you merge", printed)
+
+    def test_self_hosted_runners_admit_the_target_before_its_pull_request(self):
+        older = f"{CORE}/.github/workflows/role.yml@v0.1.6"
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": [older]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        _, printed = self.run_upgrade(github)
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {
+            "restricted_to_workflows": True, "selected_workflows": [older, f"{CORE}/.github/workflows/role.yml@v0.1.7"]}))
+        self.assertEqual(github.writes[1][0], "branch")  # then the pull request
+        self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@v0.1.7", printed)
+
+    def test_the_group_keeps_only_mlz_core_s_releases(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True,
+                 "selected_workflows": [f"{CORE}/.github/workflows/role.yml@refs/heads/main", "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        self.run_upgrade(github)
+        self.assertEqual(github.writes[0][3]["selected_workflows"], [f"{CORE}/.github/workflows/role.yml@v0.1.7"])
+
+    def test_a_group_that_admits_every_workflow_or_none_at_all_is_left_alone(self):
+        for group in (None, {"name": "mlz", "id": 7, "restricted_to_workflows": False}):
+            github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+            self.run_upgrade(github)
+            self.assertNotIn("runner group", [write[0] for write in github.writes])
+
+    def test_someone_who_may_not_read_the_groups_is_told_what_an_owner_does(self):
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
+        url, printed = self.run_upgrade(github)
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
+
+    def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.9.0"]}
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": notes("v0.9.0"), "v0.9.1": notes("v0.9.1")}, group=group)
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url, printed = self.run_upgrade(github)
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.1")])  # the copy gets the release before the pull request
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {"restricted_to_workflows": True, "selected_workflows": [
+            "acme/mlz-core/.github/workflows/role.yml@v0.9.0", "acme/mlz-core/.github/workflows/role.yml@v0.9.1"]}))
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))  # mlz-core's starter, calling the copy
+        self.assertIn("something new in v0.9.1", github.writes[-1][5])  # mlz-core's release notes
+
+    def test_core_moves_a_repo_onto_the_organization_s_copy_at_the_same_release(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": notes("v0.9.0")})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url = upgrade(github, "acme/mlz-governance", None, False, lambda line: None, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.0"))
+
+    def test_an_open_upgrade_that_calls_mlz_core_itself_is_moved_onto_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": "", "v0.9.1": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.9.1")] = (caller("governance", "v0.9.1"), "sha")  # calls mlz-core itself
+        printed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: None):
+            url = upgrade(github, "acme/mlz-governance", "v0.9.1", False, printed.append, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))
+        self.assertIn("acme/mlz-governance: the upgrade to v0.9.1 in https://github.com/acme/mlz-governance/pull/3 now calls acme/mlz-core", printed)
+
+    def test_a_repo_already_on_its_release_still_gets_the_tag_into_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": ""})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", False, lambda line: None, core="acme/mlz-core"))
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", True, lambda line: None, core="acme/mlz-core"))  # a dry run pushes nothing
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
+
+    def test_a_repo_on_the_copy_never_moves_back_past_the_first_release_that_reads_it(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.8.1": "", "v0.9.0": ""})
+        with self.assertRaisesRegex(ConfigError, "v0.8.1 cannot run from acme/mlz-core: releases before v0.9.0 read mlz-core's code without a token.*"
+                                                 "--core fortytwoservices/mlz-core"):
+            self.run_upgrade(github, target="v0.8.1")
+        self.assertEqual(github.writes, [])  # nothing pushed, admitted or opened
+        # Back onto mlz-core itself, it may.
+        url = upgrade(github, "acme/mlz-governance", "v0.8.1", False, lambda line: None, core="fortytwoservices/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
 
     def test_refuses_a_target_that_is_not_a_release(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""})

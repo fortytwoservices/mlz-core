@@ -1,21 +1,24 @@
 # Pipelines
 
 Each customer repo runs its role from mlz-core with one short workflow, `.github/workflows/mlz.yml`
-(the starters have it), pinned to a release:
+(the starters have it), pinned to a release, in the organization's own copy of mlz-core (`acme/mlz-core`,
+[bootstrap](bootstrap.md#running-it)):
 
 ```yaml
 jobs:
   governance:
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.8.1 # x-release-please-version
+    uses: acme/mlz-core/.github/workflows/role.yml@v0.8.1 # x-release-please-version
     with:
       role: governance
     secrets:
       MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
 ```
 
-mlz-core and the `az-tf-mlz-*` modules it uses are public, so a customer's repo needs no Fortytwo credential to
-run them. The secret is passed by name because `secrets: inherit` only reaches a workflow in the caller's own
-organisation or enterprise.
+The copy is private: every job reads its code as the MLZ App. The `az-tf-mlz-*` modules mlz-core uses are
+public, so a customer's repo needs no Fortytwo credential to run them. A repo set up before the copy calls
+`fortytwoservices/mlz-core` itself, which is public, until `mlz upgrade <repo> --core <org>/mlz-core` moves it onto
+the copy (at `v0.9.0` or later: older releases read the code without a token). The secret is passed by name,
+the one the workflow takes.
 
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
 wait for which:
@@ -39,6 +42,11 @@ checkout:
 PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to v0.1.8
 ```
 
+A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by `mlz install repos`), or that
+`--core acme/mlz-core` moves onto it, moves to mlz-core's own release: the command first pushes that release into the copy, from mlz-core itself, and the
+pull request's workflow calls the copy at it. The release notes and the starters are mlz-core's. With
+self-hosted runners it then lets the runner group run that release's `role.yml` too.
+
 Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrade-v0.1.8`:
 
 - It replaces the files that belong to mlz-core with the release's starter for the repo's role:
@@ -55,6 +63,12 @@ Merging changes nothing in Azure. The pipeline plans with the new release, and t
 repo's reviewer, so the three repos can move on different days, platform last. The command runs on the
 engineer's own GitHub login, which needs write access to the repos and the `workflow` scope
 (`gh auth refresh -h github.com -s workflow`), since the pull request changes a workflow file.
+
+The copy of mlz-core gets no team: only the organization's owners, and whoever made it, may push to it, so the
+engineer who runs an upgrade needs write access to it too (an owner gives it, the copy's Settings,
+Collaborators and teams). Its tags cannot be moved or deleted by anyone. With self-hosted runners, the runner
+group admits only the copy's `role.yml`: `--core fortytwoservices/mlz-core` takes a repo off the runners, so
+delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never takes them.
 
 ## What runs when
 
@@ -81,8 +95,10 @@ backend. Only the apply job uses the backend itself.
 Applies of the same stack never run at the same time, and one is never cancelled halfway.
 
 `plan`, `apply` and `publish` reach Azure and the state. They run on the repo variable `MLZ_RUNS_ON` when it is
-set: the private runner in management's network, which `mlz install runners` sets up and switches the
-repos to ([bootstrap](bootstrap.md#private-runners)). Until then, and once it is deleted again, they run on
+set: the runners in management's network, self-hosted unless `bootstrap.yaml` asks for GitHub-hosted ones,
+which `mlz install runners` sets up and switches the repos to ([bootstrap](bootstrap.md#private-runners)).
+Self-hosted runners take only jobs from mlz-core's `role.yml` at the release a repo pins, so a job a pull
+request adds to `mlz.yml` gets none. Until then, and once it is deleted again, they run on
 GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
 runners.
 
@@ -178,13 +194,13 @@ file, from `bootstrap.yaml`'s `platform_team`:
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
-| Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the private runner the Azure jobs run on |
+| Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
 | `.github/CODEOWNERS`, write access for the platform team, the ruleset `main` | `mlz install repos` ([code owners](#code-owners)) |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions
-policy must allow `fortytwoservices/mlz-core/.github/workflows/role.yml` and the actions it uses (each is
-pinned by commit in `role.yml`).
+policy must allow its copy's `role.yml` (`acme/mlz-core/.github/workflows/role.yml`) and the actions it uses
+(each is pinned by commit in `role.yml`).
 
 ## The first run
 

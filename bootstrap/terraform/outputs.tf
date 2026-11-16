@@ -58,3 +58,8 @@ output "state_private_endpoint" {
   description = "Whether the state account has its private endpoint in management's network. It comes with the bootstrap's first run after the platform has built that network and the hub's blob zone."
   value       = local.state_endpoint
 }
+
+output "runners" {
+  description = "The self-hosted runners' scale set, once the bootstrap has deployed it: after mlz install runners has put the runner App's key in the vault. Null until then, and for GitHub-hosted runners."
+  value       = local.runner_pool ? module.runners[0].name : null
+}

@@ -75,10 +75,11 @@ locals {
 
 data "azapi_client_config" "current" {}
 
-# The management subscription may be new: the state account and the identities need their providers, and
-# GitHub's hosted runners join management's network through a GitHub.Network resource.
+# The management subscription may be new: the state account and the identities need their providers, GitHub's
+# hosted runners join management's network through a GitHub.Network resource, and self-hosted runners need a
+# vault, a scale set and their image's terms (main.runners.tf; mlz install runners accepts them).
 resource "azapi_resource_action" "register" {
-  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity", "GitHub.Network"])
+  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity", "GitHub.Network", "Microsoft.KeyVault", "Microsoft.Compute", "Microsoft.MarketplaceOrdering"])
 
   type        = "Microsoft.Resources/providers@2021-04-01"
   resource_id = "${local.management}/providers/${each.key}"

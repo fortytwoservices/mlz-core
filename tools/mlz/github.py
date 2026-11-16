@@ -55,9 +55,36 @@ class GitHub:
     def default_branch(self, repo: str) -> str:
         return self._api(f"repos/{repo}")["default_branch"]
 
-    def create_repo(self, owner: str, name: str) -> dict:
-        """A private repo in an organisation, with GitHub's first commit, so that a branch exists to commit to."""
-        return self._api(f"orgs/{owner}/repos", "POST", {"name": name, "private": True, "auto_init": True})
+    def create_repo(self, owner: str, name: str, first_commit: bool = True) -> dict:
+        """A private repo in an organisation, with GitHub's first commit, so that a branch exists to commit to; or
+        empty, for history pushed into it (the customer's copy of mlz-core)."""
+        return self._api(f"orgs/{owner}/repos", "POST", {"name": name, "private": True, "auto_init": first_commit})
+
+    def tag_exists(self, repo: str, tag: str) -> bool:
+        try:
+            return self._api(f"repos/{repo}/git/ref/tags/{tag}", missing_ok=True) is not None
+        except ConfigError as error:
+            if "HTTP 409" in str(error):  # an empty repo: GitHub's Git database answers "Git Repository is empty"
+                return False
+            raise
+
+    def compare(self, repo: str, base: str, head: str) -> str | None:
+        """How head stands to base (ahead, behind, identical or diverged), or None when either is missing."""
+        try:
+            found = self._api(f"repos/{repo}/compare/{base}...{head}", missing_ok=True)
+        except ConfigError as error:
+            if "HTTP 409" in str(error):
+                return None
+            raise
+        return None if found is None else found.get("status")
+
+    def actions_access(self, repo: str) -> str | None:
+        """Which other repos may call this one's reusable workflows: none, organization or enterprise."""
+        found = self._api(f"repos/{repo}/actions/permissions/access", missing_ok=True)
+        return None if found is None else found.get("access_level")
+
+    def set_actions_access(self, repo: str, level: str) -> None:
+        self._api(f"repos/{repo}/actions/permissions/access", "PUT", {"access_level": level})
 
     def rename_branch(self, repo: str, branch: str, name: str) -> None:
         self._api(f"repos/{repo}/branches/{branch}/rename", "POST", {"new_name": name})
@@ -202,6 +229,10 @@ class GitHub:
 
     def set_runner_group_repositories(self, org: str, group: int, repositories: list[int]) -> None:
         self._api(f"orgs/{org}/actions/runner-groups/{group}/repositories", "PUT", {"selected_repository_ids": repositories})
+
+    def group_runners(self, org: str, group: int) -> list[dict]:
+        """The self-hosted runners registered in a runner group, with their status (online or offline)."""
+        return list(self._pages(f"orgs/{org}/actions/runner-groups/{group}/runners", "runners"))
 
     def hosted_runner(self, org: str, name: str) -> dict | None:
         return next((r for r in self._pages(f"orgs/{org}/actions/hosted-runners", "runners") if r["name"] == name), None)

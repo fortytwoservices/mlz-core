@@ -8,9 +8,9 @@
     python3 -m mlz explain  --repo <mlz-vending> <key>
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>] [--owner <email>] ...
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
-    python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
+    python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--core <owner>/<repo>] [--dry-run]
     python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
-                            [--billing-scope <scope>] [--yes]
+                            [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
@@ -103,6 +103,7 @@ def main() -> int:
     u.add_argument("repositories", nargs="+", metavar="owner/repo", help="the customer's GitHub repos to move")
     u.add_argument("--to", metavar="vX.Y.Z", help="the release to move to (default: the latest)")
     u.add_argument("--dry-run", action="store_true", help="show the change and the pull request's text; open nothing")
+    u.add_argument("--core", metavar="owner/repo", help="move the repos onto this copy of mlz-core, such as the organization's (default: the one each calls)")
     sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
@@ -112,6 +113,7 @@ def main() -> int:
     i.add_argument("--billing-scope", help="subscriptions: the billing scope vending makes subscriptions in, as billing_scope says")
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, move the subscriptions, or give the billing role, without asking")
+    i.add_argument("--app-key", type=Path, help="runners: the runner App's private key (.pem), put into the runners' vault; delete the file afterwards")
     args = parser.parse_args()
 
     if args.role == "schema":
@@ -129,14 +131,14 @@ def main() -> int:
                     raise ConfigError(f"install {args.step} needs --tenant <the customer's Entra tenant ID>.")
                 if args.step == "handover":
                     install.step_handover(install.Azure(args.tenant), args.settings, args.yes)
-                elif args.step == "runners":
-                    install.step_runners(GitHub(), install.Azure(args.tenant), args.settings)
                 else:
                     customer, _ = install.settings(args.settings)
                     # A root ID is unique only within its tenant: two customers may both be "mlz".
                     work = args.work or Path.home() / ".mlz" / "install" / args.tenant / customer["root_id"]
                     terraform = install.Terraform(work, args.tenant)
-                    if args.step == "bootstrap":
+                    if args.step == "runners":
+                        install.step_runners(GitHub(), install.Azure(args.tenant), args.settings, terraform=terraform, app_key=args.app_key, yes=args.yes)
+                    elif args.step == "bootstrap":
                         install.step_bootstrap(GitHub(), terraform, args.settings, args.yes)
                     elif args.step == "subscriptions":
                         if not args.billing_scope:
@@ -197,7 +199,7 @@ def main() -> int:
         github, failed = GitHub(), 0
         for repository in args.repositories:
             try:
-                upgrade.upgrade(github, repository, args.to, args.dry_run)
+                upgrade.upgrade(github, repository, args.to, args.dry_run, core=args.core)
             except ConfigError as error:
                 print(f"mlz upgrade: {repository}: {error}", file=sys.stderr)
                 failed += 1
