@@ -14,11 +14,12 @@ locals {
   bootstrap_group = "${local.management}/resourceGroups/${local.names.resource_group}"
   runners_subnet  = "${local.management_network_id}/subnets/${local.names.runners_subnet}"
   vault_zone      = "${local.connectivity}/resourceGroups/${local.names.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net"
-  vault_id        = "${local.bootstrap_group}/providers/Microsoft.KeyVault/vaults/${local.names.key_vault}"
-  app_key_secret  = "${local.vault_id}/secrets/github-runner-app-key" # mlz install runners writes it (install.APP_KEY_SECRET)
+  # The vault's and the runners' names are null with GitHub-hosted runners (tools/mlz/names.py), and nothing reads them.
+  vault_id       = local.self_hosted ? "${local.bootstrap_group}/providers/Microsoft.KeyVault/vaults/${local.names.key_vault}" : null
+  app_key_secret = local.self_hosted ? "${local.vault_id}/secrets/github-runner-app-key" : null # mlz install runners writes it (install.APP_KEY_SECRET)
 
   vault       = local.self_hosted && local.state_endpoint && data.azapi_resource.runners_subnet.exists && data.azapi_resource.vault_zone.exists
-  runner_pool = local.vault && local.runners.app_client_id != null && data.azapi_resource.app_key.exists
+  runner_pool = local.vault && local.runners.app_client_id != null && one(data.azapi_resource.app_key[*].exists) == true
 }
 
 data "azapi_resource" "runners_subnet" {
@@ -37,6 +38,8 @@ data "azapi_resource" "vault_zone" {
 
 # Its metadata only: reading a secret's value takes Key Vault's data plane, which nothing here touches.
 data "azapi_resource" "app_key" {
+  count = local.self_hosted ? 1 : 0
+
   type                   = "Microsoft.KeyVault/vaults/secrets@2026-02-01"
   resource_id            = local.app_key_secret
   ignore_not_found       = true

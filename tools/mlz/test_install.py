@@ -312,6 +312,8 @@ VAULT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.KeyVault/vaults
 RUNNERS_SUBNET = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/Microsoft.Network/virtualNetworks/vnet-acme-mgt-pd-nwe-01/subnets/snet-runners"
 APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEnotarealkey\n-----END RSA PRIVATE KEY-----\n"
 UPLOAD = "https://kv-acme-mlz-pd-nwe-01.vault.azure.net/secrets/github-runner-app-key?api-version=7.4"
+# GitHub's labels on one of the bootstrap's runners: its own three, and the one MLZ_RUNS_ON names.
+LABELS = [{"name": "self-hosted"}, {"name": "linux"}, {"name": "x64"}, {"name": "mlz"}]
 
 
 def refused(code, message, status=403):
@@ -1010,7 +1012,7 @@ class InstallTest(unittest.TestCase):
     def test_the_group_the_key_the_runners_and_then_the_repos(self):
         key = self.self_hosted()
         github = RunnersGitHub()
-        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online"}]
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online", "labels": LABELS}]
         # The vault's firewall refuses this address first, then Key Vault has not seen the new role yet.
         azure = SelfHostedAzure(refusals=[
             refused("ForbiddenByFirewall", "Client address is not authorized and caller is not a trusted service.\r\nClient address: 203.0.113.7\r\nCaller: x"),
@@ -1156,11 +1158,15 @@ class InstallTest(unittest.TestCase):
     def test_the_repos_wait_until_a_runner_is_online_and_the_state_has_its_endpoint(self):
         self.self_hosted()
         github = RunnersGitHub()
-        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "offline"}]
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "offline", "labels": LABELS}]
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(github.values, {})
         self.assertTrue(any("none is online in the runner group mlz yet" in line for line in self.printed))
-        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online"}]
+        # Online, but without the label the repos' jobs ask for: it could take none of them.
+        github.online = [{"name": "someone-else", "status": "online", "labels": LABELS[:3]}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.values, {})
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online", "labels": LABELS}]
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True, endpoint=False))
         self.assertEqual(github.values, {})
         self.assertTrue(any("the state account has no private endpoint yet" in line for line in self.printed))

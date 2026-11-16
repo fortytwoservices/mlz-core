@@ -61,6 +61,12 @@ class ApartTest(unittest.TestCase):
             "runners": "vmss-acme-mlz-pd-nwe-01", "runners_identity": "id-acme-mlz-runners-pd-nwe-01", "runners_nsg": "nsg-acme-mlz-runners-pd-nwe-01",
             "runners_subnet": "snet-runners"})
 
+    def test_github_hosted_runners_have_no_vault_or_scale_set_to_name(self):
+        # A template whose endpoints carry no {purpose} is fine without the vault's endpoint beside the state account's.
+        named = names.bootstrap(settings(templates={"private_endpoint": FLAT}), "norwayeast", self_hosted=False)
+        self.assertEqual(named["state_endpoint"], "pep-acme-mlz-pd-nwe-01")
+        self.assertEqual([named[key] for key in ("key_vault", "vault_endpoint", "vault_endpoint_nic", "runners", "runners_identity", "runners_nsg")], [None] * 6)
+
     def test_a_vault_named_in_bootstrap_yaml_is_checked_as_azure_would(self):
         with self.assertRaisesRegex(ConfigError, "names.key_vault: key_vault name kv_runners has characters Azure does not allow"):
             names.bootstrap_explicit({"key_vault": "kv_runners"})

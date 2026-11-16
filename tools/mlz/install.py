@@ -128,7 +128,8 @@ def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
     bootstrap.yaml's names: for its resource group or state account."""
     try:
         settings = naming.settings(customer, customer["root_id"])
-        return names.bootstrap(settings, customer["primary_region"], names.bootstrap_explicit(bootstrap.get("names")))
+        return names.bootstrap(settings, customer["primary_region"], names.bootstrap_explicit(bootstrap.get("names")),
+                               self_hosted=runner_settings(bootstrap)["kind"] == "self-hosted")
     except KeyError as error:
         raise ConfigError(f"customer.yaml: {error} is required.") from None
     except ConfigError as error:
@@ -771,7 +772,9 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         return
     apply_bootstrap(github, terraform, folder, yes, out)
 
-    online = [runner for runner in github.group_runners(org, group["id"]) if runner.get("status") == "online"]
+    # Online, and taking the jobs MLZ_RUNS_ON sends: the label mlz, which every one of the bootstrap's runners has.
+    online = [runner for runner in github.group_runners(org, group["id"])
+              if runner.get("status") == "online" and RUNNER in {label.get("name") for label in runner.get("labels") or []}]
     if not online:
         out(f"runners: {runners['instances']} {named['runners']} instance(s) deployed; none is online in the runner group {RUNNER} yet "
             "(each registers within minutes of booting). Run this step again to move the repos onto them.")

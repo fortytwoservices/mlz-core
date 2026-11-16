@@ -125,9 +125,11 @@ def hub_explicit(where: str, given: object, problems: list[str]) -> dict:
     return checked
 
 
-def bootstrap(naming: Naming, primary: str, explicit: dict | None = None) -> dict:
+def bootstrap(naming: Naming, primary: str, explicit: dict | None = None, self_hosted: bool = True) -> dict:
     """The bootstrap's own, in the primary region, and the names of the platform's it points at: the networks'
-    groups it makes, and management's network and the DNS zones' group, where the state account's endpoint goes."""
+    groups it makes, and management's network and the DNS zones' group, where the state account's endpoint goes.
+    The self-hosted runners' and their vault's only for them: with GitHub-hosted runners there are none, so those
+    names are None, and no template is held to them."""
     explicit = explicit or {}
 
     def own(key: str, kind: str, purpose: str | None) -> str:
@@ -138,12 +140,22 @@ def bootstrap(naming: Naming, primary: str, explicit: dict | None = None) -> dic
     # runners' identity is in the same group, and so are the state account's and the vault's endpoints.
     identities = apart("the pipeline identities", {f"{role}-{kind}": platform_name(naming, "bootstrap", "user_assigned_identity", primary, f"{short}{kind}")
                                                    for role, short in ROLES.items() for kind in ("plan", "apply")})
-    runners_identity = platform_name(naming, "bootstrap", "user_assigned_identity", primary, "runners")
-    apart("the bootstrap's identities", {**identities, "the runners' identity": runners_identity})
-    endpoints = apart("the bootstrap's private endpoints", {"the state account's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "state"),
-                                                           "the vault's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "vault")})
-    nics = apart("the bootstrap's network interfaces", {"the state account's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "state"),
-                                                        "the vault's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "vault")})
+    endpoints = {"the state account's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "state")}
+    nics = {"the state account's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "state")}
+    runners = dict.fromkeys(("key_vault", "vault_endpoint", "vault_endpoint_nic", "runners", "runners_identity", "runners_nsg"))
+    if self_hosted:
+        runners_identity = platform_name(naming, "bootstrap", "user_assigned_identity", primary, "runners")
+        apart("the bootstrap's identities", {**identities, "the runners' identity": runners_identity})
+        endpoints = apart("the bootstrap's private endpoints", {**endpoints, "the vault's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "vault")})
+        nics = apart("the bootstrap's network interfaces", {**nics, "the vault's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "vault")})
+        runners = {
+            "key_vault": own("key_vault", "key_vault", None),
+            "vault_endpoint": endpoints["the vault's endpoint"],
+            "vault_endpoint_nic": nics["the vault's endpoint"],
+            "runners": platform_name(naming, "bootstrap", "virtual_machine_scale_set", primary),
+            "runners_identity": runners_identity,
+            "runners_nsg": platform_name(naming, "bootstrap", "network_security_group", primary, "runners"),
+        }
     return {
         "resource_group": own("resource_group", "resource_group", None),
         "storage_account": own("storage_account", "storage_account", "state"),
@@ -156,12 +168,7 @@ def bootstrap(naming: Naming, primary: str, explicit: dict | None = None) -> dic
         "dns_resource_group": dns_resource_group(naming, primary),
         # The self-hosted runners, in management's network, and the vault their GitHub App's key is in, with its
         # private endpoint beside the state account's (docs/bootstrap.md, private runners).
-        "key_vault": own("key_vault", "key_vault", None),
-        "vault_endpoint": endpoints["the vault's endpoint"],
-        "vault_endpoint_nic": nics["the vault's endpoint"],
-        "runners": platform_name(naming, "bootstrap", "virtual_machine_scale_set", primary),
-        "runners_identity": runners_identity,
-        "runners_nsg": platform_name(naming, "bootstrap", "network_security_group", primary, "runners"),
+        **runners,
         "runners_subnet": network(naming, "management", primary, [])["subnet"] % "runners",
     }
 
