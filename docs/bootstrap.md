@@ -20,6 +20,7 @@ github:
     size: Standard_D2ds_v6         # an Azure VM size (the default); for github-hosted, GitHub's: 2-core, 4-core
     instances: 1                   # self-hosted: how many runners (at most 59), each billed while it exists
     app_client_id: Iv23liExample   # self-hosted: the client ID of the customer's runner App
+    # image: dev                   # Fortytwo's own tests only: its runner image's dev plan, billed nothing
 
 state_operators:                   # people who may run Terraform by hand, by Entra object ID
   platform-lead: 00000000-0000-0000-0000-000000000010
@@ -282,6 +283,12 @@ not yet moved. Changing a runner group needs an owner's `admin:org` scope: anyon
 
 **Cost:** each instance is billed for its compute and for Fortytwo's hourly image fee from the moment it exists,
 whether or not a job runs; `instances: 0` removes them all and stops both.
+
+**Fortytwo's own tests:** `runners.image: dev` runs the dev plan of Fortytwo's Azure DevOps runner offer
+(`self_hosted_runner_ado`, `ubuntu-latest-dev-gen2`) instead, which carries no image fee, so a test tenant such as
+TCAF runs the whole chain end to end without Fortytwo billing itself. Neither image carries a runner: the
+registration script installs GitHub's. Which subscriptions may use the dev plan is up to its audience in Partner
+Center, not to mlz-core: elsewhere the step stops at its terms, saying the image is for Fortytwo's own tenants.
 
 #### GitHub-hosted runners: `kind: github-hosted`
 

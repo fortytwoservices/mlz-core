@@ -142,6 +142,7 @@ module "runners" {
   subnet_resource_id          = local.runners_subnet
   sku_name                    = local.runners.size
   instances                   = local.runners.instances
+  image                       = local.runners.image # Fortytwo's runner image, or its dev plan for Fortytwo's own tests
   user_assigned_identity_name = local.names.runners_identity
   network_security_group_name = local.names.runners_nsg
   app_key_secret_resource_id  = local.app_key_secret

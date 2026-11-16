@@ -220,6 +220,8 @@ def bootstrap() -> dict:
             "instances": {"description": "Self-hosted: how many runners. Each is billed for its compute and Fortytwo's image from the moment it exists; 0 removes them.",
                           "type": "integer", "minimum": 0, "maximum": install.MAXIMUM_INSTANCES, "default": install.RUNNER_INSTANCES},
             "app_client_id": text("Self-hosted: the client ID of the customer's runner App, which has only Organization > Self-hosted runners: write.", pattern="^[A-Za-z0-9.]+$"),
+            "image": text("Self-hosted: fortytwo, Fortytwo's runner image, billed per instance and hour (the default); or dev, its dev plan, for Fortytwo's own tests in its own tenants.",
+                          enum=list(install.RUNNER_IMAGES), default="fortytwo"),
         }, "Where the pipelines' Azure jobs run, for mlz install runners (docs/bootstrap.md, private runners).")),
     }
     properties = {

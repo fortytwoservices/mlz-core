@@ -99,7 +99,7 @@ BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
 GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runners")
 # bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
 # a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
-RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id")
+RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
 RUNNER_KINDS = {"self-hosted": "Standard_D2ds_v6", "github-hosted": "2-core"}  # each kind's default size
 RUNNER_INSTANCES = 1
 # As many as snet-runners holds: one address each, of a /26 less the five Azure keeps (tools/mlz/platform.py).
@@ -161,12 +161,16 @@ def runner_settings(bootstrap: dict) -> dict:
     client_id = given.get("app_client_id")
     if client_id is not None and not (isinstance(client_id, str) and re.fullmatch(r"[A-Za-z0-9.]+", client_id)):
         problems.append(f"bootstrap.yaml: github.runners.app_client_id is the runner App's client ID (letters, digits and dots), not {client_id!r}.")
-    for key in ("instances", "app_client_id"):
+    image = given.get("image", "fortytwo")
+    if not isinstance(image, str) or image not in RUNNER_IMAGES:
+        problems.append(f"bootstrap.yaml: github.runners.image is fortytwo or dev (Fortytwo's own tests), not {image!r}.")
+        image = "fortytwo"
+    for key in ("instances", "app_client_id", "image"):
         if kind == "github-hosted" and key in given:
             problems.append(f"bootstrap.yaml: github.runners.{key} is for self-hosted runners; GitHub's own scale and register themselves.")
     if problems:
         raise ConfigError("\n  ".join(problems))
-    return {"kind": kind, "size": size, "instances": instances, "app_client_id": client_id}
+    return {"kind": kind, "size": size, "instances": instances, "app_client_id": client_id, "image": image}
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:
@@ -459,7 +463,8 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
     names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"
     names_file.parent.mkdir(parents=True, exist_ok=True)
     names_file.write_text(json.dumps(bootstrap_names(customer, bootstrap), indent=2) + "\n")
-    runners_file.write_text(json.dumps(runner_settings(bootstrap), indent=2) + "\n")
+    runners = runner_settings(bootstrap)
+    runners_file.write_text(json.dumps({**runners, "image": runner_image(runners["image"])}, indent=2) + "\n")
     terraform.prepare()
     backend, pending = terraform.work / "backend.hcl", terraform.work / "backend.hcl.pending"
     override = terraform.root / "backend_override.tf"
@@ -615,7 +620,21 @@ APP_KEY_SECRET = "github-runner-app-key"
 VAULT_API = "2024-11-01"
 SECRETS_OFFICER = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"  # Key Vault Secrets Officer, held only for the key's upload
 # Fortytwo's runner image's plan, whose terms the management subscription accepts once.
-IMAGE_PLAN = {"publisher": "amestofortytwoas1653635920536", "offer": "self_hosted_runner_github", "plan": "ubuntu-latest-gen2"}
+# Fortytwo's runner images, by github.runners.image: the GitHub offer's plan, which Microsoft bills to the subscription
+# (the default); or the dev plan of the Azure DevOps offer, the one Fortytwo's own tests run on, billed nothing.
+# Neither image carries a runner: the registration script installs GitHub's. Which subscriptions may use the dev
+# plan is up to its audience in Partner Center, not to mlz-core.
+FORTYTWO = "amestofortytwoas1653635920536"
+RUNNER_IMAGES = {
+    "fortytwo": {"publisher": FORTYTWO, "offer": "self_hosted_runner_github", "sku": "ubuntu-latest-gen2"},
+    "dev": {"publisher": FORTYTWO, "offer": "self_hosted_runner_ado", "sku": "ubuntu-latest-dev-gen2"},
+}
+
+
+def runner_image(key: str) -> dict:
+    """The image the module takes: the plan is the SKU's, as Fortytwo's offers name them."""
+    image = RUNNER_IMAGES[key]
+    return {**image, "plan": {"name": image["sku"], "product": image["offer"], "publisher": image["publisher"]}}
 
 
 def gh_fields(body: dict, prefix: str = "") -> list[str]:
@@ -779,7 +798,7 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         raise ConfigError(f"the runner App's key is not in {named['key_vault']} yet: run this step with --app-key <the .pem file from the App's "
                           "settings page>, as the person who downloaded it (docs/bootstrap.md, private runners).")
 
-    if not runner_prerequisites(azure, management, out):
+    if not runner_prerequisites(azure, management, runners["image"], out):
         return
     apply_bootstrap(github, terraform, folder, yes, out)
 
@@ -917,15 +936,22 @@ def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callab
         "App's settings page makes a new key whenever one is needed.")
 
 
-def runner_prerequisites(azure, management: str, out: Callable[[str], None]) -> bool:
+def runner_prerequisites(azure, management: str, image: str, out: Callable[[str], None]) -> bool:
     """What Fortytwo's image needs from the management subscription, once: its plan's terms accepted, and
     encryption at host registered. Registration can take a while: False until it has finished."""
-    terms = (f"{management}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/{IMAGE_PLAN['publisher']}"
-             f"/offers/{IMAGE_PLAN['offer']}/plans/{IMAGE_PLAN['plan']}/agreements/current?api-version=2021-01-01")
-    agreement = azure.request("GET", terms)
+    plan = RUNNER_IMAGES[image]
+    terms = (f"{management}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/{plan['publisher']}"
+             f"/offers/{plan['offer']}/plans/{plan['sku']}/agreements/current?api-version=2021-01-01")
+    try:
+        agreement = azure.request("GET", terms)
+    except urllib.error.HTTPError as error:
+        if image == "dev" and error.code in (400, 403, 404):
+            raise ConfigError(f"the management subscription may not use Fortytwo's dev image ({plan['offer']}, {plan['sku']}; HTTP {error.code}): "
+                              "it is for Fortytwo's own tenants. Leave github.runners.image out for Fortytwo's runner image.") from None
+        raise
     if not (agreement.get("properties") or {}).get("accepted"):
         azure.request("PUT", terms, {**agreement, "properties": {**(agreement.get("properties") or {}), "accepted": True}})
-        out(f"runners: the terms of Fortytwo's runner image ({IMAGE_PLAN['plan']}) are accepted for the management subscription")
+        out(f"runners: the terms of Fortytwo's runner image ({plan['offer']}, {plan['sku']}) are accepted for the management subscription")
     feature = f"{management}/providers/Microsoft.Features/providers/Microsoft.Compute/features/EncryptionAtHost"
     state = (azure.request("GET", f"{feature}?api-version=2021-07-01").get("properties") or {}).get("state")
     if state != "Registered":

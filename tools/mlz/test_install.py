@@ -696,7 +696,9 @@ class InstallTest(unittest.TestCase):
         # So do the runner settings, checked and with their defaults: the root never reads them raw.
         self.assertIn(f"runners_file={self.work / 'runners.json'}", plan)
         self.assertEqual(json.loads((self.work / "runners.json").read_text()),
-                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None})
+                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None, "image": {
+                             "publisher": "amestofortytwoas1653635920536", "offer": "self_hosted_runner_github", "sku": "ubuntu-latest-gen2",
+                             "plan": {"name": "ubuntu-latest-gen2", "product": "self_hosted_runner_github", "publisher": "amestofortytwoas1653635920536"}}})
         self.assertIn("bootstrap: all 3 subjects match what GitHub issues", self.printed)
 
     def test_a_state_that_will_not_move_stays_local_and_the_next_run_moves_it(self):
@@ -1026,9 +1028,10 @@ class InstallTest(unittest.TestCase):
         return apply, waits
 
     def test_the_runner_settings_default_to_self_hosted_on_fortytwo_s_image_size(self):
-        self.assertEqual(install.runner_settings({"github": {}}), {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None})
+        self.assertEqual(install.runner_settings({"github": {}}),
+                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None, "image": "fortytwo"})
         self.assertEqual(install.runner_settings({"github": {"runners": {"kind": "github-hosted"}}}),
-                         {"kind": "github-hosted", "size": "2-core", "instances": 1, "app_client_id": None})
+                         {"kind": "github-hosted", "size": "2-core", "instances": 1, "app_client_id": None, "image": "fortytwo"})
 
     def test_runner_settings_that_would_reach_a_command_or_a_script_are_checked(self):
         for given, problem in (({"kind": "ephemeral"}, "kind is self-hosted or github-hosted, not 'ephemeral'"),
@@ -1038,6 +1041,8 @@ class InstallTest(unittest.TestCase):
                                ({"instances": True}, "instances is a whole number"),
                                ({"app_client_id": "Iv23\"; x"}, "app_client_id is the runner App's client ID"),
                                ({"kind": "github-hosted", "instances": 2}, "instances is for self-hosted runners"),
+                               ({"image": "ubuntu"}, "image is fortytwo or dev \\(Fortytwo's own tests\\), not 'ubuntu'"),
+                               ({"kind": "github-hosted", "image": "dev"}, "image is for self-hosted runners"),
                                ({"labels": ["x"]}, "github.runners.labels is not a setting")):
             with self.assertRaisesRegex(ConfigError, problem):
                 install.runner_settings({"github": {"runners": given}})
@@ -1140,6 +1145,30 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml "
                                                  f"at {install.release()}, which the runner group cannot admit: only acme/mlz-core's"):
             self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+
+    def test_fortytwo_s_dev_image_for_its_own_tests(self):
+        self.self_hosted("    app_client_id: Iv23liRunners\n    image: dev\n")
+        azure = SelfHostedAzure(secret=True)
+        self.run_self_hosted(RunnersGitHub(), azure)
+        terms = [url for method, url, _ in azure.calls if url.endswith("/agreements/current")]
+        self.assertEqual(terms[0], f"/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.MarketplaceOrdering/offerTypes/"
+                                   "virtualmachine/publishers/amestofortytwoas1653635920536/offers/self_hosted_runner_ado/plans/"
+                                   "ubuntu-latest-dev-gen2/agreements/current")
+        self.assertEqual(install.runner_image("dev")["plan"], {"name": "ubuntu-latest-dev-gen2", "product": "self_hosted_runner_ado",
+                                                                "publisher": "amestofortytwoas1653635920536"})
+
+    def test_a_subscription_the_dev_image_is_not_for_is_told_so(self):
+        self.self_hosted("    app_client_id: Iv23liRunners\n    image: dev\n")
+
+        class Refusing(SelfHostedAzure):
+            def request(self, method, url, body=None):
+                if url.split("?")[0].endswith("/agreements/current"):
+                    raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b"{}"))
+                return super().request(method, url, body)
+
+        with self.assertRaisesRegex(ConfigError, "the management subscription may not use Fortytwo's dev image \\(self_hosted_runner_ado, "
+                                                 "ubuntu-latest-dev-gen2; HTTP 404\\): it is for Fortytwo's own tenants"):
+            self.run_self_hosted(RunnersGitHub(), Refusing(secret=True))
 
     def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
         key = self.self_hosted()
