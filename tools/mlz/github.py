@@ -61,7 +61,22 @@ class GitHub:
         return self._api(f"orgs/{owner}/repos", "POST", {"name": name, "private": True, "auto_init": first_commit})
 
     def tag_exists(self, repo: str, tag: str) -> bool:
-        return self._api(f"repos/{repo}/git/ref/tags/{tag}", missing_ok=True) is not None
+        try:
+            return self._api(f"repos/{repo}/git/ref/tags/{tag}", missing_ok=True) is not None
+        except ConfigError as error:
+            if "HTTP 409" in str(error):  # an empty repo: GitHub's Git database answers "Git Repository is empty"
+                return False
+            raise
+
+    def compare(self, repo: str, base: str, head: str) -> str | None:
+        """How head stands to base (ahead, behind, identical or diverged), or None when either is missing."""
+        try:
+            found = self._api(f"repos/{repo}/compare/{base}...{head}", missing_ok=True)
+        except ConfigError as error:
+            if "HTTP 409" in str(error):
+                return None
+            raise
+        return None if found is None else found.get("status")
 
     def actions_access(self, repo: str) -> str | None:
         """Which other repos may call this one's reusable workflows: none, organization or enterprise."""

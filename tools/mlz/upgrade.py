@@ -163,13 +163,17 @@ def admit_release(github, org: str, core: str, target: str, out: Callable[[str],
             f"upgrade's jobs wait for a runner: Settings, Actions, Runner groups, {RUNNER_GROUP}, add {workflow}.")
 
 
-def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print) -> str | None:
-    """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened."""
+def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print,
+            core: str | None = None) -> str | None:
+    """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened. core moves the
+    repo onto another copy of mlz-core, such as the organization's (tools/mlz/mirror.py); by default it stays on
+    the one it calls."""
     base = github.default_branch(repo)
     current_text, _ = github.file(repo, WORKFLOW, base)
     if current_text is None:
         raise ConfigError(f"{repo} has no {WORKFLOW} on {base}: is it an MLZ repo?")
-    core, current = pin_of(current_text)
+    called, current = pin_of(current_text)
+    core = core or called
     role = role_of(current_text)
     # A repo that calls the organization's copy of mlz-core (tools/mlz/mirror.py) moves to one of mlz-core's own
     # releases, which the copy gets before the pull request; the copy has no releases of its own.
@@ -180,9 +184,13 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     target = target or max(releases, key=version)
     if target not in releases:
         raise ConfigError(f"{target} is not a release of {source}; releases: {', '.join(sorted(releases, key=version))}.")
-    if current == target:
+    if current == target and called == core:
         out(f"{repo}: already on {target}")
         return None
+    if core != mirror.UPSTREAM and version(target) < version(mirror.FIRST_RELEASE):
+        raise ConfigError(f"{target} cannot run from {core}: releases before {mirror.FIRST_RELEASE} read mlz-core's code without a token, "
+                          f"so not from a private copy. Choose {mirror.FIRST_RELEASE} or later, or move the repo back onto mlz-core "
+                          f"itself with --core {mirror.UPSTREAM}.")
     # Each file mlz-core owns: the target's version. Where the target has none, the repo's copy is removed
     # only if the release it leaves put it there; a file no release of mlz-core gave is the customer's own.
     changes, before = {}, {}

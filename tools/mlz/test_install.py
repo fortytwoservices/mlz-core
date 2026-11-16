@@ -71,7 +71,7 @@ class FakeGitHub:
             self.repos[CORE_COPY] = {"private": True, "default_branch": "releases"}
             self.tags.add((CORE_COPY, install.release()))
             self.access[CORE_COPY] = "organization"
-            self.existing_rulesets |= {(CORE_COPY, "releases"), (CORE_COPY, "releases-branch")}
+            self.existing_rulesets |= {(CORE_COPY, "releases"), (CORE_COPY, "releases-branch"), (CORE_COPY, "no-release-branches")}
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
@@ -90,6 +90,10 @@ class FakeGitHub:
 
     def tag_exists(self, repo, tag):
         return (repo, tag) in self.tags
+
+    def compare(self, repo, base, head):
+        # The copy's branch holds each release it has a tag for, here.
+        return "identical" if (repo, base) in self.tags else None
 
     def actions_access(self, repo):
         return self.access.get(repo)
@@ -568,7 +572,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.created[0], "acme/mlz-core (empty)")  # before the repos whose first runs call it
         self.assertEqual(pushed, [("acme/mlz-core", install.release())])
         self.assertEqual(github.access["acme/mlz-core"], "organization")
-        self.assertEqual([name for repo, name in github.rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch"])
+        self.assertEqual([name for repo, name in github.rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch", "no-release-branches"])
         workflow = next(files for repo, _, _, files, _ in github.commits if repo == "acme/mlz-platform")[".github/workflows/mlz.yml"]
         self.assertIn(f"    uses: acme/mlz-core/.github/workflows/role.yml@{install.release()}\n", workflow)
         self.assertNotIn("fortytwoservices/mlz-core", workflow)
@@ -1126,6 +1130,7 @@ class InstallTest(unittest.TestCase):
     def test_the_group_admits_the_releases_the_repos_pin(self):
         self.self_hosted()
         github = RunnersGitHub(pins={"acme/mlz-governance": "v0.8.0", "acme/mlz-platform": "v0.8.0"})
+        github.tags.add((CORE_COPY, "v0.8.0"))
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(dict(github.calls[:1])["group"]["selected_workflows"],
                          sorted([mirror.workflow(CORE_COPY, "v0.8.0"), mirror.workflow(CORE_COPY, install.release())]))
@@ -1138,12 +1143,20 @@ class InstallTest(unittest.TestCase):
             self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(github.calls, [])
 
+    def test_a_release_the_copy_has_no_tag_for_stops_the_step(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-vending": "v0.8.0"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls acme/mlz-core's role.yml at v0.8.0, which "
+                                                 "acme/mlz-core has no tag for: python3 -m mlz upgrade acme/mlz-vending --to v0.8.0 --core acme/mlz-core"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+
     def test_a_repo_still_calling_mlz_core_s_own_workflow_stops_the_step(self):
         # A runner group admits no workflow of another organization's: only the organization's copy will do.
         self.self_hosted()
         github = RunnersGitHub(pins={"acme/mlz-platform": f"fortytwoservices/mlz-core@{install.release()}"})
         with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml "
-                                                 f"at {install.release()}, which the runner group cannot admit: only acme/mlz-core's"):
+                                                 f"at {install.release()}, which the runner group cannot admit: only acme/mlz-core's.*"
+                                                 "python3 -m mlz upgrade acme/mlz-platform --core acme/mlz-core moves it onto the copy"):
             self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
 
     def test_fortytwo_s_dev_image_for_its_own_tests(self):

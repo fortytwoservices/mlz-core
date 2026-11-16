@@ -268,17 +268,37 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
 
     def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
-        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.1.6"]}
-        github = FakeGitHub(caller("governance", "v0.1.6", "acme/mlz-core"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, group=group)
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.9.0"]}
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": notes("v0.9.0"), "v0.9.1": notes("v0.9.1")}, group=group)
         pushed = []
         with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
             url, printed = self.run_upgrade(github)
-        self.assertEqual(pushed, [("acme/mlz-core", "v0.1.7")])  # the copy gets the release before the pull request
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.1")])  # the copy gets the release before the pull request
         self.assertEqual(github.writes[0], ("runner group", "acme", 7, {"restricted_to_workflows": True, "selected_workflows": [
-            "acme/mlz-core/.github/workflows/role.yml@v0.1.6", "acme/mlz-core/.github/workflows/role.yml@v0.1.7"]}))
+            "acme/mlz-core/.github/workflows/role.yml@v0.9.0", "acme/mlz-core/.github/workflows/role.yml@v0.9.1"]}))
         files = next(write for write in github.writes if write[0] == "files")[4]
-        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.1.7"))  # mlz-core's starter, calling the copy
-        self.assertIn("something new in v0.1.7", github.writes[-1][5])  # mlz-core's release notes
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))  # mlz-core's starter, calling the copy
+        self.assertIn("something new in v0.9.1", github.writes[-1][5])  # mlz-core's release notes
+
+    def test_core_moves_a_repo_onto_the_organization_s_copy_at_the_same_release(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": notes("v0.9.0")})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url = upgrade(github, "acme/mlz-governance", None, False, lambda line: None, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.0"))
+
+    def test_a_repo_on_the_copy_never_moves_back_past_the_first_release_that_reads_it(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.8.1": "", "v0.9.0": ""})
+        with self.assertRaisesRegex(ConfigError, "v0.8.1 cannot run from acme/mlz-core: releases before v0.9.0 read mlz-core's code without a token.*"
+                                                 "--core fortytwoservices/mlz-core"):
+            self.run_upgrade(github, target="v0.8.1")
+        self.assertEqual(github.writes, [])  # nothing pushed, admitted or opened
+        # Back onto mlz-core itself, it may.
+        url = upgrade(github, "acme/mlz-governance", "v0.8.1", False, lambda line: None, core="fortytwoservices/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
 
     def test_refuses_a_target_that_is_not_a_release(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""})

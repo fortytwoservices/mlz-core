@@ -25,6 +25,9 @@ from .merge import ConfigError
 UPSTREAM = "fortytwoservices/mlz-core"
 NAME = "mlz-core"  # bootstrap.yaml's github.repositories.core, unless set
 BRANCH = "releases"
+# The first release whose role.yml reads a private copy (an MLZ App token for every checkout of its code): an older
+# one cannot run from the copy, so a repo on the copy never moves back past it.
+FIRST_RELEASE = "v0.9.0"
 CORE = Path(__file__).resolve().parents[2]  # this mlz-core checkout, which the releases are pushed from
 RULESETS = [
     {"name": "releases", "target": "tag", "enforcement": "active",
@@ -33,6 +36,11 @@ RULESETS = [
     {"name": "releases-branch", "target": "branch", "enforcement": "active",
      "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
      "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}]},
+    # A branch named like a release would answer @vX.Y.Z as well as the tag, outside the tags' protection, in what
+    # the runner group admits: none may be made.
+    {"name": "no-release-branches", "target": "branch", "enforcement": "active",
+     "conditions": {"ref_name": {"include": ["refs/heads/v*"], "exclude": []}},
+     "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}]},
 ]
 
 
@@ -59,18 +67,29 @@ def ensure(github, core: str, release: str, out: Callable[[str], None] = print, 
 
 
 def push_release(github, core: str, release: str, out: Callable[[str], None] = print, run=subprocess.run) -> None:
-    """The release's tag into the copy, and its branch forward to the release when that is newer: from this
-    checkout, after fetching the tag from mlz-core itself, since the checkout may be on another commit."""
-    if github.tag_exists(core, release):
+    """The release's tag into the copy, and its branch at the release or a newer one: from this checkout, after
+    fetching the tag from mlz-core itself, since the checkout may be on another commit. Each is checked on every
+    run, so a run after a failed one finishes what it left."""
+    has_tag = github.tag_exists(core, release)
+    if has_tag and github.compare(core, release, BRANCH) in ("identical", "ahead"):
         out(f"{core}: has {release}")
         return
     git = ["git", "-C", str(CORE), "-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential"]
     url = f"https://github.com/{core}.git"
-    for step, arguments in (("fetch", ["fetch", "--quiet", f"https://github.com/{UPSTREAM}.git", f"refs/tags/{release}:refs/tags/{release}"]),
-                            ("push", ["push", "--quiet", url, f"refs/tags/{release}:refs/tags/{release}"])):
+
+    def git_run(step: str, *arguments: str, where: str) -> None:
         done = run([*git, *arguments], capture_output=True, text=True)
         if done.returncode:
-            raise ConfigError(f"git {step} of {release} {'from ' + UPSTREAM if step == 'fetch' else 'into ' + core} failed: {done.stderr.strip()}")
-    # Forward only: a copy that holds a newer release already keeps its branch there.
-    moved = run([*git, "push", "--quiet", url, f"refs/tags/{release}^{{commit}}:refs/heads/{BRANCH}"], capture_output=True, text=True)
-    out(f"{core}: {release} pushed" + ("" if moved.returncode == 0 else f", its branch {BRANCH} left at a newer release"))
+            raise ConfigError(f"git {step} of {release} {where} failed: {done.stderr.strip()}")
+
+    git_run("fetch", "fetch", "--quiet", f"https://github.com/{UPSTREAM}.git", f"refs/tags/{release}:refs/tags/{release}", where=f"from {UPSTREAM}")
+    if not has_tag:
+        git_run("push", "push", "--quiet", url, f"refs/tags/{release}:refs/tags/{release}", where=f"into {core}")
+    # The branch moves forward only: one at a newer release already stays there.
+    state = github.compare(core, release, BRANCH)
+    if state == "diverged":
+        raise ConfigError(f"{core}'s branch {BRANCH} has commits that are not mlz-core's: it should only ever hold mlz-core's releases. "
+                          f"Point it at mlz-core's newest release by hand, then run this again.")
+    if state not in ("identical", "ahead"):  # behind, or not there yet
+        git_run("push", "push", "--quiet", url, f"refs/tags/{release}^{{commit}}:refs/heads/{BRANCH}", where=f"onto {core}'s branch {BRANCH}")
+    out(f"{core}: {release} pushed")

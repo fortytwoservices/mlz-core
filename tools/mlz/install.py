@@ -834,7 +834,12 @@ def pinned_releases(github, repos: dict[str, str], core: str) -> set[str]:
             continue
         if called != core or version(ref) is None:
             problems.append(f"{repo}: its {WORKFLOW} calls {called}'s role.yml at {ref}, which the runner group cannot admit: only "
-                            f"{core}'s, the organization's own copy of mlz-core, at a release. python3 -m mlz upgrade {repo} moves it onto one.")
+                            f"{core}'s, the organization's own copy of mlz-core, at a release. python3 -m mlz upgrade {repo} --core {core} "
+                            "moves it onto the copy.")
+            continue
+        if not github.tag_exists(core, ref):
+            problems.append(f"{repo}: its {WORKFLOW} calls {core}'s role.yml at {ref}, which {core} has no tag for: "
+                            f"python3 -m mlz upgrade {repo} --to {ref} --core {core} pushes it there.")
             continue
         found.add(ref)
     if problems:
