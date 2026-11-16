@@ -16,7 +16,8 @@ jobs:
 
 The copy is private: every job reads its code as the MLZ App. The `az-tf-mlz-*` modules mlz-core uses are
 public, so a customer's repo needs no Fortytwo credential to run them. A repo set up before the copy calls
-`fortytwoservices/mlz-core` itself, which is public, until an upgrade moves it. The secret is passed by name,
+`fortytwoservices/mlz-core` itself, which is public, until `mlz upgrade <repo> --core <org>/mlz-core` moves it onto
+the copy (at `v0.9.0` or later: older releases read the code without a token). The secret is passed by name,
 the one the workflow takes.
 
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
@@ -41,8 +42,8 @@ checkout:
 PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to v0.1.8
 ```
 
-A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by `mlz install repos`) moves to
-mlz-core's own release: the command first pushes that release into the copy, from mlz-core itself, and the
+A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by `mlz install repos`), or that
+`--core acme/mlz-core` moves onto it, moves to mlz-core's own release: the command first pushes that release into the copy, from mlz-core itself, and the
 pull request's workflow calls the copy at it. The release notes and the starters are mlz-core's. With
 self-hosted runners it then lets the runner group run that release's `role.yml` too.
 

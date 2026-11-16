@@ -8,7 +8,7 @@
     python3 -m mlz explain  --repo <mlz-vending> <key>
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>] [--owner <email>] ...
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
-    python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--dry-run]
+    python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--core <owner>/<repo>] [--dry-run]
     python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
                             [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
@@ -103,6 +103,7 @@ def main() -> int:
     u.add_argument("repositories", nargs="+", metavar="owner/repo", help="the customer's GitHub repos to move")
     u.add_argument("--to", metavar="vX.Y.Z", help="the release to move to (default: the latest)")
     u.add_argument("--dry-run", action="store_true", help="show the change and the pull request's text; open nothing")
+    u.add_argument("--core", metavar="owner/repo", help="move the repos onto this copy of mlz-core, such as the organization's (default: the one each calls)")
     sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
@@ -198,7 +199,7 @@ def main() -> int:
         github, failed = GitHub(), 0
         for repository in args.repositories:
             try:
-                upgrade.upgrade(github, repository, args.to, args.dry_run)
+                upgrade.upgrade(github, repository, args.to, args.dry_run, core=args.core)
             except ConfigError as error:
                 print(f"mlz upgrade: {repository}: {error}", file=sys.stderr)
                 failed += 1
