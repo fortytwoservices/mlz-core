@@ -64,6 +64,12 @@ repo's reviewer, so the three repos can move on different days, platform last. T
 engineer's own GitHub login, which needs write access to the repos and the `workflow` scope
 (`gh auth refresh -h github.com -s workflow`), since the pull request changes a workflow file.
 
+The copy of mlz-core gets no team: only the organization's owners, and whoever made it, may push to it, so the
+engineer who runs an upgrade needs write access to it too (an owner gives it, the copy's Settings,
+Collaborators and teams). Its tags cannot be moved or deleted by anyone. With self-hosted runners, the runner
+group admits only the copy's `role.yml`: `--core fortytwoservices/mlz-core` takes a repo off the runners, so
+delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never takes them.
+
 ## What runs when
 
 | Job | When | What it does |

@@ -184,13 +184,17 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     target = target or max(releases, key=version)
     if target not in releases:
         raise ConfigError(f"{target} is not a release of {source}; releases: {', '.join(sorted(releases, key=version))}.")
-    if current == target and called == core:
-        out(f"{repo}: already on {target}")
-        return None
     if core != mirror.UPSTREAM and version(target) < version(mirror.FIRST_RELEASE):
         raise ConfigError(f"{target} cannot run from {core}: releases before {mirror.FIRST_RELEASE} read mlz-core's code without a token, "
                           f"so not from a private copy. Choose {mirror.FIRST_RELEASE} or later, or move the repo back onto mlz-core "
                           f"itself with --core {mirror.UPSTREAM}.")
+    if current == target and called == core:
+        # A repo on its release already: the copy is still made to hold it, which a tag that never arrived would
+        # keep the runner group from admitting.
+        if core != mirror.UPSTREAM and not dry_run:
+            mirror.push_release(github, core, target, out)
+        out(f"{repo}: already on {target}")
+        return None
     # Each file mlz-core owns: the target's version. Where the target has none, the repo's copy is removed
     # only if the release it leaves put it there; a file no release of mlz-core gave is the customer's own.
     changes, before = {}, {}
@@ -219,7 +223,14 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:
-        out(f"{repo}: the upgrade to {target} is already open: {existing}")
+        # The open one, if it already calls this copy of mlz-core at the target; otherwise, as when --core moves a
+        # repo whose upgrade is open already, its branch is made again with this one's files.
+        pinned = github.file(repo, WORKFLOW, branch)[0]
+        if pinned is not None and pin_of(pinned) == (core, target):
+            out(f"{repo}: the upgrade to {target} is already open: {existing}")
+            return existing
+        github.commit_files(repo, branch, github.reset_branch(repo, branch, base), changes, title)
+        out(f"{repo}: the upgrade to {target} in {existing} now calls {core}")
         return existing
     head = github.reset_branch(repo, branch, base)
     github.commit_files(repo, branch, head, changes, title)
