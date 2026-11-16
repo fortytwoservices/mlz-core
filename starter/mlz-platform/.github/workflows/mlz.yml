@@ -34,6 +34,6 @@ jobs:
     uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.8.1 # x-release-please-version
     with:
       role: platform
-    # By name: mlz-core is in another organisation, which `secrets: inherit` does not reach.
+    # By name: the one secret role.yml takes, and no other.
     secrets:
       MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}

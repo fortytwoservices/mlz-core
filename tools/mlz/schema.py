@@ -207,7 +207,9 @@ def customer() -> dict:
 def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
-        "repositories": mapping({role: text(f"The {role} repo's name.") for role in install.ROLES}, "The three repos, by role."),
+        "repositories": mapping({**{role: text(f"The {role} repo's name.") for role in install.ROLES},
+                                 "core": text("The organization's own copy of mlz-core, which the three repos' pipelines call.", default="mlz-core")},
+                                "The three repos, by role, and the organization's copy of mlz-core."),
         "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
         "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "runners": or_empty(mapping({

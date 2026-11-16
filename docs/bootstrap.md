@@ -157,8 +157,20 @@ python3 -m mlz install handover  --settings $SET --tenant $TENANT  # 4
 python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
 ```
 
-1. **`repos`** creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
-   commit from its starter. The governance repo gets the customer's own `customer.yaml` and `bootstrap.yaml`.
+1. **`repos`** first makes the organization's **own copy of mlz-core**, `acme/mlz-core` (or
+   `github.repositories.core`): private, holding mlz-core's releases. The three repos' pipelines call its
+   `role.yml`, not `fortytwoservices/mlz-core`'s, because a runner group can admit no workflow of another
+   organization's ([private runners](#private-runners); decided 2026-11-16).
+   - Its default branch is `releases`, at the newest release pushed, with a `vX.Y.Z` tag on each. mlz-core's own CI
+     and release-please run only on `main` and on pull requests, so nothing runs there.
+   - Rulesets keep its tags from moving or going, and its branch from being rewritten. Its Actions access lets
+     the organization's repos call its workflows, and the pipelines read its code as the MLZ App.
+   - The step pushes this checkout's release into it from mlz-core itself, as your `gh` login, which needs the
+     `workflow` scope: the releases carry workflow files.
+
+   Then it creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
+   commit from its starter, calling the copy. The governance repo gets the customer's own `customer.yaml` and
+   `bootstrap.yaml`.
    - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, the pipeline's
      check passed (`platform / check` in the platform repo) on a branch up to date with `main`, no force push, no
      deletion.
@@ -236,9 +248,11 @@ App**, and reads the App's private key from the runners' vault with an identity 
    management subscription; the organization owner may be a Fortytwo engineer during the install, or the
    customer's owner runs this one step.
 3. **What the step does,** in order, stopping where something is missing and saying what:
-   - In GitHub, the **runner group `mlz`**: only the three repos may use it, and only jobs defined in
-     mlz-core's `role.yml` at the releases the repos pin (`fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/<release>`);
-     a repo pinned to anything but a release of mlz-core stops the step.
+   - In GitHub, the **runner group `mlz`**: only the three repos may use it, and only jobs defined in `role.yml`
+     in the organization's copy of mlz-core, at the releases the repos pin (`acme/mlz-core/.github/workflows/role.yml@v0.9.0`).
+     A repo pinned to anything else, `fortytwoservices/mlz-core` included, stops the step: an organization's
+     runner group cannot admit another organization's workflow (GitHub's docs, "Changing which workflows can
+     access a runner group").
      A pull request that adds a job of its own to `mlz.yml`, or points it at another `role.yml`, gets no runner
      (decided 2026-11-16; the first customer install is the first test of it). Run by anyone but an owner, the
      step changes nothing and prints the command for one. A group `mlz` made for GitHub-hosted runners is not
@@ -262,8 +276,8 @@ step with `--app-key`, delete the old key there. **A change to `size` or `instan
 Instances already running keep their model until reimaged (`az vmss reimage`, while no job runs on them); a
 changed instance count takes effect at once.
 
-**Upgrades:** `mlz upgrade` lets the runner group run the target release's `role.yml` before it opens the
-upgrade's pull request, whose jobs run that release; the releases the group admits already stay, for the repos
+**Upgrades:** `mlz upgrade` pushes the target release into the organization's copy of mlz-core and lets the
+runner group run its `role.yml` before it opens the upgrade's pull request, whose jobs run that release; the releases the group admits already stay, for the repos
 not yet moved. Changing a runner group needs an owner's `admin:org` scope: anyone else is told what to add.
 
 **Cost:** each instance is billed for its compute and for Fortytwo's hourly image fee from the moment it exists,

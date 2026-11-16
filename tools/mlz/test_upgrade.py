@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import re
 import unittest
+import unittest.mock
 from pathlib import Path
 
+from mlz import mirror
 from mlz.merge import ConfigError
 from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, breaking_changes, pin_of, releases_between, role_of, upgrade, version
 
@@ -13,11 +15,11 @@ STARTERS = Path(__file__).resolve().parents[2] / "starter"
 CORE = "fortytwoservices/mlz-core"
 
 
-def caller(role: str, ref: str) -> str:
-    """A customer's workflow: the starter of a role, pinned to ref."""
+def caller(role: str, ref: str, core: str = CORE) -> str:
+    """A customer's workflow: the starter of a role, pinned to ref, in mlz-core or in the organization's copy of it."""
     text = (STARTERS / f"mlz-{role}" / WORKFLOW).read_text()
-    core, pinned = pin_of(text)
-    return text.replace(f"{core}/.github/workflows/role.yml@{pinned}", f"{CORE}/.github/workflows/role.yml@{ref}")
+    called, pinned = pin_of(text)
+    return text.replace(f"{called}/.github/workflows/role.yml@{pinned}", f"{core}/.github/workflows/role.yml@{ref}")
 
 
 def notes(tag: str, *, breaking: str | None = None) -> str:
@@ -237,21 +239,21 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("## Before you merge", printed)
 
     def test_self_hosted_runners_admit_the_target_before_its_pull_request(self):
-        older = f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.6"
+        older = f"{CORE}/.github/workflows/role.yml@v0.1.6"
         group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": [older]}
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
         _, printed = self.run_upgrade(github)
         self.assertEqual(github.writes[0], ("runner group", "acme", 7, {
-            "restricted_to_workflows": True, "selected_workflows": [older, f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.7"]}))
+            "restricted_to_workflows": True, "selected_workflows": [older, f"{CORE}/.github/workflows/role.yml@v0.1.7"]}))
         self.assertEqual(github.writes[1][0], "branch")  # then the pull request
-        self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@refs/tags/v0.1.7", printed)
+        self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@v0.1.7", printed)
 
     def test_the_group_keeps_only_mlz_core_s_releases(self):
         group = {"name": "mlz", "id": 7, "restricted_to_workflows": True,
                  "selected_workflows": [f"{CORE}/.github/workflows/role.yml@refs/heads/main", "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]}
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
         self.run_upgrade(github)
-        self.assertEqual(github.writes[0][3]["selected_workflows"], [f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.7"])
+        self.assertEqual(github.writes[0][3]["selected_workflows"], [f"{CORE}/.github/workflows/role.yml@v0.1.7"])
 
     def test_a_group_that_admits_every_workflow_or_none_at_all_is_left_alone(self):
         for group in (None, {"name": "mlz", "id": 7, "restricted_to_workflows": False}):
@@ -264,6 +266,19 @@ class UpgradeTest(unittest.TestCase):
         url, printed = self.run_upgrade(github)
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
         self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
+
+    def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.1.6"]}
+        github = FakeGitHub(caller("governance", "v0.1.6", "acme/mlz-core"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, group=group)
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url, printed = self.run_upgrade(github)
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.1.7")])  # the copy gets the release before the pull request
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {"restricted_to_workflows": True, "selected_workflows": [
+            "acme/mlz-core/.github/workflows/role.yml@v0.1.6", "acme/mlz-core/.github/workflows/role.yml@v0.1.7"]}))
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.1.7"))  # mlz-core's starter, calling the copy
+        self.assertIn("something new in v0.1.7", github.writes[-1][5])  # mlz-core's release notes
 
     def test_refuses_a_target_that_is_not_a_release(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""})

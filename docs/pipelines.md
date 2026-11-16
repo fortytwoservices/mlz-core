@@ -1,21 +1,23 @@
 # Pipelines
 
 Each customer repo runs its role from mlz-core with one short workflow, `.github/workflows/mlz.yml`
-(the starters have it), pinned to a release:
+(the starters have it), pinned to a release, in the organization's own copy of mlz-core (`acme/mlz-core`,
+[bootstrap](bootstrap.md#running-it)):
 
 ```yaml
 jobs:
   governance:
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.8.1 # x-release-please-version
+    uses: acme/mlz-core/.github/workflows/role.yml@v0.8.1 # x-release-please-version
     with:
       role: governance
     secrets:
       MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
 ```
 
-mlz-core and the `az-tf-mlz-*` modules it uses are public, so a customer's repo needs no Fortytwo credential to
-run them. The secret is passed by name because `secrets: inherit` only reaches a workflow in the caller's own
-organisation or enterprise.
+The copy is private: every job reads its code as the MLZ App. The `az-tf-mlz-*` modules mlz-core uses are
+public, so a customer's repo needs no Fortytwo credential to run them. A repo set up before the copy calls
+`fortytwoservices/mlz-core` itself, which is public, until an upgrade moves it. The secret is passed by name,
+the one the workflow takes.
 
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
 wait for which:
@@ -38,6 +40,11 @@ checkout:
 ```sh
 PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to v0.1.8
 ```
+
+A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by `mlz install repos`) moves to
+mlz-core's own release: the command first pushes that release into the copy, from mlz-core itself, and the
+pull request's workflow calls the copy at it. The release notes and the starters are mlz-core's. With
+self-hosted runners it then lets the runner group run that release's `role.yml` too.
 
 Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrade-v0.1.8`:
 
@@ -185,8 +192,8 @@ file, from `bootstrap.yaml`'s `platform_team`:
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions
-policy must allow `fortytwoservices/mlz-core/.github/workflows/role.yml` and the actions it uses (each is
-pinned by commit in `role.yml`).
+policy must allow its copy's `role.yml` (`acme/mlz-core/.github/workflows/role.yml`) and the actions it uses
+(each is pinned by commit in `role.yml`).
 
 ## The first run
 

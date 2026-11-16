@@ -45,7 +45,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, names, naming, owners, platform, vending
+from . import contract, mirror, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -170,11 +170,19 @@ def runner_settings(bootstrap: dict) -> dict:
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:
+    """The three repos, by role (github.repositories.core, the copy of mlz-core, is core_repository's)."""
     github = bootstrap.get("github") or {}
     names = github.get("repositories") or {}
-    if not github.get("organization") or set(names) != set(ROLES):
+    if not github.get("organization") or set(names) - {"core"} != set(ROLES):
         raise ConfigError("bootstrap.yaml needs github.organization and github.repositories for governance, platform and vending.")
     return {role: f"{github['organization']}/{names[role]}" for role in ROLES}
+
+
+def core_repository(bootstrap: dict) -> str:
+    """The customer's own copy of mlz-core, which the three repos' pipelines call (tools/mlz/mirror.py)."""
+    repositories(bootstrap)
+    github = bootstrap["github"]
+    return f"{github['organization']}/{github['repositories'].get('core') or mirror.NAME}"
 
 
 def platform_team(bootstrap: dict) -> tuple[str, str]:
@@ -192,14 +200,21 @@ def release() -> str:
 
 
 def starter_files(role: str, folder: Path) -> dict[str, str]:
-    """The role's starter as a new repo gets it, with its code owners and, for governance, the customer's settings."""
+    """The role's starter as a new repo gets it, calling the organization's copy of mlz-core, with its code owners
+    and, for governance, the customer's settings."""
     _, bootstrap = settings(folder)
     base = CORE / "starter" / f"mlz-{role}"
-    files = {str(p.relative_to(base)): RELEASE_PLEASE_MARKER.sub("", p.read_text()) for p in sorted(base.rglob("*")) if p.is_file()}
+    files = {str(p.relative_to(base)): starter_text(p.read_text(), core_repository(bootstrap)) for p in sorted(base.rglob("*")) if p.is_file()}
     files[owners.PATH] = owners.render(*platform_team(bootstrap))
     if role == "governance":
         files.update({name: (folder / name).read_text() for name in ("customer.yaml", "bootstrap.yaml")})
     return files
+
+
+def starter_text(text: str, core: str) -> str:
+    """A starter file as a repo gets it: without release-please's marker, and calling role.yml in the organization's
+    copy of mlz-core instead of mlz-core's own (tools/mlz/mirror.py)."""
+    return RELEASE_PLEASE_MARKER.sub("", text).replace(f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
 
 
 def answer(question: str) -> str:
@@ -228,6 +243,9 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         # GitHub skips a secret team in CODEOWNERS, which would leave every path without an owner.
         raise ConfigError(f"{org}/{team} is a secret team, and CODEOWNERS can only name a visible one. An organization owner "
                           "makes it visible (the team's Settings, Team visibility), then run this step again.")
+    # First the organization's copy of mlz-core, at this release: a new repo's first commit starts its pipeline,
+    # which calls it.
+    mirror.ensure(github, core_repository(bootstrap), release(), out)
     for role, repo in repos.items():
         owner, name = repo.split("/")
         found = github.repo(repo)
@@ -592,10 +610,8 @@ def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], N
 RUNNER = "mlz"  # the organization's runner group, the label jobs run on, and GitHub's network configuration and runner
 RUNS_ON = "MLZ_RUNS_ON"  # the repo variable the workflow runs its Azure jobs on, when set (.github/workflows/role.yml)
 MAXIMUM_RUNNERS = 10  # GitHub-hosted: at most this many at a time
-# Self-hosted: the vault secret the runners read their GitHub App's key from, and the only workflow the runner group
-# admits, at the release the repos pin (docs/bootstrap.md, private runners).
+# Self-hosted: the vault secret the runners read their GitHub App's key from (docs/bootstrap.md, private runners).
 APP_KEY_SECRET = "github-runner-app-key"
-CORE_WORKFLOW = "fortytwoservices/mlz-core/.github/workflows/role.yml"
 VAULT_API = "2024-11-01"
 SECRETS_OFFICER = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"  # Key Vault Secrets Officer, held only for the key's upload
 # Fortytwo's runner image's plan, whose terms the management subscription accepts once.
@@ -618,15 +634,10 @@ def gh_fields(body: dict, prefix: str = "") -> list[str]:
     return fields
 
 
-def allowed_workflow(release: str) -> str:
-    """The workflow the runner group admits: mlz-core's role.yml at a release, which the repos' mlz.yml calls."""
-    return f"{CORE_WORKFLOW}@refs/tags/{release}"
-
-
-def core_releases(workflows: list[str] | None) -> set[str]:
-    """Of the workflows a runner group admits, those that are mlz-core's role.yml at a release: nothing else may
-    run where the runner App's key is."""
-    return {w for w in workflows or [] if re.fullmatch(re.escape(CORE_WORKFLOW) + r"@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", w)}
+def core_releases(core: str, workflows: list[str] | None) -> set[str]:
+    """Of the workflows a runner group admits, those that are the customer's copy of mlz-core's role.yml at a
+    release: nothing else may run where the runner App's key is."""
+    return {w for w in workflows or [] if re.fullmatch(re.escape(mirror.workflow(core, "")) + r"v[0-9]+\.[0-9]+\.[0-9]+", w)}
 
 
 def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print, terraform=None, app_key: Path | None = None,
@@ -734,13 +745,13 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
                         wait: Callable[[float], None]) -> None:
     """Self-hosted runners in management's network: Fortytwo's runner image on a scale set that the bootstrap
     deploys (az-tf-mlz-github-runners), registered as the customer's runner App into the organization's runner
-    group mlz. The group admits only the three repos, and only mlz-core's role.yml at the release they pin, so a
-    pull request cannot put a job of its own on the runners, where the App's key is within reach (decided
-    2026-11-16). In order: the group, the App's key into the bootstrap's vault, the subscription's prerequisites,
+    group mlz. The group admits only the three repos, and only role.yml in the organization's copy of mlz-core
+    (tools/mlz/mirror.py) at the releases they pin, so a pull request cannot put a job of its own on the runners,
+    where the App's key is within reach (decided 2026-11-16). In order: the group, the App's key into the bootstrap's vault, the subscription's prerequisites,
     the bootstrap's apply, and once a runner is online, the repos' switch."""
     customer, bootstrap = settings(folder)
     runners = runner_settings(bootstrap)
-    org, repos = bootstrap["github"]["organization"], repositories(bootstrap)
+    org, repos, core = bootstrap["github"]["organization"], repositories(bootstrap), core_repository(bootstrap)
     if not runners["app_client_id"]:
         raise ConfigError("bootstrap.yaml needs github.runners.app_client_id: the client ID of the customer's runner App, which an owner of "
                           f"{org} makes with one permission, Organization > Self-hosted runners: write (docs/bootstrap.md, private runners).")
@@ -757,7 +768,7 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         raise ConfigError(f"the runners' vault {named['key_vault']} is not there yet: the bootstrap makes it once management's network and the "
                           "hub's zones exist. Run mlz install bootstrap again, then this step.")
 
-    group = self_hosted_group(github, org, repos, out)
+    group = self_hosted_group(github, org, repos, core, out)
     if group is None:
         return
 
@@ -791,20 +802,20 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
 
 
-def pinned_releases(github, repos: dict[str, str]) -> set[str]:
-    """The releases of mlz-core's role.yml that the repos' workflows call on their default branches: the only
-    workflows the runner group admits. A repo on anything else could never use the runners."""
+def pinned_releases(github, repos: dict[str, str], core: str) -> set[str]:
+    """The releases of role.yml in the customer's copy of mlz-core that the repos' workflows call on their default
+    branches: the only workflows the runner group admits. A repo on anything else could never use the runners."""
     found, problems = set(), []
     for repo in repos.values():
         text, _ = github.file(repo, WORKFLOW, github.default_branch(repo))
         try:
-            core, ref = pin_of(text or "")
+            called, ref = pin_of(text or "")
         except ConfigError:
             problems.append(f"{repo}: its {WORKFLOW} does not call mlz-core's role.yml.")
             continue
-        if f"{core}/.github/workflows/role.yml" != CORE_WORKFLOW or version(ref) is None:
-            problems.append(f"{repo}: its {WORKFLOW} calls {core}'s role.yml at {ref}, which the runner group cannot admit: only "
-                            f"{CORE_WORKFLOW} at a release. python3 -m mlz upgrade {repo} moves it onto one.")
+        if called != core or version(ref) is None:
+            problems.append(f"{repo}: its {WORKFLOW} calls {called}'s role.yml at {ref}, which the runner group cannot admit: only "
+                            f"{core}'s, the organization's own copy of mlz-core, at a release. python3 -m mlz upgrade {repo} moves it onto one.")
             continue
         found.add(ref)
     if problems:
@@ -812,17 +823,18 @@ def pinned_releases(github, repos: dict[str, str]) -> set[str]:
     return found
 
 
-def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[str], None]) -> dict | None:
-    """The organization's runner group mlz, for the three repos and mlz-core's role.yml at the releases they pin
-    only. Only an owner may make it: anyone else gets the command to send to one, and None."""
+def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None]) -> dict | None:
+    """The organization's runner group mlz, for the three repos and role.yml in the organization's copy of mlz-core,
+    at the releases they pin, only: a runner group can admit no workflow of another organization's. Only an owner
+    may make it: anyone else gets the command to send to one, and None."""
     repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
-    pinned = sorted(allowed_workflow(ref) for ref in pinned_releases(github, repos))
+    pinned = sorted(mirror.workflow(core, ref) for ref in pinned_releases(github, repos, core))
     workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": pinned}
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
-            f"{RUNNER}, for the three repos and mlz-core's {workflow} only. Then run this step again.\n")
+            f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
         out("\n".join([f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
                        f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(body))}"]) + "\n")
         return None
@@ -836,7 +848,7 @@ def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[st
                           "self-hosted runners, or set github.runners.kind: github-hosted in bootstrap.yaml.")
     # Kept narrow: a wider group would let other repos, or a job a pull request adds, run where the App's key is.
     # mlz-core's releases admitted before stay, for repos that have not moved yet; any other workflow goes.
-    workflows = sorted(core_releases(made.get("selected_workflows")) | set(pinned))
+    workflows = sorted(core_releases(core, made.get("selected_workflows")) | set(pinned))
     if (made.get("visibility") != "selected" or made.get("allows_public_repositories") or not made.get("restricted_to_workflows")
             or workflows != sorted(made.get("selected_workflows") or [])):
         github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,

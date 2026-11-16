@@ -14,7 +14,7 @@
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
         "repositories": {
-          "description": "The three repos, by role.",
+          "description": "The three repos, by role, and the organization's copy of mlz-core.",
           "type": "object",
           "properties": {
             "governance": {
@@ -28,6 +28,11 @@
             "vending": {
               "type": "string",
               "description": "The vending repo's name."
+            },
+            "core": {
+              "type": "string",
+              "description": "The organization's own copy of mlz-core, which the three repos' pipelines call.",
+              "default": "mlz-core"
             }
           },
           "additionalProperties": false

@@ -14,7 +14,7 @@ import unittest.mock
 import urllib.error
 from pathlib import Path
 
-from mlz import install
+from mlz import install, mirror
 from mlz.github import GitHub
 from mlz.merge import ConfigError
 
@@ -37,6 +37,7 @@ BOOTSTRAP = """github:
   reviewers: [acme-lead]
 """
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
+CORE_COPY = "acme/mlz-core"  # the organization's copy of mlz-core
 
 
 WORKFLOW = ".github/workflows/mlz.yml"
@@ -46,7 +47,7 @@ class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True, strict=True):
+                 required_check=True, strict=True, core=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -64,6 +65,13 @@ class FakeGitHub:
         self.files.update(files or {})
         self.renamed, self.empty = [], set(empty)
         self.existing_rulesets = set(rulesets)
+        # The organization's copy of mlz-core (tools/mlz/mirror.py): made already, at this release, unless core=False.
+        self.tags, self.access = set(), {}
+        if core:
+            self.repos[CORE_COPY] = {"private": True, "default_branch": "releases"}
+            self.tags.add((CORE_COPY, install.release()))
+            self.access[CORE_COPY] = "organization"
+            self.existing_rulesets |= {(CORE_COPY, "releases"), (CORE_COPY, "releases-branch")}
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
@@ -76,9 +84,18 @@ class FakeGitHub:
     def plan(self, org):
         return self.org_plan
 
-    def create_repo(self, owner, name):
-        self.created.append(f"{owner}/{name}")
+    def create_repo(self, owner, name, first_commit=True):
+        self.created.append(f"{owner}/{name}" + ("" if first_commit else " (empty)"))
         self.repos[f"{owner}/{name}"] = {"private": True, "default_branch": self.org_branch}
+
+    def tag_exists(self, repo, tag):
+        return (repo, tag) in self.tags
+
+    def actions_access(self, repo):
+        return self.access.get(repo)
+
+    def set_actions_access(self, repo, level):
+        self.access[repo] = level
 
     def is_empty(self, repo):
         return repo in self.empty
@@ -246,7 +263,9 @@ class RunnersGitHub(FakeGitHub):
         # Each repo's workflow calls mlz-core's role.yml at the release it pins (this one, unless given).
         for repo in REPOS.values():
             pin = (pins or {}).get(repo, install.release())
-            self.files[(repo, WORKFLOW)] = (f"jobs:\n  check:\n    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@{pin} # x\n", "sha")
+            core = CORE_COPY if "/" not in pin else pin.split("@")[0]
+            ref = pin if "/" not in pin else pin.split("@")[1]
+            self.files[(repo, WORKFLOW)] = (f"jobs:\n  check:\n    uses: {core}/.github/workflows/role.yml@{ref} # x\n", "sha")
         for number, repo in enumerate(REPOS.values()):
             self.repos[repo]["id"] = 101 + number
         self.owner, self.fail_configuration = owner, fail_configuration
@@ -541,14 +560,33 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.granted, [])  # never lowered: one with maintain or admin keeps it
         self.assertIn("acme/mlz-platform: acme/platform may write, as its code owner", self.printed)
 
+    def test_the_organization_s_copy_of_mlz_core_comes_first_and_the_starters_call_it(self):
+        github = FakeGitHub(core=False)
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out, run=None: pushed.append((core, tag))):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.created[0], "acme/mlz-core (empty)")  # before the repos whose first runs call it
+        self.assertEqual(pushed, [("acme/mlz-core", install.release())])
+        self.assertEqual(github.access["acme/mlz-core"], "organization")
+        self.assertEqual([name for repo, name in github.rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch"])
+        workflow = next(files for repo, _, _, files, _ in github.commits if repo == "acme/mlz-platform")[".github/workflows/mlz.yml"]
+        self.assertIn(f"    uses: acme/mlz-core/.github/workflows/role.yml@{install.release()}\n", workflow)
+        self.assertNotIn("fortytwoservices/mlz-core", workflow)
+
+    def test_the_copy_may_have_a_name_of_its_own(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("    vending: mlz-vending\n", "    vending: mlz-vending\n    core: platform-mlz-core\n"))
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.core_repository(bootstrap), "acme/platform-mlz-core")
+        self.assertEqual(install.repositories(bootstrap), REPOS)
+
     def test_the_platform_team_must_exist_and_be_named(self):
         with self.assertRaisesRegex(ConfigError, "acme has no team platform"):
             install.step_repos(FakeGitHub(teams=()), self.folder, self.out)
         # GitHub skips a secret team in CODEOWNERS; it is refused before any repo changes.
-        github = FakeGitHub(secret=("platform",))
+        github = FakeGitHub(secret=("platform",), core=False)
         with self.assertRaisesRegex(ConfigError, "acme/platform is a secret team"):
             install.step_repos(github, self.folder, self.out)
-        self.assertEqual((github.repos, github.commits), ({}, []))
+        self.assertEqual((github.repos, github.commits), ({}, []))  # not even the copy of mlz-core
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
         with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
@@ -1019,7 +1057,7 @@ class InstallTest(unittest.TestCase):
             refused("ForbiddenByRbac", "Caller is not authorized to perform action on resource."),
         ])
         apply, waits = self.run_self_hosted(github, azure, key)
-        workflow = f"fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/{install.release()}"
+        workflow = f"acme/mlz-core/.github/workflows/role.yml@{install.release()}"
         self.assertEqual(dict(github.calls[:1])["group"], {
             "name": "mlz", "visibility": "selected", "selected_repository_ids": [101, 102, 103], "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": [workflow]})
@@ -1085,15 +1123,23 @@ class InstallTest(unittest.TestCase):
         github = RunnersGitHub(pins={"acme/mlz-governance": "v0.8.0", "acme/mlz-platform": "v0.8.0"})
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(dict(github.calls[:1])["group"]["selected_workflows"],
-                         sorted([install.allowed_workflow("v0.8.0"), install.allowed_workflow(install.release())]))
+                         sorted([mirror.workflow(CORE_COPY, "v0.8.0"), mirror.workflow(CORE_COPY, install.release())]))
 
     def test_a_repo_pinned_to_anything_but_a_release_of_mlz_core_stops_the_step(self):
         self.self_hosted()
         github = RunnersGitHub(pins={"acme/mlz-vending": "main"})
-        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml at main, "
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls acme/mlz-core's role.yml at main, "
                                                  "which the runner group cannot admit"):
             self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(github.calls, [])
+
+    def test_a_repo_still_calling_mlz_core_s_own_workflow_stops_the_step(self):
+        # A runner group admits no workflow of another organization's: only the organization's copy will do.
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-platform": f"fortytwoservices/mlz-core@{install.release()}"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml "
+                                                 f"at {install.release()}, which the runner group cannot admit: only acme/mlz-core's"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
 
     def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
         key = self.self_hosted()
@@ -1125,7 +1171,7 @@ class InstallTest(unittest.TestCase):
         text = "\n".join(self.printed)
         self.assertIn("gh api -X POST orgs/acme/actions/runner-groups -f name=mlz -f visibility=selected -F 'selected_repository_ids[]=101' "
                       "-F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' -F allows_public_repositories=false "
-                      f"-F restricted_to_workflows=true -f 'selected_workflows[]=fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/{install.release()}'", text)
+                      f"-F restricted_to_workflows=true -f 'selected_workflows[]=acme/mlz-core/.github/workflows/role.yml@{install.release()}'", text)
         self.assertIn("Then run this step again.", text)
 
     def test_a_group_made_for_github_hosted_runners_is_not_taken_over(self):
@@ -1136,14 +1182,14 @@ class InstallTest(unittest.TestCase):
 
     def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
         self.self_hosted()
-        older = "fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/v0.1.0"
+        older = "acme/mlz-core/.github/workflows/role.yml@v0.1.0"
         # Anything but mlz-core's releases goes: a customer repo's workflow, or role.yml at a branch.
-        others = ["acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main", "fortytwoservices/mlz-core/.github/workflows/role.yml@refs/heads/main"]
+        others = ["acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main", "acme/mlz-core/.github/workflows/role.yml@main"]
         github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [older, *others]}])
         github.group_repositories[7] = {101, 102, 103}
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(github.calls, [("update group", {"visibility": "selected", "allows_public_repositories": False, "restricted_to_workflows": True,
-                                                          "selected_workflows": sorted([older, install.allowed_workflow(install.release())])})])
+                                                          "selected_workflows": sorted([older, mirror.workflow(CORE_COPY, install.release())])})])
 
     def test_encryption_at_host_still_registering_stops_before_the_apply(self):
         self.self_hosted()
