@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/fortytwoservices/mlz-core/compare/v0.8.1...v0.9.0) (2026-11-16)
+
+
+### ⚠ BREAKING CHANGES
+
+* `bootstrap.yaml`'s `github.runner_size` is replaced by `github.runners` (`size` under it), and `mlz install runners` sets up self-hosted runners unless `github.runners.kind` is `github-hosted`. New repos call the organization's own copy of mlz-core instead of `fortytwoservices/mlz-core`. No customer runs MLZ yet.
+
+### Features
+
+* **runners:** Fortytwo's dev image, for its own tests without an image fee ([#82](https://github.com/fortytwoservices/mlz-core/issues/82)) ([17f3b81](https://github.com/fortytwoservices/mlz-core/commit/17f3b81b6f73ff650efc67d30234ce09b53b29bf))
+* self-hosted runners by default, and the organization's own copy of mlz-core ([#81](https://github.com/fortytwoservices/mlz-core/issues/81)) ([50d6a14](https://github.com/fortytwoservices/mlz-core/commit/50d6a14fe7bc22f1dc686165375671a6b7589ef1))
+
 ## [0.8.1](https://github.com/fortytwoservices/mlz-core/compare/v0.8.0...v0.8.1) (2026-11-15)
 
 
