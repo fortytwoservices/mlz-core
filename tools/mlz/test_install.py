@@ -988,6 +988,7 @@ class InstallTest(unittest.TestCase):
 
     def test_runner_settings_that_would_reach_a_command_or_a_script_are_checked(self):
         for given, problem in (({"kind": "ephemeral"}, "kind is self-hosted or github-hosted, not 'ephemeral'"),
+                               ({"kind": []}, "kind is self-hosted or github-hosted, not \\[\\]"),
                                ({"size": "Standard_D2'; rm -rf /"}, "size is an Azure virtual machine size for self-hosted runners"),
                                ({"instances": 101}, "instances is a whole number of runners from 0 to 100"),
                                ({"instances": True}, "instances is a whole number"),
@@ -1045,6 +1046,24 @@ class InstallTest(unittest.TestCase):
         self.assertEqual([method for method, _, _ in azure.calls], ["PUT", "PATCH", "PATCH", "DELETE"])
         self.assertEqual(azure.calls[2][2]["properties"]["networkAcls"]["ipRules"], [])
 
+    def test_the_role_goes_even_when_the_firewall_cannot_be_put_back(self):
+        key = self.self_hosted()
+
+        class Failing(SelfHostedAzure):
+            def request(self, method, url, body=None):
+                if method == "PATCH" and body["properties"]["networkAcls"]["ipRules"] == []:
+                    self.calls.append((method, url.split("?")[0], body))
+                    raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(b"{}"))
+                return super().request(method, url, body)
+
+        azure = Failing(refusals=[refused("ForbiddenByFirewall", "Client address: 203.0.113.7")])
+        self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual([method for method, _, _ in azure.calls][:4], ["PUT", "PATCH", "PATCH", "DELETE"])
+        text = "\n".join(self.printed)
+        self.assertIn("these could not be undone after the upload; run them now:\naz keyvault network-rule remove --name kv-acme-mlz-pd-nwe-01 "
+                      "--ip-address 203.0.113.7", text)
+        self.assertNotIn("your role and address are gone", text)
+
     def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
         key = self.self_hosted()
         key.write_text("ssh-ed25519 AAAA not a GitHub App key\n")
@@ -1087,7 +1106,9 @@ class InstallTest(unittest.TestCase):
     def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
         self.self_hosted()
         older = "fortytwoservices/mlz-core/.github/workflows/role.yml@refs/tags/v0.1.0"
-        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [older]}])
+        # Anything but mlz-core's releases goes: a customer repo's workflow, or role.yml at a branch.
+        others = ["acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main", "fortytwoservices/mlz-core/.github/workflows/role.yml@refs/heads/main"]
+        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [older, *others]}])
         github.group_repositories[7] = {101, 102, 103}
         self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
         self.assertEqual(github.calls, [("update group", {"visibility": "selected", "allows_public_repositories": False, "restricted_to_workflows": True,

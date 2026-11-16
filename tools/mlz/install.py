@@ -142,7 +142,7 @@ def runner_settings(bootstrap: dict) -> dict:
         raise ConfigError(f"bootstrap.yaml: github.runners takes {', '.join(RUNNER_SETTINGS)}.")
     problems = [f"bootstrap.yaml: github.runners.{key} is not a setting; it takes {', '.join(RUNNER_SETTINGS)}." for key in given if key not in RUNNER_SETTINGS]
     kind = given.get("kind", "self-hosted")
-    if kind not in RUNNER_KINDS:
+    if not isinstance(kind, str) or kind not in RUNNER_KINDS:
         problems.append(f"bootstrap.yaml: github.runners.kind is self-hosted or github-hosted, not {kind!r}.")
         kind = "self-hosted"
     size = given.get("size", RUNNER_KINDS[kind])
@@ -619,6 +619,12 @@ def allowed_workflow(release: str) -> str:
     return f"{CORE_WORKFLOW}@refs/tags/{release}"
 
 
+def core_releases(workflows: list[str] | None) -> set[str]:
+    """Of the workflows a runner group admits, those that are mlz-core's role.yml at a release: nothing else may
+    run where the runner App's key is."""
+    return {w for w in workflows or [] if re.fullmatch(re.escape(CORE_WORKFLOW) + r"@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", w)}
+
+
 def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print, terraform=None, app_key: Path | None = None,
                  yes: bool = False, wait: Callable[[float], None] = time.sleep) -> None:
     """Moves the pipelines' Azure jobs onto runners in management's network, of the kind bootstrap.yaml's
@@ -801,8 +807,8 @@ def self_hosted_group(github, org: str, repos: dict[str, str], out: Callable[[st
         raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
                           "self-hosted runners, or set github.runners.kind: github-hosted in bootstrap.yaml.")
     # Kept narrow: a wider group would let other repos, or a job a pull request adds, run where the App's key is.
-    # Releases admitted before stay, for repos that have not moved yet; each is mlz-core's own workflow.
-    workflows = sorted(set(made.get("selected_workflows") or []) | {workflow})
+    # mlz-core's releases admitted before stay, for repos that have not moved yet; any other workflow goes.
+    workflows = sorted(core_releases(made.get("selected_workflows")) | {workflow})
     if (made.get("visibility") != "selected" or made.get("allows_public_repositories") or not made.get("restricted_to_workflows")
             or workflows != sorted(made.get("selected_workflows") or [])):
         github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
@@ -849,11 +855,23 @@ def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callab
                     raise ConfigError(f"Key Vault refused the key (HTTP {error.code}): {json.loads(text).get('error', {}).get('message', text) if text.startswith('{') else text}") from None
                 wait(10)
     finally:
+        # Each tried whatever the other does. A failed one says what to undo by hand; the bootstrap's next apply
+        # also takes an address left in the firewall out again.
+        undone = []
         if opened is not None:
-            azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}", {"properties": {"networkAcls": acls}})
-        azure.request("DELETE", f"{assignment}?api-version=2022-04-01")
-    out(f"runners: the runner App's key is in the vault as {APP_KEY_SECRET}; your role and address are gone from it again. Delete the .pem "
-        "file now, and never send it on: the App's settings page makes a new key whenever one is needed.")
+            try:
+                azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}", {"properties": {"networkAcls": acls}})
+            except urllib.error.URLError:
+                undone.append(f"az keyvault network-rule remove --name {vault_id.rsplit('/', 1)[1]} --ip-address {opened}")
+        try:
+            azure.request("DELETE", f"{assignment}?api-version=2022-04-01")
+        except urllib.error.URLError:
+            undone.append(f"az role assignment delete --ids {assignment}")
+        if undone:
+            out("runners: these could not be undone after the upload; run them now:\n" + "\n".join(undone))
+    gone = "" if undone else "; your role and address are gone from it again"
+    out(f"runners: the runner App's key is in the vault as {APP_KEY_SECRET}{gone}. Delete the .pem file now, and never send it on: the "
+        "App's settings page makes a new key whenever one is needed.")
 
 
 def runner_prerequisites(azure, management: str, out: Callable[[str], None]) -> bool:

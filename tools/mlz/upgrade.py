@@ -143,15 +143,19 @@ RUNNER_GROUP = "mlz"  # install.RUNNER: the self-hosted runners' group, when the
 
 def admit_release(github, org: str, core: str, target: str, out: Callable[[str], None] = print) -> None:
     """The runner group mlz, when it admits only some workflows (self-hosted runners), admits the target's role.yml
-    too, before the pull request whose jobs run it: they would wait for a runner forever. The releases it admits
-    already stay, for the repos still on them."""
-    workflow = f"{core}/.github/workflows/role.yml@refs/tags/{target}"
+    too, before the pull request whose jobs run it: they would wait for a runner forever. mlz-core's releases it
+    admits already stay, for the repos still on them; any other workflow goes, as mlz install runners does."""
+    prefix = f"{core}/.github/workflows/role.yml@refs/tags/"
+    workflow = prefix + target
     try:
         group = github.runner_group(org, RUNNER_GROUP)
-        if group is None or not group.get("restricted_to_workflows") or workflow in (group.get("selected_workflows") or []):
+        if group is None or not group.get("restricted_to_workflows"):
             return
-        github.update_runner_group(org, group["id"], {"restricted_to_workflows": True,
-                                                      "selected_workflows": sorted({*group["selected_workflows"], workflow})})
+        admitted = group.get("selected_workflows") or []
+        wanted = sorted({w for w in admitted if w.startswith(prefix) and version(w[len(prefix):])} | {workflow})
+        if wanted == sorted(admitted):
+            return
+        github.update_runner_group(org, group["id"], {"restricted_to_workflows": True, "selected_workflows": wanted})
         out(f"{org}: the runner group {RUNNER_GROUP} admits {workflow}")
     except ConfigError:
         out(f"{org}: if it has self-hosted runners, an owner must let the runner group {RUNNER_GROUP} run {target}'s role.yml, or the "

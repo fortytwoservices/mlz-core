@@ -246,6 +246,13 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(github.writes[1][0], "branch")  # then the pull request
         self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@refs/tags/v0.1.7", printed)
 
+    def test_the_group_keeps_only_mlz_core_s_releases(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True,
+                 "selected_workflows": [f"{CORE}/.github/workflows/role.yml@refs/heads/main", "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        self.run_upgrade(github)
+        self.assertEqual(github.writes[0][3]["selected_workflows"], [f"{CORE}/.github/workflows/role.yml@refs/tags/v0.1.7"])
+
     def test_a_group_that_admits_every_workflow_or_none_at_all_is_left_alone(self):
         for group in (None, {"name": "mlz", "id": 7, "restricted_to_workflows": False}):
             github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
