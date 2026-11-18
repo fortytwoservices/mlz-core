@@ -52,6 +52,11 @@ def workflow(core: str, release: str) -> str:
 
 def ensure(github, core: str, release: str, out: Callable[[str], None] = print, run=subprocess.run) -> None:
     """The copy, made if missing, with its settings, and holding this release."""
+    # In mlz-core's own organization the default name is mlz-core itself, whose settings and rulesets are not the
+    # copy's to set, and which already holds every release.
+    if core.lower() == UPSTREAM.lower():
+        raise ConfigError(f"{core} is mlz-core itself, not a copy of it: name the organization's copy in bootstrap.yaml's "
+                          "github.repositories.core (docs/bootstrap.md).")
     owner, name = core.split("/")
     if github.repo(core) is None:
         # Empty: the releases bring their own history, onto which GitHub's first commit would not fit.
