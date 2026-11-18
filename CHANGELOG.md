@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.10.0](https://github.com/fortytwoservices/mlz-core/compare/v0.9.0...v0.10.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **vending:** read a workload repo's environment with the Actions permission ([#86](https://github.com/fortytwoservices/mlz-core/issues/86))
+  Before upgrading, add **Actions: Read-only** to the customer's MLZ App (its settings, Permissions & events, Repository permissions), and have an organization owner accept the new permission on the installation. A token that asks for a permission the installation has not granted fails, and with it every vending run.
+
+### Bug Fixes
+
+* **governance:** alz provider 0.22.1, which no longer crashes on an empty policy version list ([#85](https://github.com/fortytwoservices/mlz-core/issues/85)) ([57c457d](https://github.com/fortytwoservices/mlz-core/commit/57c457d3ccb56be13f404d21515ef2f699f69cab))
+* **mirror:** refuse mlz-core itself as the organization's copy ([#84](https://github.com/fortytwoservices/mlz-core/issues/84)) ([4360221](https://github.com/fortytwoservices/mlz-core/commit/4360221e0767ea82f3643c117cacb54034984edf))
+* **vending:** exempt a corp landing zone's state account from Deny-Public-Endpoints ([#87](https://github.com/fortytwoservices/mlz-core/issues/87)) ([b8a6e1d](https://github.com/fortytwoservices/mlz-core/commit/b8a6e1db07cd861acfcea991edf570a166b29a16))
+* **vending:** read a workload repo's environment with the Actions permission ([#86](https://github.com/fortytwoservices/mlz-core/issues/86)) ([59efebf](https://github.com/fortytwoservices/mlz-core/commit/59efebff66814b437ee8747416a161cc69b24b26))
+
 ## [0.9.0](https://github.com/fortytwoservices/mlz-core/compare/v0.8.1...v0.9.0) (2026-11-16)
 
 
