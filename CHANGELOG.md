@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/fortytwoservices/mlz-core/compare/v0.10.0...v0.10.1) (2026-11-18)
+
+
+### Bug Fixes
+
+* **vending:** leave a workload repo's merge settings to the team once it is made ([#89](https://github.com/fortytwoservices/mlz-core/issues/89)) ([9bfb0bd](https://github.com/fortytwoservices/mlz-core/commit/9bfb0bdfe152e41e47f93209a39e425a57c3b660))
+
 ## [0.10.0](https://github.com/fortytwoservices/mlz-core/compare/v0.9.0...v0.10.0) (2026-11-18)
 
 
