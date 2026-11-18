@@ -87,6 +87,9 @@ class MirrorTest(unittest.TestCase):
         # No branch may be named like a release: @vX.Y.Z would match it as well as the tag.
         self.assertEqual(release_branches["conditions"]["ref_name"]["include"], ["refs/heads/v*"])
         self.assertEqual([rule["type"] for rule in release_branches["rules"]], ["creation", "update", "deletion"])
+        self.assertEqual(self.printed[-3:], ["acme/mlz-core: ruleset releases (no tag moved or deleted)",
+                                             "acme/mlz-core: ruleset releases-branch (the branch releases never rewritten or deleted)",
+                                             "acme/mlz-core: ruleset no-release-branches (no branch named like a release)"])
 
     def test_a_copy_that_has_the_release_is_left_as_it_is(self):
         github = FakeGitHub(repo={"private": True}, tags=["v0.9.0"], branch="identical", access="organization",

@@ -339,12 +339,16 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         if not github.has_secret(repo, APP_SECRET):
             missing.append(f"secret {APP_SECRET}")
         if missing:
-            problems.append(f"{repo}: no {' and no '.join(missing)}. Install the customer's MLZ App on the repo, then: "
+            problems.append(f"{repo}: no {' and no '.join(missing)}. Install the customer's MLZ App on all the organization's repos, then: "
                             f"gh variable set {APP_VARIABLE} --repo {repo} --body <client ID>; gh secret set {APP_SECRET} --repo {repo} < <private key file>")
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
         problems += code_owner_problems(github, bootstrap, repo, out)
         problems += required_check_problems(github, role, repo, out)
+    # GitHub shows an App's installations only to the App itself and the organization's owners.
+    out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
+        "without it stops its run at the App's token step (Not Found), and an App on selected repos cannot reach the workload "
+        "repos it makes (docs/bootstrap.md).")
     if problems:
         raise ConfigError("\n  ".join(["not ready for MLZ:"] + problems))
 

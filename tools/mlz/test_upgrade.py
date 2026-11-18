@@ -268,6 +268,14 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
         self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
 
+    def test_the_owner_s_step_is_printed_once_for_the_repos_of_one_run(self):
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
+        printed: list[str] = []
+        admitted: set = set()
+        for _ in range(3):  # three repos of one organization, moving to one release
+            upgrade(github, "acme/mlz-governance", None, False, printed.append, admitted=admitted)
+        self.assertEqual(sum("an owner must let the runner group mlz" in line for line in printed), 1)
+
     def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
         group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.9.0"]}
         github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": notes("v0.9.0"), "v0.9.1": notes("v0.9.1")}, group=group)

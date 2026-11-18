@@ -164,10 +164,11 @@ def admit_release(github, org: str, core: str, target: str, out: Callable[[str],
 
 
 def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print,
-            core: str | None = None) -> str | None:
+            core: str | None = None, admitted: set[tuple[str, str]] | None = None) -> str | None:
     """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened. core moves the
     repo onto another copy of mlz-core, such as the organization's (tools/mlz/mirror.py); by default it stays on
-    the one it calls."""
+    the one it calls. admitted, shared by the repos of one run, holds the (organization, workflow) pairs the runner
+    group was already seen to, so a run moving three repos does it, or prints what an owner must do, once."""
     base = github.default_branch(repo)
     current_text, _ = github.file(repo, WORKFLOW, base)
     if current_text is None:
@@ -219,7 +220,10 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         return None
     if core != mirror.UPSTREAM:
         mirror.push_release(github, core, target, out)
-    admit_release(github, repo.split("/")[0], core, target, out)
+    org, admitted = repo.split("/")[0], admitted if admitted is not None else set()
+    if (org, mirror.workflow(core, target)) not in admitted:
+        admit_release(github, org, core, target, out)
+        admitted.add((org, mirror.workflow(core, target)))
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:

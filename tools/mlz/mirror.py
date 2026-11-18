@@ -42,6 +42,12 @@ RULESETS = [
      "conditions": {"ref_name": {"include": ["refs/heads/v*"], "exclude": []}},
      "rules": [{"type": "creation"}, {"type": "update"}, {"type": "deletion"}]},
 ]
+# What each ruleset keeps safe, for the line mlz install prints when it adds one.
+KEEPS = {
+    "releases": "no tag moved or deleted",
+    "releases-branch": f"the branch {BRANCH} never rewritten or deleted",
+    "no-release-branches": "no branch named like a release",
+}
 
 
 def workflow(core: str, release: str) -> str:
@@ -68,7 +74,7 @@ def ensure(github, core: str, release: str, out: Callable[[str], None] = print, 
         out(f"{core}: the organization's repos may call its workflows")
     for ruleset in RULESETS:
         if github.add_ruleset(core, ruleset):
-            out(f"{core}: ruleset {ruleset['name']} (no {'tag' if ruleset['target'] == 'tag' else 'rewrite of the branch'} moved or deleted)")
+            out(f"{core}: ruleset {ruleset['name']} ({KEEPS[ruleset['name']]})")
 
 
 def push_release(github, core: str, release: str, out: Callable[[str], None] = print, run=subprocess.run) -> None:

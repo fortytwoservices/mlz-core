@@ -540,8 +540,9 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        # Per repo: the MLZ App, its code owners, and its check.
-        self.assertEqual(len(self.printed), 11)
+        # Per repo: the MLZ App, its code owners, and its check; then what is not checked.
+        self.assertEqual(len(self.printed), 12)
+        self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
         self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before a merge into main", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
                       "and a code owner's review is required on main", self.printed)
