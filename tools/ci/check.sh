@@ -9,6 +9,7 @@ mkdir -p "$WORK"
 
 # Every stack the settings make, as JSON, with the configs the roots read written to .mlz/.
 every_stack() {
+  set -e # bash clears errexit in a command substitution: a failed render or check must fail it, and the script
   case $role in
     governance)
       python3 "$CORE/governance/scripts/render_library.py" --customer customer.yaml --out "$WORK/rendered" >&2

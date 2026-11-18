@@ -145,6 +145,25 @@ class ChangedTest(unittest.TestCase):
         self.write(self.head, "_generated/bootstrap.yaml", "state: {account: x}\n")
         self.assertEqual(stacks.changed("governance", ["governance"], self.head, self.base), ["governance"])
 
+    def test_a_failed_check_fails_check_sh_and_prints_no_stacks(self):
+        # check.sh works out the stacks in a command substitution, where bash clears errexit: a failed render must
+        # still fail the script, not fall through to "nothing to plan".
+        import os
+        import subprocess
+        from mlz.contract import render
+        from mlz.test_platform import GOVERNANCE
+        repo = self.head
+        shutil.copytree(STARTERS / "mlz-platform", repo)
+        (repo / ".mlz-core").symlink_to(stacks.CORE)
+        (repo / "_generated").mkdir()
+        (repo / "_generated" / "governance.yaml").write_text(render("governance", GOVERNANCE))
+        (repo / "connectivity" / "norwayeast.yaml").write_text("platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\nfirewall: Gold\n")
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_EVENT_NAME", "PYTHONPATH")}
+        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo, env=env, capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0, done.stdout)
+        self.assertIn("firewall 'Gold' must be one of", done.stderr)
+        self.assertEqual(done.stdout, "")
+
     def test_check_sh_names_every_input_the_roots_are_given(self):
         # What vars_for passes a root must be what inputs() compares, or a change to it would plan nothing.
         lib = (stacks.CORE / "tools" / "ci" / "lib.sh").read_text()
