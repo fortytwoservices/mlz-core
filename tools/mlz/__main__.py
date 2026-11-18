@@ -196,10 +196,10 @@ def main() -> int:
 
     if args.role == "upgrade":
         # Repos on GitHub, not a checkout: nothing to preload. One failing repo does not stop the others.
-        github, failed, admitted = GitHub(), 0, set()
+        github, failed, told = GitHub(), 0, set()
         for repository in args.repositories:
             try:
-                upgrade.upgrade(github, repository, args.to, args.dry_run, core=args.core, admitted=admitted)
+                upgrade.upgrade(github, repository, args.to, args.dry_run, core=args.core, told=told)
             except ConfigError as error:
                 print(f"mlz upgrade: {repository}: {error}", file=sys.stderr)
                 failed += 1

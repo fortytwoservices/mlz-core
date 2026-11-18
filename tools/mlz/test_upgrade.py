@@ -271,10 +271,19 @@ class UpgradeTest(unittest.TestCase):
     def test_the_owner_s_step_is_printed_once_for_the_repos_of_one_run(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
         printed: list[str] = []
-        admitted: set = set()
+        told: set = set()
         for _ in range(3):  # three repos of one organization, moving to one release
-            upgrade(github, "acme/mlz-governance", None, False, printed.append, admitted=admitted)
+            upgrade(github, "acme/mlz-governance", None, False, printed.append, told=told)
         self.assertEqual(sum("an owner must let the runner group mlz" in line for line in printed), 1)
+
+    def test_the_group_is_kept_up_to_date_for_every_repo_of_a_run(self):
+        # Only the owner's step is printed once: a repo on another copy in between may have changed the group.
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": []}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        told: set = set()
+        for _ in range(2):
+            upgrade(github, "acme/mlz-governance", None, False, lambda line: None, told=told)
+        self.assertEqual(sum(write[0] == "runner group" for write in github.writes), 2)
 
     def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
         group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.9.0"]}

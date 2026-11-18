@@ -142,10 +142,13 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
 RUNNER_GROUP = "mlz"  # install.RUNNER: the self-hosted runners' group, when the customer has them
 
 
-def admit_release(github, org: str, core: str, target: str, out: Callable[[str], None] = print) -> None:
+def admit_release(github, org: str, core: str, target: str, out: Callable[[str], None] = print,
+                  told: set[tuple[str, str]] | None = None) -> None:
     """The runner group mlz, when it admits only some workflows (self-hosted runners), admits the target's role.yml
     too, before the pull request whose jobs run it: they would wait for a runner forever. mlz-core's releases it
-    admits already stay, for the repos still on them; any other workflow goes, as mlz install runners does."""
+    admits already stay, for the repos still on them; any other workflow goes, as mlz install runners does. told,
+    shared by the repos of one run, holds the (organization, workflow) pairs whose owner's step was printed already:
+    the step is printed once, while the group is read and kept up to date for every repo."""
     prefix = mirror.workflow(core, "")
     workflow = prefix + target
     try:
@@ -159,16 +162,19 @@ def admit_release(github, org: str, core: str, target: str, out: Callable[[str],
         github.update_runner_group(org, group["id"], {"restricted_to_workflows": True, "selected_workflows": wanted})
         out(f"{org}: the runner group {RUNNER_GROUP} admits {workflow}")
     except ConfigError:
-        out(f"{org}: if it has self-hosted runners, an owner must let the runner group {RUNNER_GROUP} run {target}'s role.yml, or the "
-            f"upgrade's jobs wait for a runner: Settings, Actions, Runner groups, {RUNNER_GROUP}, add {workflow}.")
+        told = told if told is not None else set()
+        if (org, workflow) not in told:
+            told.add((org, workflow))
+            out(f"{org}: if it has self-hosted runners, an owner must let the runner group {RUNNER_GROUP} run {target}'s role.yml, or the "
+                f"upgrade's jobs wait for a runner: Settings, Actions, Runner groups, {RUNNER_GROUP}, add {workflow}.")
 
 
 def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False, out: Callable[[str], None] = print,
-            core: str | None = None, admitted: set[tuple[str, str]] | None = None) -> str | None:
+            core: str | None = None, told: set[tuple[str, str]] | None = None) -> str | None:
     """Opens the upgrade pull request for one repo and returns its URL; None when nothing is opened. core moves the
     repo onto another copy of mlz-core, such as the organization's (tools/mlz/mirror.py); by default it stays on
-    the one it calls. admitted, shared by the repos of one run, holds the (organization, workflow) pairs the runner
-    group was already seen to, so a run moving three repos does it, or prints what an owner must do, once."""
+    the one it calls. told, shared by the repos of one run, keeps the owner's step for the runner group from being
+    printed once per repo (admit_release)."""
     base = github.default_branch(repo)
     current_text, _ = github.file(repo, WORKFLOW, base)
     if current_text is None:
@@ -220,10 +226,7 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         return None
     if core != mirror.UPSTREAM:
         mirror.push_release(github, core, target, out)
-    org, admitted = repo.split("/")[0], admitted if admitted is not None else set()
-    if (org, mirror.workflow(core, target)) not in admitted:
-        admit_release(github, org, core, target, out)
-        admitted.add((org, mirror.workflow(core, target)))
+    admit_release(github, repo.split("/")[0], core, target, out, told)
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:
