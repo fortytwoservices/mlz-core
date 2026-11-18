@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/fortytwoservices/mlz-core/compare/v0.10.1...v0.10.2) (2026-11-18)
+
+
+### Bug Fixes
+
+* clearer messages from mlz install, mlz upgrade and the apply ([#92](https://github.com/fortytwoservices/mlz-core/issues/92)) ([e9b10dc](https://github.com/fortytwoservices/mlz-core/commit/e9b10dc48ff654fa65b4bfdd8ab02e68a381c788))
+* **platform:** wait while no hub file has a setting, so a first deployment does not deadlock ([#91](https://github.com/fortytwoservices/mlz-core/issues/91)) ([a5e90ef](https://github.com/fortytwoservices/mlz-core/commit/a5e90ef8d7007a8425c8e9dfc974735d8b057354))
+
 ## [0.10.1](https://github.com/fortytwoservices/mlz-core/compare/v0.10.0...v0.10.1) (2026-11-18)
 
 
