@@ -25,6 +25,9 @@ from .yamlout import dump
 
 # The defaults' folder and its files, and the workload's (docs/vending.md).
 DEFAULTS, ALL_DEFAULTS, WORKLOAD_DEFAULTS = "defaults", "landing-zone-defaults", "workload-defaults"
+# No environment may take the name in another file's: <env>-defaults.yaml would be every landing zone's, or the
+# workload's own file would be a landing zone.
+TAKEN_ENVIRONMENTS = (ALL_DEFAULTS.removesuffix("-defaults"), WORKLOAD_DEFAULTS)
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
@@ -110,6 +113,9 @@ def landing_zones(repo: Path) -> dict[str, dict]:
         for env in setting_names(folder):
             if env == WORKLOAD_DEFAULTS:
                 continue
+            if env in TAKEN_ENVIRONMENTS:
+                raise ConfigError(f"landing-zones/{workload}/{env}: {env} cannot be an environment, since {DEFAULTS}/{ALL_DEFAULTS}.yaml "
+                                  f"is every landing zone's defaults; rename the file.")
             key, where = f"{workload}-{env}", f"landing-zones/{workload}/{env}"
             if key in found:
                 raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
@@ -124,7 +130,7 @@ def landing_zones(repo: Path) -> dict[str, dict]:
     # misnamed one would otherwise apply to nothing, unnoticed.
     def defaults_file(name: str) -> bool:
         env = name.removesuffix("-defaults")
-        return name == ALL_DEFAULTS or name != env and env != WORKLOAD_DEFAULTS and NAME.fullmatch(env) is not None
+        return name == ALL_DEFAULTS or name != env and env not in TAKEN_ENVIRONMENTS and NAME.fullmatch(env) is not None
 
     stray = [name for name in setting_names(repo / DEFAULTS) if not defaults_file(name)]
     if stray:

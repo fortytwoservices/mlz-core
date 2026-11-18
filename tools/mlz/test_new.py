@@ -119,6 +119,12 @@ class NewLandingZoneTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "is the landing zone payments-api-prod already"):
             new.landing_zone(self.repo, "payments-api", "prod", NOTHING)
 
+    def test_an_environment_named_like_another_file_is_refused(self):
+        for env in ("landing-zone", "workload-defaults"):
+            with self.assertRaisesRegex(ConfigError, f"environment '{env}': that name is taken by workload-defaults.yaml or "
+                                                     "defaults/landing-zone-defaults.yaml"):
+                new.landing_zone(self.repo, "billing", env, NOTHING)
+
     def test_a_name_azure_names_cannot_take_is_refused(self):
         with self.assertRaisesRegex(ConfigError, "workload 'Billing'"):
             new.landing_zone(self.repo, "Billing", "prod", NOTHING)

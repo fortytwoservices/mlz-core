@@ -88,6 +88,12 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(zones["payments-prod"]["origins"][("tags", "Tier")], "defaults/prod-defaults")
         self.assertNotIn("payments-workload-defaults", zones)  # the workload's own file is no environment
 
+    def test_an_environment_may_not_take_the_name_of_every_landing_zone_s_defaults(self):
+        self.write("landing-zones/payments/landing-zone.yaml", "subscription: 00000000-0000-0000-0000-000000000009\n")
+        with self.assertRaisesRegex(ConfigError, "landing-zones/payments/landing-zone: landing-zone cannot be an environment, since "
+                                                 "defaults/landing-zone-defaults.yaml is every landing zone's defaults"):
+            landing_zones(self.repo)
+
     def test_a_file_in_defaults_that_is_neither_kind_is_refused(self):
         # Not ending in -defaults, or for an environment no landing zone's file could name.
         for name in ("prod", "PROD-defaults", "-defaults", "workload-defaults-defaults"):

@@ -56,8 +56,9 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
     for name, kind in ((workload, "workload"), (env, "environment")):
         if not vending.NAME.fullmatch(name):
             raise ConfigError(f"{kind} {name!r}: up to 24 lower-case letters, digits and hyphens (it is used in names).")
-    if env == vending.WORKLOAD_DEFAULTS:
-        raise ConfigError(f"environment {env!r}: that name is the workload's own file, {vending.WORKLOAD_DEFAULTS}.yaml; choose another.")
+    if env in vending.TAKEN_ENVIRONMENTS:
+        raise ConfigError(f"environment {env!r}: that name is taken by {vending.WORKLOAD_DEFAULTS}.yaml or {vending.DEFAULTS}/{vending.ALL_DEFAULTS}.yaml; "
+                          f"choose another.")
     key = f"{workload}-{env}"
     zones = vending.landing_zones(repo)
     if key in zones:

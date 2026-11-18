@@ -18,7 +18,8 @@ landing-zones/
   <workload>/<env>.yaml               one landing zone
 ```
 
-`<env>` is any name the customer uses (dev, test, uat, prod); mlz-core gives none a meaning. A file in
+`<env>` is any name the customer uses (dev, test, uat, prod); mlz-core gives none a meaning, and refuses only
+`landing-zone` and `workload-defaults`, which would be another file's name. A file in
 `defaults/` that is neither kind is refused, so a misnamed one never applies to nothing unnoticed.
 `python3 -m mlz map` prints which landing zones each file reaches.
 
