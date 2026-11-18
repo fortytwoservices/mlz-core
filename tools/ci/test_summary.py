@@ -10,10 +10,13 @@ from pathlib import Path
 from ci.summary import main, resource_type
 
 
-def change(address: str, *actions: str, after: dict | None = None, before: dict | None = None, deposed: str | None = None) -> dict:
+def change(address: str, *actions: str, after: dict | None = None, before: dict | None = None, deposed: str | None = None,
+           type: str | None = None) -> dict:
     record = {"address": address, "change": {"actions": list(actions), "before": before, "after": after, "after_unknown": {}}}
     if deposed:
         record["deposed"] = deposed
+    if type:
+        record["type"] = type
     return record
 
 
@@ -63,6 +66,26 @@ class SummaryTest(unittest.TestCase):
         self.assertNotEqual(reviewed, other)
         self.assertNotEqual(create_first, delete_first)
         self.assertRegex(reviewed, r"^change azapi_resource\.x [0-9a-f]{16}\n$")
+
+    def test_a_repos_merge_settings_do_not_count_in_its_update(self):
+        # Vending's plan token reads a repo's merge settings as unset and its apply token as they are: an update for
+        # another reason, a new description here, must still match between the two.
+        repo = 'github_repository.workload["made"]'
+        unset = {"description": "new", "allow_squash_merge": False, "delete_branch_on_merge": False, "squash_merge_commit_title": None}
+        real = {"description": "new", "allow_squash_merge": True, "delete_branch_on_merge": True, "squash_merge_commit_title": "COMMIT_OR_PR_TITLE"}
+        _, plan = self.summarise([change(repo, "update", after=unset, type="github_repository")])
+        _, apply = self.summarise([change(repo, "update", after=real, type="github_repository")])
+        self.assertEqual(plan, apply)
+        # The values vending does manage still count, and a repo that is made has its merge settings counted.
+        _, other = self.summarise([change(repo, "update", after={**real, "description": "other"}, type="github_repository")])
+        self.assertNotEqual(plan, other)
+        _, made_unset = self.summarise([change(repo, "create", after=unset, type="github_repository")])
+        _, made_real = self.summarise([change(repo, "create", after=real, type="github_repository")])
+        self.assertNotEqual(made_unset, made_real)
+        # Other resources keep every value.
+        _, x = self.summarise([change("azapi_resource.x", "update", after={"delete_branch_on_merge": False}, type="azapi_resource")])
+        _, y = self.summarise([change("azapi_resource.x", "update", after={"delete_branch_on_merge": True}, type="azapi_resource")])
+        self.assertNotEqual(x, y)
 
     def test_deleting_another_resource_at_the_same_address_does_not_match(self):
         _, reviewed = self.summarise([change("azapi_resource.x", "delete", before={"id": "/subscriptions/s/a"})])
