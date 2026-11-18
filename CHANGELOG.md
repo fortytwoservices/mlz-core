@@ -6,6 +6,7 @@
 ### ⚠ BREAKING CHANGES
 
 * **vending:** read a workload repo's environment with the Actions permission ([#86](https://github.com/fortytwoservices/mlz-core/issues/86))
+  Before upgrading, add **Actions: Read-only** to the customer's MLZ App (its settings, Permissions & events, Repository permissions), and have an organization owner accept the new permission on the installation. A token that asks for a permission the installation has not granted fails, and with it every vending run.
 
 ### Bug Fixes
 
