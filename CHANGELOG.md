@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.1](https://github.com/fortytwoservices/mlz-core/compare/v0.11.0...v0.11.1) (2026-11-18)
+
+
+### Features
+
+* **pipeline:** plan only the stacks a change touches ([#96](https://github.com/fortytwoservices/mlz-core/issues/96)) ([907f1b1](https://github.com/fortytwoservices/mlz-core/commit/907f1b1343fe71eb946cbffc46b91402fcee9bd7))
+
 ## [0.11.0](https://github.com/fortytwoservices/mlz-core/compare/v0.10.2...v0.11.0) (2026-11-18)
 
 
