@@ -96,6 +96,16 @@ class MirrorTest(unittest.TestCase):
         self.assertEqual((github.created, git.commands, github.made), ([], [], []))
         self.assertEqual(self.printed, ["acme/mlz-core: has v0.9.0"])
 
+    def test_mlz_core_itself_is_never_taken_for_the_copy(self):
+        # fortytwoservices with no github.repositories.core: the default name is mlz-core's own repo.
+        github = FakeGitHub()
+        github.repos["fortytwoservices/mlz-core"] = {"private": False}
+        git = FakeGit(github)
+        for core in ("fortytwoservices/mlz-core", "FortytwoServices/MLZ-Core"):
+            with self.assertRaisesRegex(ConfigError, "is mlz-core itself, not a copy of it: name the organization's copy"):
+                mirror.ensure(github, core, "v0.9.0", self.printed.append, run=git)
+        self.assertEqual((github.created, git.commands, github.access, github.made), ([], [], None, []))
+
     def test_an_older_release_leaves_the_branch_at_the_newer_one(self):
         github = FakeGitHub(repo={"private": True}, branch="ahead")
         git = FakeGit(github)

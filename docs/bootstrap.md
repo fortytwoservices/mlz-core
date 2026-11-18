@@ -168,6 +168,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
      the organization's repos call its workflows, and the pipelines read its code as the MLZ App.
    - The step pushes this checkout's release into it from mlz-core itself, as your `gh` login, which needs the
      `workflow` scope: the releases carry workflow files.
+   - In `fortytwoservices`, mlz-core's own organization, the default name is mlz-core itself, so
+     `github.repositories.core` must name another repo: the step refuses to treat mlz-core as the copy.
 
    Then it creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
    commit from its starter, calling the copy. The governance repo gets the customer's own `customer.yaml` and
