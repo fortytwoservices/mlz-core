@@ -6,6 +6,7 @@
 ### ⚠ BREAKING CHANGES
 
 * name each settings folder after its stack ([#94](https://github.com/fortytwoservices/mlz-core/issues/94))
+  In the upgrade pull request itself, move each repo's folders (there is no migration code). Platform: `hubs/` to `connectivity/`, `firewall/` to `firewall-rules/`, and for a hub file with `identity: true`, delete the line and add an empty `identity/<region>.yaml`. Before that pull request's plan, a state operator copies two blobs in the platform's state container, `platform.tfstate` to `connectivity.tfstate` and `firewall.tfstate` to `firewall-rules.tfstate`, and deletes the old ones once `main` has run on this release. Vending: `landing-zones/_defaults/all.yaml` to `defaults/landing-zone-defaults.yaml`, `landing-zones/_defaults/<env>.yaml` to `defaults/<env>-defaults.yaml`, each `_workload.yaml` to `workload-defaults.yaml`, `landing-zones/_examples/` to `examples/`. Governance: nothing. Every stack's plan on the pull request must then show no changes.
 
 ### Features
 
