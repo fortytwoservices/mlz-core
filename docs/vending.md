@@ -253,7 +253,10 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
 - **Its Terraform state**, in a storage account in the landing zone's own subscription, `stacmepaystatepdnwe01`
   in `rg-acme-pay-state-pd-nwe-01`: Entra ID only, versioned, 30 days of soft delete, container `tfstate`. The plan
   identity reads it, the deploy identity writes it. It is never replaced (`prevent_destroy`) and outlives a
-  decommission ([above](#decommissioning-a-landing-zone)).
+  decommission ([above](#decommissioning-a-landing-zone)). The pipelines reach it over its public endpoint, as they
+  reach the bootstrap's, which ALZ's `Deny-Public-Endpoints` refuses in a corp landing zone: where the landing zone's
+  management group has that assignment, its group gets the exemption `mlz-state-public-endpoint`, a waiver from the
+  assignment's storage rule (`StorageDenyPaasPublicIP`) and nothing else.
 - **Its variables**: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID` (the plan identity; inside the
   `apply` environment, the deploy identity) and `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`,
   `TFSTATE_CONTAINER`. No secrets.

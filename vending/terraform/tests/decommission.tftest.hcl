@@ -53,8 +53,39 @@ run "live" {
     error_message = "The plan identity reads the state and the deploy identity writes it."
   }
   assert {
+    condition     = length(azapi_resource.state_exemption) == 0
+    error_message = "No exemption where the management group has no Deny-Public-Endpoints assignment."
+  }
+  assert {
     condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000010" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000010" && length(azapi_resource_action.subscription) == 0
     error_message = "A subscription handed over is the one the landing zone's resources go in, and vending makes none."
+  }
+}
+
+# A corp landing zone: ALZ's Deny-Public-Endpoints on its management group would refuse the state account.
+run "corp_denies_public_endpoints" {
+  command = plan
+  variables {
+    config_file = "tests/live.json"
+  }
+  override_data {
+    target = data.azapi_resource.public_endpoints_deny
+    values = {
+      exists = true
+      id     = "/providers/Microsoft.Management/managementGroups/mlz-lz-corp/providers/Microsoft.Authorization/policyAssignments/Deny-Public-Endpoints"
+    }
+  }
+  assert {
+    condition     = data.azapi_resource.public_endpoints_deny.parent_id == "/providers/Microsoft.Management/managementGroups/mlz-lz-corp"
+    error_message = "The assignment is looked for on the landing zone's own management group."
+  }
+  assert {
+    condition     = length(azapi_resource.state_exemption) == 1 && azapi_resource.state_exemption[0].name == "mlz-state-public-endpoint"
+    error_message = "The state's group is exempt where the management group denies public endpoints."
+  }
+  assert {
+    condition     = azapi_resource.state_exemption[0].body.properties.policyAssignmentId == "/providers/Microsoft.Management/managementGroups/mlz-lz-corp/providers/Microsoft.Authorization/policyAssignments/Deny-Public-Endpoints" && azapi_resource.state_exemption[0].body.properties.policyDefinitionReferenceIds == ["StorageDenyPaasPublicIP"] && azapi_resource.state_exemption[0].body.properties.exemptionCategory == "Waiver"
+    error_message = "The exemption covers only the storage rule of that assignment, as a waiver."
   }
 }
 

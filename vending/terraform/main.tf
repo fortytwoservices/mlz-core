@@ -162,6 +162,37 @@ resource "azapi_resource" "state_resource_group" {
   response_export_values = []
 }
 
+# ALZ denies public network access to PaaS services in a corp landing zone (the assignment Deny-Public-Endpoints, on its
+# management group), and so the state account below, which the pipelines reach over its public endpoint with Entra ID
+# only, as they reach the bootstrap's. The state's group is exempt from that one rule of the assignment. None where the
+# assignment is not: an online or sandbox landing zone, or one whose archetype customer.yaml's
+# policy_assignments_to_remove takes it from.
+data "azapi_resource" "public_endpoints_deny" {
+  type                   = "Microsoft.Authorization/policyAssignments@2024-04-01"
+  name                   = "Deny-Public-Endpoints"
+  parent_id              = "/providers/Microsoft.Management/managementGroups/${local.lz.management_group_id}"
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_exemption" {
+  count     = data.azapi_resource.public_endpoints_deny.exists ? 1 : 0
+  type      = "Microsoft.Authorization/policyExemptions@2022-07-01-preview"
+  name      = "mlz-state-public-endpoint"
+  parent_id = azapi_resource.state_resource_group.id
+  body = {
+    properties = {
+      policyAssignmentId           = data.azapi_resource.public_endpoints_deny.id
+      policyDefinitionReferenceIds = ["StorageDenyPaasPublicIP"] # Storage accounts should disable public network access
+      exemptionCategory            = "Waiver"
+      displayName                  = "Terraform state over its public endpoint"
+      description                  = "The landing zone's Terraform state account takes Entra ID only, and the pipelines reach it over its public endpoint, as they reach the bootstrap's state account. Made by mlz-core's vending."
+    }
+  }
+
+  response_export_values = []
+}
+
 resource "azapi_resource" "state" {
   type      = "Microsoft.Storage/storageAccounts@2024-01-01"
   name      = local.names.state_account
@@ -181,7 +212,14 @@ resource "azapi_resource" "state" {
       supportsHttpsTrafficOnly     = true
     }
   }
-  depends_on = [module.vending] # which registers Microsoft.Storage in a new subscription
+  # A new exemption can take minutes to reach the policy that denies the account (Microsoft gives about five for a new
+  # assignment). A deny that stays fails after ten minutes.
+  retry      = { error_message_regex = ["RequestDisallowedByPolicy"] }
+  depends_on = [module.vending, azapi_resource.state_exemption] # module.vending registers Microsoft.Storage in a new subscription
+
+  timeouts {
+    create = "10m"
+  }
 
   lifecycle {
     prevent_destroy = true
