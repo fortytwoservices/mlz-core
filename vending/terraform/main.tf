@@ -189,6 +189,9 @@ resource "azapi_resource" "state_exemption" {
       description                  = "The landing zone's Terraform state account takes Entra ID only, and the pipelines reach it over its public endpoint, as they reach the bootstrap's state account. Made by mlz-core's vending."
     }
   }
+  # Azure refuses an exemption outside its assignment's scope, and a handed-over subscription is in Corp only once
+  # module.vending has placed it there.
+  depends_on = [module.vending]
 
   response_export_values = []
 }
