@@ -138,3 +138,28 @@ def render(repo: Path) -> str:
     if role_ in ELSEWHERE:
         lines += ["", "Built by another role:"] + [f"  {item}" for item in ELSEWHERE[role_]]
     return "\n".join(lines) + "\n"
+
+
+def inputs(role: str, stack: str) -> list[str]:
+    """What a stack's root reads, relative to the repo: the config tools/ci/check.sh writes for it under .mlz/, and the
+    files passed to it as they are (tools/ci/lib.sh's vars_for)."""
+    if role == "governance":
+        return [".mlz/rendered", "_generated/bootstrap.yaml"]
+    if role == "platform":
+        return [".mlz/firewall.json"] if stack == "firewall-rules" else [".mlz/platform.json"]
+    if role == "vending":
+        return [f".mlz/vending/{stack}.json"]
+    raise ValueError(f"no role {role}")
+
+
+def content(path: Path) -> dict[str, bytes]:
+    """A file's bytes, or every file's in a folder, by relative path; {} for neither."""
+    if path.is_dir():
+        return {str(p.relative_to(path)): p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
+    return {"": path.read_bytes()} if path.is_file() else {}
+
+
+def changed(role: str, stacks: list[str], head: Path, base: Path) -> list[str]:
+    """The stacks whose inputs differ between two checked copies of a repo, in the order given: one the base did not
+    have counts as changed, so a new landing zone is planned."""
+    return [stack for stack in stacks if any(content(head / path) != content(base / path) for path in inputs(role, stack))]
