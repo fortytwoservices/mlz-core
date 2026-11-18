@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/fortytwoservices/mlz-core/compare/v0.10.2...v0.11.0) (2026-11-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* name each settings folder after its stack ([#94](https://github.com/fortytwoservices/mlz-core/issues/94))
+
+### Features
+
+* name each settings folder after its stack ([#94](https://github.com/fortytwoservices/mlz-core/issues/94)) ([c326c5c](https://github.com/fortytwoservices/mlz-core/commit/c326c5c48640181464e1ded5e1fbfc3805d8b846))
+
 ## [0.10.2](https://github.com/fortytwoservices/mlz-core/compare/v0.10.1...v0.10.2) (2026-11-18)
 
 
