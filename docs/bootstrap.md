@@ -188,6 +188,10 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
    and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
    GitHub Actions on a branch up to date with it. Making the App needs a browser, so that step stays manual.
+   Install it on **all the organization's repos**, not selected ones: the check cannot see its installations
+   (GitHub shows them only to the App and the organization's owners). A repo without it, the copy of mlz-core
+   included, stops its run at the App's token step with Not Found; and an App on selected repos cannot reach a
+   workload repo it has just made, so vending's apply fails on it until an owner adds the repo to the App.
 3. **`bootstrap`** runs `bootstrap/terraform` in a folder of the customer's own (`~/.mlz/install/<tenant>/<root_id>`, or
    `--work`), so no customer's state or plan mixes with another's.
    - The first run keeps the state locally, since the account it goes into does not exist yet, then moves the

@@ -22,7 +22,9 @@ if ! python3 "$CORE/tools/ci/summary.py" "$WORK/plans/$stack.json" "$stack" "$WO
   exit 1
 fi
 if ! diff -u "$reviewed" "$WORK/apply-changes-$stack.txt" > "$WORK/difference-$stack.txt"; then
-  echo "::error::The plan differs from the one the reviewer saw; nothing is applied. Run the pipeline again for a fresh plan."
+  # Re-running this run's jobs compares with the same reviewed plan, so after an apply that failed half way it
+  # always fails again: only a new run plans afresh.
+  echo "::error::The plan differs from the one the reviewer saw; nothing is applied. Start a new run on main for a fresh plan (Actions, mlz, Run workflow; or gh workflow run mlz.yml --ref main): re-running this run's jobs would compare with the same reviewed plan again."
   cat "$WORK/difference-$stack.txt"
   exit 1
 fi
