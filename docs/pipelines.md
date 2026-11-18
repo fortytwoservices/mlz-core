@@ -108,7 +108,9 @@ A pull request or a push to `main` plans only the stacks its change touches: tho
 `check` writes for the roots) differs from the base commit's, rendered in the same run with the same mlz-core. The
 base is the commit before: a pull request's base branch, or where `main` was before the push. A change to one landing
 zone's file plans that landing zone; a change to `defaults/`, the IP plan, `_generated/names.yaml` or a contract plans
-every stack whose config it changes, and no other; a README plans nothing. The run page says which and why.
+every stack whose config it changes, and no other; a README plans nothing. The run page says which and why. On a
+pull request, the plan comment of a stack an earlier commit planned and this one does not (a change taken back) is
+marked as not planned on this commit, so no plan stays there that no longer holds.
 
 Every stack is planned on the daily check, on a manual run (Actions, mlz, Run workflow), when the pipeline file changed
 (an upgrade to another mlz-core release), when a push brings more than one commit, and when the base does not check
