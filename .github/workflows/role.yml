@@ -273,6 +273,7 @@ jobs:
           permission-administration: read
           permission-environments: read
           permission-actions-variables: read
+          permission-actions: read # a repo's environment and its branch policies: GitHub lists those GETs under Actions
           permission-members: read
 
       - name: Plan
@@ -517,6 +518,7 @@ jobs:
           permission-contents: write # to rename a new repo's first branch to main
           permission-environments: write
           permission-actions-variables: write
+          permission-actions: read # reading the apply environment back: GitHub lists that GET under Actions
           permission-members: read
 
       - name: Apply
