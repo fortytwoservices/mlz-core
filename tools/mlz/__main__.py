@@ -12,6 +12,7 @@
     python3 -m mlz install  repos|check|bootstrap|handover|publish|runners|subscriptions --settings <dir> [--tenant <id>]
                             [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
+    python3 -m mlz map      --repo <a customer repo>                 each settings file's stack, root and modules
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
 
@@ -31,7 +32,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import contract, decommission, explain, firewall, install, new, owners, platform, schema, upgrade, vending, workload
+from . import contract, decommission, explain, firewall, install, new, owners, platform, schema, stacks, upgrade, vending, workload
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -41,7 +42,7 @@ MARKER = ".written-by-mlz"
 def main() -> int:
     parser = argparse.ArgumentParser(prog="mlz", description="Customer YAML in, one checked JSON file per role out.")
     roles = parser.add_subparsers(dest="role", required=True)
-    p = roles.add_parser("platform", help="hubs/<region>.yaml into the platform root's config")
+    p = roles.add_parser("platform", help="connectivity/, management/ and identity/ into the config of the platform's stacks")
     p.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     p.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     p.add_argument("--out", type=Path, required=True, help="where to write the root's config (JSON)")
@@ -78,7 +79,7 @@ def main() -> int:
                        ("cost-center", "the cost center"), ("archetype", "corp, online or sandbox"), ("location", "the region"),
                        ("short-name", "a new workload's short name in names, 2 to 5 (docs/naming.md)")):
         nl.add_argument(f"--{flag}", help=what)
-    f = roles.add_parser("firewall", help="firewall/ into the rules root's config")
+    f = roles.add_parser("firewall", help="firewall-rules/ into the rules root's config")
     f.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     f.add_argument("--platform-config", type=Path, required=True, help="the platform root's config, from mlz platform")
     f.add_argument("--out", type=Path, required=True, help="where to write the rules root's config (JSON)")
@@ -106,6 +107,8 @@ def main() -> int:
     u.add_argument("--core", metavar="owner/repo", help="move the repos onto this copy of mlz-core, such as the organization's (default: the one each calls)")
     sc = roles.add_parser("schema", help="write the JSON Schemas of the customer's YAML, for editors (see tools/mlz/schema.py)")
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
+    mp = roles.add_parser("map", help="each settings file's stack, that stack's Terraform root and its modules (see tools/mlz/stacks.py)")
+    mp.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -118,6 +121,10 @@ def main() -> int:
 
     if args.role == "schema":
         print(f"mlz schema: wrote {', '.join(schema.write(args.out))} to {args.out}")
+        return 0
+
+    if args.role == "map":
+        print(stacks.render(args.repo), end="")
         return 0
 
     if args.role == "install":
@@ -215,9 +222,8 @@ def main() -> int:
 
     # Every file the command reads, parsed in one terraform run before anything is read.
     inputs = {
-        "platform": ["hubs", "_generated"], "firewall": ["firewall", "_generated"], "allocate": ["landing-zones", "_generated"],
-        "names": ["landing-zones", "_generated"], "vending": ["landing-zones", "_generated"], "release": ["landing-zones", "_generated"], "vending-contract": ["landing-zones", "_generated"],
-        "explain": ["landing-zones", "_generated"], "new": ["landing-zones", "_generated"],
+        "platform": ["connectivity", "management", "identity", "_generated"], "firewall": ["firewall-rules", "_generated"],
+        **{role: ["defaults", "landing-zones", "_generated"] for role in ("allocate", "names", "vending", "release", "vending-contract", "explain", "new")},
     }
     try:
         if args.role != "contract":
@@ -273,7 +279,7 @@ def main() -> int:
             if platform.unset(args.repo):
                 # An older config at --out goes too, so that nothing plans with it.
                 args.out.unlink(missing_ok=True)
-                print(f"mlz platform: no hub file in {args.repo / 'hubs'} has a setting yet; nothing written until one does")
+                print(f"mlz platform: no file in {args.repo / platform.CONNECTIVITY} has a setting yet; nothing written until one does")
                 return 0
             path = args.repo / "_generated" / "vending.yaml"
             config = platform.build(args.repo, published("governance"), read_yaml(path) if path.exists() else None)

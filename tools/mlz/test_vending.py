@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -49,8 +50,8 @@ class VendingTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
         self.write("landing-zones/payments/dev.yaml", DEV)
 
@@ -78,6 +79,32 @@ class VendingTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             function(self.repo, *args)
         return str(caught.exception)
+
+    def test_the_environment_s_defaults_reach_its_landing_zones_only(self):
+        self.write("defaults/prod-defaults.yaml", "tags:\n  Tier: production\n")
+        zones = landing_zones(self.repo)
+        self.assertEqual(zones["payments-prod"]["settings"]["tags"], {"Tier": "production"})
+        self.assertNotIn("tags", zones["payments-dev"]["settings"])
+        self.assertEqual(zones["payments-prod"]["origins"][("tags", "Tier")], "defaults/prod-defaults")
+        self.assertNotIn("payments-workload-defaults", zones)  # the workload's own file is no environment
+
+    def test_an_environment_may_not_take_the_name_of_every_landing_zone_s_defaults(self):
+        self.write("landing-zones/payments/landing-zone.yaml", "subscription: 00000000-0000-0000-0000-000000000009\n")
+        with self.assertRaisesRegex(ConfigError, "landing-zones/payments/landing-zone: landing-zone cannot be an environment, since "
+                                                 "defaults/landing-zone-defaults.yaml is every landing zone's defaults"):
+            landing_zones(self.repo)
+
+    def test_a_file_in_defaults_that_is_neither_kind_is_refused(self):
+        # Not ending in -defaults, or for an environment no landing zone's file could name.
+        for name in ("prod", "PROD-defaults", "-defaults", "workload-defaults-defaults"):
+            with self.subTest(name=name):
+                self.write(f"defaults/{name}.yaml", "tags:\n  Tier: production\n")
+                with self.assertRaisesRegex(ConfigError, f"defaults/{re.escape(name)}: not a defaults file; defaults/ holds landing-zone-defaults.yaml "
+                                                         "for every landing zone and <env>-defaults.yaml for one environment"):
+                    landing_zones(self.repo)
+                (self.repo / "defaults" / f"{name}.yaml").unlink()
+        self.write("defaults/uat-defaults.yaml", "tags:\n  Tier: test\n")  # an environment no landing zone has yet is fine
+        landing_zones(self.repo)
 
     def test_the_four_layers_merge_and_the_key_names_the_landing_zone(self):
         self.allocate()
@@ -118,12 +145,12 @@ class VendingTest(unittest.TestCase):
         message = self.problems(build, governance, PLATFORM)
         self.assertIn("governance requires the BusinessUnit tag", message)
         self.assertNotIn("Environment tag", message)  # mlz-core sets it
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
         configs = build(self.repo, governance, PLATFORM)
         self.assertEqual(configs["payments-prod"]["tags"]["BusinessUnit"], "Finance")
 
     def test_tags_mlz_core_sets_cannot_be_overridden_in_any_case(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  owner: someone@demo.example\n  Environment: production\n  Team: a\n  team: b\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  owner: someone@demo.example\n  Environment: production\n  Team: a\n  team: b\n")
         self.allocate()
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("tags.owner comes from owner", message)
@@ -131,7 +158,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("tags Team and team are one tag to Azure", message)
 
     def test_required_tags_match_in_any_case_and_none_means_none(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  businessunit: Finance\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  businessunit: Finance\n")
         self.allocate()
         build(self.repo, {**GOVERNANCE, "required_tags": ["owner", "BusinessUnit"]}, PLATFORM)
         build(self.repo, {**GOVERNANCE, "required_tags": None}, PLATFORM)
@@ -213,13 +240,6 @@ class VendingTest(unittest.TestCase):
             "payments-prod: range 10.100.9.0/24", "payments-prod: subnet default 10.100.9.0/26",
         ])
 
-    def test_a_platform_contract_from_before_v0_3_still_keeps_the_hub_clear(self):
-        # Its hub_range is the hub's own /22: vending, upgraded first, reads it until the next contract.
-        region = {k: v for k, v in PLATFORM["regions"]["norwayeast"].items() if k != "platform_address_space"}
-        older = {"regions": {"norwayeast": {**region, "hub_range": ["10.100.0.0/22"]}}}
-        self.allocate(older)
-        self.assertEqual(self.plan()["payments-dev"]["range"], "10.100.4.0/24")
-
     def test_reserved_ranges_are_never_given_and_conflicts_are_reported(self):
         reserving = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "reserved": ["10.100.8.0/23"]}}}
         self.allocate(reserving)
@@ -276,7 +296,7 @@ class VendingTest(unittest.TestCase):
     def test_a_removed_landing_zone_keeps_its_range_until_released(self):
         self.allocate()
         (self.repo / "landing-zones/payments/dev.yaml").unlink()
-        self.write("landing-zones/website/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
+        self.write("landing-zones/website/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.write("landing-zones/website/prod.yaml", DEV)
         self.allocate()
         self.assertEqual(self.plan()["website-prod"]["range"], "10.100.10.0/24")  # not dev's 10.100.8.0/24
@@ -307,15 +327,15 @@ class VendingTest(unittest.TestCase):
 
     def test_decommission_is_only_true_and_only_in_the_landing_zone_s_own_file(self):
         self.allocate()
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "decommission: true\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "decommission: true\n")
         problems = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("landing-zones/payments/_workload: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        self.assertIn("landing-zones/payments/workload-defaults: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
         # Also when the landing zone's own file sets it too, which hides the layer above.
         self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
         problems = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("landing-zones/payments/_workload: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        self.assertIn("landing-zones/payments/workload-defaults: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
         self.write("landing-zones/payments/prod.yaml", PROD)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/dev.yaml", "decommission: false\n" + DEV)
         self.assertIn("landing-zones/payments/dev: decommission is true or not there at all, not False.", self.problems(build, GOVERNANCE, PLATFORM))
 
@@ -358,7 +378,7 @@ class VendingTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "no landing zone payments-uat; the landing zones are payments-dev, payments-prod, payments-test"):
             give_names(self.repo, ip_plan(self.repo), named, {"payments-uat"})
         # Renewed without a short name the template can use: refused, the record left as it is.
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: PAY"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: PAY"))
         with self.assertRaisesRegex(ConfigError, "short_name is 'PAY'; it must be 2 to 5 lower-case letters and digits"):
             give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
 
@@ -366,7 +386,7 @@ class VendingTest(unittest.TestCase):
         self.allocate()
         base = {k: v for k, v in recorded_names(self.repo).items() if k != "payments-dev"}
         # payments-dev came with this pull request: a short name changed in review still counts.
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=base)
         self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pm-dv-nwe-01")
         self.assertEqual(record["payments-prod"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
@@ -378,7 +398,7 @@ class VendingTest(unittest.TestCase):
         self.write("_generated/platform.yaml", render("platform", PLATFORM))
         self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
         self.assertEqual(self.cli("allocate", "--repo", str(self.repo)), 0)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # a short name changed renames nothing
         out = io.StringIO()
         with mock.patch.object(sys, "argv", ["mlz", "names", "--repo", str(self.repo), "--renew", "payments-prod"]), redirect_stdout(out):
@@ -476,8 +496,8 @@ class VendingTest(unittest.TestCase):
             self.write("landing-zones/payments/prod.yaml", PROD + f"names:\n  network_security_groups: {wrong}\n")
             self.assertIn("landing-zones/payments/prod: names.network_security_groups maps a subnet to its NSG's name.", self.problems(build, GOVERNANCE, PLATFORM))
         self.write("landing-zones/payments/prod.yaml", PROD)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
-        self.assertIn("landing-zones/payments/_workload: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
+        self.assertIn("landing-zones/payments/workload-defaults: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_two_of_one_type_side_by_side_are_named_apart(self):
         (self.repo / "landing-zones/payments/dev.yaml").unlink()
@@ -508,37 +528,37 @@ class VendingTest(unittest.TestCase):
     def test_the_short_name_is_set_once_for_the_workload(self):
         self.allocate()
         self.write("landing-zones/payments/prod.yaml", PROD + "short_name: xyz\n")
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "short_name: all\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "short_name: all\n")
         problems = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("landing-zones/payments/prod: short_name is the workload's, so it goes in landing-zones/payments/_workload.yaml.", problems)
-        self.assertIn("landing-zones/_defaults/all: short_name is the workload's, so it goes in landing-zones/payments/_workload.yaml.", problems)
-        self.assertNotIn("landing-zones/payments/_workload:", problems)
+        self.assertIn("landing-zones/payments/prod: short_name is the workload's, so it goes in landing-zones/payments/workload-defaults.yaml.", problems)
+        self.assertIn("defaults/landing-zone-defaults: short_name is the workload's, so it goes in landing-zones/payments/workload-defaults.yaml.", problems)
+        self.assertNotIn("landing-zones/payments/workload-defaults:", problems)
 
     def test_a_workload_may_not_take_a_platform_part_s_short_name(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: hub"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: hub"))
         self.allocate()
         self.assertIn("landing-zones: workload payments has the short name hub, which names the platform's hub (customer.yaml's naming.platform); "
                       "give it another short_name.", self.problems(build, GOVERNANCE, PLATFORM))
         # customer.yaml gives the hub another: hub is free, con is not.
         moved = {**GOVERNANCE, "naming": {"platform": {"hub": "con"}}}
         build(self.repo, moved, PLATFORM)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: con"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: con"))
         (self.repo / NAMES).unlink()
         self.allocate(governance=moved)
         self.assertIn("has the short name con, which names the platform's hub", self.problems(build, moved, PLATFORM))
 
     def test_a_short_name_that_is_not_text_is_reported_not_a_crash(self):
         self.allocate()
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))
-        self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: 42"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))
+        self.write("landing-zones/web/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: 42"))
         self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
         problems = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertIn("landing-zones/payments/_workload: short_name is ['pay']; it must be 2 to 5", problems)
-        self.assertIn("landing-zones/web/_workload: short_name is 42; it must be 2 to 5", problems)
+        self.assertIn("landing-zones/payments/workload-defaults: short_name is ['pay']; it must be 2 to 5", problems)
+        self.assertIn("landing-zones/web/workload-defaults: short_name is 42; it must be 2 to 5", problems)
 
     def test_the_short_name_is_the_workload_s_own_when_it_fits(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
-        self.write("landing-zones/web/_workload.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/web/workload-defaults.yaml", WORKLOAD.replace("short_name: pay\n", ""))
         self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
         plan, _, retired = allocate(self.repo, PLATFORM)
         self.write(IP_PLAN, render_plan(plan, retired))
@@ -546,12 +566,12 @@ class VendingTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             give_names(self.repo, plan, GOVERNANCE)
         message = str(caught.exception)
-        self.assertEqual(message.count("landing-zones/payments/_workload.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5"), 1)
+        self.assertEqual(message.count("landing-zones/payments/workload-defaults.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5"), 1)
         self.assertNotIn("landing-zones/web", message)
         self.assertIn("short_name is needed", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.assertIn("workloads payments, web share the short name web", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.allocate()  # payments' names, now that it has a short name
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         self.assertEqual(configs["web-prod"]["names"]["virtual_network"], "vnet-demo-web-pd-nwe-01")
@@ -586,11 +606,11 @@ class VendingTest(unittest.TestCase):
         self.assertIn("payments/dev: budget.montly is not a setting; use contacts, monthly", message)
 
     def test_a_problem_names_the_file_that_set_the_value_once(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "network:\n  size: 30\n")
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  Team: [a]\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "network:\n  size: 30\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  Team: [a]\n")
         message = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertEqual(message.count("landing-zones/_defaults/all: network.size is a prefix length"), 1)
-        self.assertIn("landing-zones/payments/_workload: tags.Team is one value", message)
+        self.assertEqual(message.count("defaults/landing-zone-defaults: network.size is a prefix length"), 1)
+        self.assertIn("landing-zones/payments/workload-defaults: tags.Team is one value", message)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 31\n")
         self.assertIn("landing-zones/payments/prod: network.size", self.problems(build, GOVERNANCE, PLATFORM))
 
@@ -629,7 +649,7 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n")
         self.allocate()
         self.assertIn("github.repo needs github.organization", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.assertIn("payments-dev: _generated/names.yaml has no name for repository yet", self.problems(build, GOVERNANCE, PLATFORM))
         self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
@@ -641,7 +661,7 @@ class VendingTest(unittest.TestCase):
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
 
     def test_a_repo_vending_makes_gets_the_landing_zone_s_values(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         own = {**GOVERNANCE, "naming": {"org": "dmo", "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"}}}
         self.allocate(governance=own)
@@ -661,14 +681,14 @@ class VendingTest(unittest.TestCase):
 
     def test_a_repo_vending_makes_needs_its_team(self):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team.
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
         self.allocate()
         self.assertIn("landing-zones/payments/prod: github.team is needed: the GitHub team that owns the repo vending makes", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "github:\n  create: false\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "github:\n  create: false\n")
         build(self.repo, GOVERNANCE, PLATFORM)  # no repo, so no team needed
 
     def test_the_workload_repo_s_settings_are_checked(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n  create: true\n  team: Payments Devs\n")
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: 'no'\n")
         self.allocate()
@@ -678,8 +698,8 @@ class VendingTest(unittest.TestCase):
         self.assertIn("landing-zones/payments/dev: github.create is true or false, without quotes.", problems)
 
     def test_the_workload_repo_takes_customer_yaml_s_template_and_keeps_its_name(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "github:\n  team: payments-devs\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "github:\n  team: payments-devs\n")
         own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
         self.allocate(governance=own)
         configs = build(self.repo, own, PLATFORM)
@@ -694,10 +714,10 @@ class VendingTest(unittest.TestCase):
         self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
 
     def test_no_two_landing_zones_get_one_repo(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
         # {app}{env} without a dash: ab/preprod and abpre/prod come out the same.
         for workload, env, sub in (("ab", "preprod", "55"), ("abpre", "prod", "66")):
-            self.write(f"landing-zones/{workload}/_workload.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))
+            self.write(f"landing-zones/{workload}/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))
             self.write(f"landing-zones/{workload}/{env}.yaml", DEV.replace("44", sub))
         joined = {**GOVERNANCE, "naming": {"repository": "{app}{env}"}}
         self.allocate(governance=joined)
@@ -720,7 +740,7 @@ class VendingTest(unittest.TestCase):
         build(self.repo, GOVERNANCE, PLATFORM)
 
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
-        self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
+        self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["budget"]["contacts"], ["payments@demo.example"])
 
@@ -731,7 +751,7 @@ class VendingTest(unittest.TestCase):
 
     def test_without_a_subscription_vending_makes_one_where_billing_scope_says(self):
         ea = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + f"billing_scope: {ea}\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + f"billing_scope: {ea}\n")
         self.write("landing-zones/payments/dev.yaml", "budget: null\n")
         self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)

@@ -13,7 +13,7 @@ export PYTHONPATH=$CORE/tools
 root_of() {
   case $1/${2:-} in
     workload/*) echo "$PWD" ;; # a landing zone's workload repo: the team's own root, at the repo's top
-    platform/firewall) echo "$CORE/platform/rules/terraform" ;;
+    platform/firewall-rules) echo "$CORE/platform/rules/terraform" ;;
     platform/management | platform/identity) echo "$CORE/platform/networks/terraform" ;;
     *) echo "$CORE/$1/terraform" ;;
   esac
@@ -29,13 +29,14 @@ vars_for() {
       ;;
     platform)
       case $stack in
-        firewall) echo "-var config_file=$WORK/firewall.json" ;;
+        firewall-rules) echo "-var config_file=$WORK/firewall.json" ;;
         management | identity)
           echo "-var config_file=$WORK/platform.json -var network=$stack"
           # The organization's ID, which GitHub's network settings resource names (GitHub Actions sets it).
           if [[ $stack == management && -n ${GITHUB_REPOSITORY_OWNER_ID:-} ]]; then echo "-var github_business_id=$GITHUB_REPOSITORY_OWNER_ID"; fi
           ;;
-        *) echo "-var config_file=$WORK/platform.json" ;;
+        connectivity) echo "-var config_file=$WORK/platform.json" ;;
+        *) echo "unknown platform stack $stack" >&2; return 1 ;;
       esac
       ;;
     vending) echo "-var config_file=$WORK/vending/$stack.json" ;;

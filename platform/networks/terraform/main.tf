@@ -1,5 +1,5 @@
-# Management's network (in the primary region) or identity's (in each region whose hub file says
-# identity: true), as `var.network` says: one root, two stacks, each with a state of its own, so a change
+# Management's network (in the primary region) or identity's (in each region with a file in identity/),
+# as `var.network` says: one root, two stacks, each with a state of its own, so a change
 # to one never plans the hub or the other. Everything here is known before the hub is applied (the
 # config works out the firewall's address and the DNS servers, the names give the hub's ID), so the
 # first run plans the hub and these networks together.

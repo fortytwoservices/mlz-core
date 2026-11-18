@@ -2,10 +2,10 @@
 
 Each landing zone is four layers, each saying only what differs from the one above:
 
-  landing-zones/_defaults/all.yaml          every landing zone
-  landing-zones/_defaults/<env>.yaml        every landing zone in that environment (optional)
-  landing-zones/<workload>/_workload.yaml   one workload, all its environments
-  landing-zones/<workload>/<env>.yaml       one landing zone: one subscription, one network, one state
+  defaults/landing-zone-defaults.yaml               every landing zone
+  defaults/<env>-defaults.yaml                      every landing zone in that environment (optional)
+  landing-zones/<workload>/workload-defaults.yaml   one workload, all its environments
+  landing-zones/<workload>/<env>.yaml               one landing zone: one subscription, one network, one state
 
 Any of them can be a folder of chunks instead of one file. The landing zone's key is <workload>-<env>.
 Address ranges and subnets are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml.
@@ -23,6 +23,11 @@ from .files import preload, read_setting, read_yaml, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
 
+# The defaults' folder and its files, and the workload's (docs/vending.md).
+DEFAULTS, ALL_DEFAULTS, WORKLOAD_DEFAULTS = "defaults", "landing-zone-defaults", "workload-defaults"
+# No environment may take the name in another file's: <env>-defaults.yaml would be every landing zone's, or the
+# workload's own file would be a landing zone.
+TAKEN_ENVIRONMENTS = (ALL_DEFAULTS.removesuffix("-defaults"), WORKLOAD_DEFAULTS)
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
@@ -91,13 +96,13 @@ def landing_zones(repo: Path) -> dict[str, dict]:
     root = repo / "landing-zones"
     if not root.is_dir():
         raise ConfigError(f"{root}: no landing-zones folder.")
-    preload(yaml_files(root) + yaml_files(repo / "_generated"))
+    preload(yaml_files(root) + yaml_files(repo / DEFAULTS) + yaml_files(repo / "_generated"))
     read = {}  # each file is read once, however many landing zones share it
 
     def setting(*parts: str) -> tuple[str, dict]:
-        name = "landing-zones/" + "/".join(parts)
+        name = "/".join(parts)
         if name not in read:
-            read[name] = read_setting(root.joinpath(*parts)) or {}
+            read[name] = read_setting(repo.joinpath(*parts)) or {}
         return name, read[name]
 
     found = {}
@@ -106,15 +111,31 @@ def landing_zones(repo: Path) -> dict[str, dict]:
         if not folder.is_dir():
             raise ConfigError(f"{folder}.yaml: a landing zone lives in a folder, landing-zones/<workload>/<env>.yaml.")
         for env in setting_names(folder):
+            if env == WORKLOAD_DEFAULTS:
+                continue
+            if env in TAKEN_ENVIRONMENTS:
+                raise ConfigError(f"landing-zones/{workload}/{env}: {env} cannot be an environment, since {DEFAULTS}/{ALL_DEFAULTS}.yaml "
+                                  f"is every landing zone's defaults; rename the file.")
             key, where = f"{workload}-{env}", f"landing-zones/{workload}/{env}"
             if key in found:
                 raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
             merged, origins = {}, {}
-            layers = [setting("_defaults", "all"), setting("_defaults", env), setting(workload, "_workload"), setting(workload, env)]
+            layers = [setting(DEFAULTS, ALL_DEFAULTS), setting(DEFAULTS, f"{env}-defaults"),
+                      setting("landing-zones", workload, WORKLOAD_DEFAULTS), setting("landing-zones", workload, env)]
             for name, data in layers:
                 merged = layer(merged, data)
                 record(origins, data, name)
             found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins, "layers": layers}
+    # Every file in defaults/ is one of the two kinds, for an environment a landing zone's file could have: a
+    # misnamed one would otherwise apply to nothing, unnoticed.
+    def defaults_file(name: str) -> bool:
+        env = name.removesuffix("-defaults")
+        return name == ALL_DEFAULTS or name != env and env not in TAKEN_ENVIRONMENTS and NAME.fullmatch(env) is not None
+
+    stray = [name for name in setting_names(repo / DEFAULTS) if not defaults_file(name)]
+    if stray:
+        raise ConfigError(f"{DEFAULTS}/{stray[0]}: not a defaults file; {DEFAULTS}/ holds {ALL_DEFAULTS}.yaml for every landing zone "
+                          f"and <env>-defaults.yaml for one environment, <env> as a landing zone's file names it (prod, test).")
     return found
 
 
@@ -176,8 +197,8 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
             problems.append(f"{name}: names are one landing zone's own, so they go in that landing zone's file, {where}.")
     # One short name per workload: a landing zone's file, or a default, setting one would name it apart from the rest.
     for name, data in lz["layers"]:
-        if "short_name" in data and name != f"landing-zones/{lz['workload']}/_workload":
-            problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/_workload.yaml.")
+        if "short_name" in data and name != f"landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}":
+            problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml.")
     problems += short_name_problems(lz)
     if "decommission" in s and s["decommission"] is not True:
         problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
@@ -259,7 +280,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if repo is not None and not (isinstance(repo, str) and GITHUB_REPO.fullmatch(repo)):
         problems.append(f"{at('github', 'repo')}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
     if repo is not None and organization is None:
-        problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
+        problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in {DEFAULTS}/{ALL_DEFAULTS}.yaml).")
     create, team = github.get("create"), github.get("team")
     if create is not None and not isinstance(create, bool):
         problems.append(f"{at('github', 'create')}: github.create is true or false, without quotes.")
@@ -271,7 +292,7 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     elif team is None and creates_repo(lz):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team does.
         problems.append(f"{where}: github.team is needed: the GitHub team that owns the repo vending makes for this landing zone, and approves "
-                        f"its applies. Set it once for the workload, in landing-zones/{lz['workload']}/_workload.yaml, or set github.create: false.")
+                        f"its applies. Set it once for the workload, in landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml, or set github.create: false.")
 
 
 def wanted_network(lz: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
@@ -326,10 +347,8 @@ def ip_plan(repo: Path) -> dict[str, dict]:
 
 
 def platform_ranges(platform: dict) -> list[IPv4Network]:
-    """Every region's platform range. A contract published before v0.3.0 has only the hub's own range, so
-    a vending repo upgraded before the platform's next contract still reads it."""
-    return [IPv4Network(r) for region in platform["regions"].values()
-            for r in ([region["platform_address_space"]] if "platform_address_space" in region else region.get("hub_range") or [])]
+    """Every region's platform range."""
+    return [IPv4Network(region["platform_address_space"]) for region in platform["regions"].values()]
 
 
 def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list[str]:
@@ -606,7 +625,7 @@ def short_name_problems(lz: dict) -> list[str]:
     if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
         return [f"{origin(lz, 'short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits."]
     if "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):
-        return [f"landing-zones/{lz['workload']}/_workload.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
+        return [f"landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
                 "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md)."]
     return []
 
@@ -798,7 +817,7 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
         if key not in plan:
             raise ConfigError(f"{key} has no address range yet, so no names to renew; the IP allocator gives both on its pull request.")
     try:
-        # customer.yaml's naming, from governance's contract (none in one from before v0.3.8: the defaults).
+        # customer.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
         settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
     except ConfigError as error:
         raise ConfigError(f"_generated/governance.yaml: {error}") from None

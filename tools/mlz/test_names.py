@@ -81,7 +81,7 @@ class HubApartTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        (self.repo / "hubs").mkdir()
+        (self.repo / "connectivity").mkdir()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -93,20 +93,23 @@ class HubApartTest(unittest.TestCase):
 
     def test_the_public_ips_a_hub_has(self):
         flat_ips = {**GOVERNANCE, "naming": {"templates": {"public_ip_address": FLAT}}}
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB)
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB)
         build(self.repo, flat_ips)  # the firewall's alone: nothing to tell apart
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "bastion: true\n")
-        self.assertIn("firewall_public_ip and bastion_public_ip would both be pip-demo-hub-pd-nwe-01, and Azure needs hubs/norwayeast's public IP addresses",
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB + "bastion: true\n")
+        self.assertIn("firewall_public_ip and bastion_public_ip would both be pip-demo-hub-pd-nwe-01, and Azure needs connectivity/norwayeast's public IP addresses",
                       self.problems(flat_ips))
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "firewall: Basic\n")
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB + "firewall: Basic\n")
         self.assertIn("firewall_public_ip and firewall_management_public_ip would both be", self.problems(flat_ips))
         # Named explicitly onto another: refused as well.
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "bastion: true\nnames:\n  bastion_public_ip: pip-demo-hub-afw-pd-nwe-01\n")
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB + "bastion: true\nnames:\n  bastion_public_ip: pip-demo-hub-afw-pd-nwe-01\n")
         self.assertIn("firewall_public_ip and bastion_public_ip would both be pip-demo-hub-afw-pd-nwe-01", self.problems(GOVERNANCE))
 
     def test_a_network_s_regions_share_its_group(self):
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB + "identity: true\n")
-        (self.repo / "hubs" / "swedencentral.yaml").write_text("platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB)
+        (self.repo / "connectivity" / "swedencentral.yaml").write_text("platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\n")
+        (self.repo / "identity").mkdir()
+        for region in ("norwayeast", "swedencentral"):
+            (self.repo / "identity" / f"{region}.yaml").write_text("")
         governance = {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}}
         build(self.repo, governance)
         no_region = {"templates": {kind: "{type}-{org}-{app}-{purpose}-{env}-{nn}" for kind in ("virtual_network", "network_security_group")}}
@@ -117,9 +120,9 @@ class HubApartTest(unittest.TestCase):
         build(self.repo, {**governance, "naming": {"templates": {"github_network_settings": "{type}-{org}-{app}-{env}-{nn}"}}})
 
     def test_the_connectivity_subscription_s_groups(self):
-        (self.repo / "hubs" / "norwayeast.yaml").write_text(HUB)
+        (self.repo / "connectivity" / "norwayeast.yaml").write_text(HUB)
         without_app = {**GOVERNANCE, "naming": {"templates": {"resource_group": "{type}-{org}-{env}-{region}-{nn}"}}}
-        self.assertIn("hubs/norwayeast's and the DNS zones' would both be rg-demo-pd-nwe-01, and Azure needs resource groups in the connectivity subscription",
+        self.assertIn("connectivity/norwayeast's and the DNS zones' would both be rg-demo-pd-nwe-01, and Azure needs resource groups in the connectivity subscription",
                       self.problems(without_app))
 
 

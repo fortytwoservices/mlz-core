@@ -417,6 +417,10 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(governance["bootstrap.yaml"], BOOTSTRAP)
         workflow = commits["acme/mlz-vending"][".github/workflows/mlz.yml"]
         self.assertIn("role: vending", workflow)
+        # The layout of folders named after their stacks; vending's examples outside landing-zones/.
+        self.assertTrue({"defaults/landing-zone-defaults.yaml", "landing-zones/README.md", "examples/payments/prod.yaml",
+                         "examples/payments/workload-defaults.yaml"} <= set(commits["acme/mlz-vending"]))
+        self.assertTrue({"connectivity/norwayeast.yaml", "firewall-rules/platform.yaml"} <= set(install.starter_files("platform", self.folder)))
         self.assertNotIn("x-release-please", workflow)
         self.assertEqual(github.rulesets, [(repo, "main") for repo in REPOS.values()])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)

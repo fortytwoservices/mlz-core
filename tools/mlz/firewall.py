@@ -1,9 +1,9 @@
-"""Firewall rules: firewall/ in the platform repo into one config for the rules root.
+"""Firewall rules: firewall-rules/ in the platform repo into one config for the rules root.
 
-    firewall/platform.yaml                  rules for every landing zone (from all landing zone ranges)
-    firewall/landing-zones/<key>.yaml       one landing zone's rules (from its own range)
-    firewall/management.yaml                management's network, the runners' among them (from its range)
-    firewall/identity.yaml                  identity's network in every region that builds it (from its range)
+    firewall-rules/platform.yaml                  rules for every landing zone (from all landing zone ranges)
+    firewall-rules/landing-zones/<key>.yaml       one landing zone's rules (from its own range)
+    firewall-rules/management.yaml                management's network, the runners' among them (from its range)
+    firewall-rules/identity.yaml                  identity's network in every region that builds it (from its range)
 
 A rule names what it reaches, never where it starts: the source is the landing zone's range, from the
 vending contract (_generated/vending.yaml), every landing zone range of the hub for platform rules, or the
@@ -42,6 +42,7 @@ from .merge import ConfigError
 PARTITIONS = 30
 # A rules file holds `outbound`, a list of rules; a rule has all of these. Every rule is approved by a person (the
 # platform repo's code owner), who reads why it is needed in its description.
+RULES = "firewall-rules"  # the rules' folder, after their stack
 RULE_KEYS = ("name", "description", "to", "ports")
 # A rule may not reach the whole internet, or nearly: name what it needs instead.
 WIDEST_RANGE = 8
@@ -98,7 +99,7 @@ RUNNERS = [
     },
 ]
 RUNNER_SUBNETS = ("github-runners", "runners")
-# Management's and identity's own rules, after the required ones and firewall/platform.yaml's.
+# Management's and identity's own rules, after the required ones and firewall-rules/platform.yaml's.
 NETWORK_PRIORITIES = {"management": 300, "identity": 400}
 GITHUB_META = "https://api.github.com/meta"
 
@@ -301,7 +302,7 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
     """The rules root's config: per hub region, the rule collection groups and what is in them. None, once
     every file is checked, while vending has published no contract yet. github is GitHub's Actions domains
     (github_actions_domains)."""
-    folder = repo / "firewall"
+    folder = repo / RULES
     problems: list[str] = []
     # None until vending publishes its first contract: then landing zones are not known yet (see below).
     zones = None if vending is None else (vending.get("landing_zones") or {})
@@ -312,10 +313,10 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
     groups: dict[str, dict] = {region: {} for region in hubs}
 
     shared = read_setting(folder / "platform") or {}
-    shared_rules = read_rules("firewall/platform", shared, problems)
-    own = {name: read_rules(f"firewall/{name}", read_setting(folder / name) or {}, problems) for name in NETWORK_PRIORITIES}
+    shared_rules = read_rules(f"{RULES}/platform", shared, problems)
+    own = {name: read_rules(f"{RULES}/{name}", read_setting(folder / name) or {}, problems) for name in NETWORK_PRIORITIES}
     if own["identity"] and not networks["identity"]:  # management's is always built, in the primary region
-        problems.append("firewall/identity: no hub builds identity's network (identity: true in hubs/<region>.yaml), so its rules would have no source.")
+        problems.append(f"{RULES}/identity: no region builds identity's network (identity/<region>.yaml), so its rules would have no source.")
     runners = [{"name": "github-actions", "description": "mlz-core: GitHub Actions, as GitHub's meta endpoint lists it (domains.actions).", "to": github, "ports": ["https"]}, *RUNNERS]
     for region, hub in hubs.items():
         tier = (hub.get("firewall") or {}).get("sku_tier", "Standard")
@@ -326,8 +327,8 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         if "management" in built:
             subnets = [built["management"]["subnets"][subnet] for subnet in RUNNER_SUBNETS]
             parts.append(collections(runners, subnets, "mlz-core", "runners", zones, 110, tier, problems))
-        parts.append(collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems, held))
-        parts += [collections(own[name], [net["address_space"]], f"firewall/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems, held) for name, net in built.items()]
+        parts.append(collections(shared_rules, hub["landing_zone_ranges"], f"{RULES}/platform", "platform", zones, 200, tier, problems, held))
+        parts += [collections(own[name], [net["address_space"]], f"{RULES}/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems, held) for name, net in built.items()]
         groups[region]["platform"] = {
             "priority": PLATFORM_PRIORITY,
             "application": {k: v for part in parts for k, v in part["application"].items()},
@@ -345,14 +346,14 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
         # in Azure changes, not even when the contract has gone missing from a platform already deployed.
         for key in keys:
-            where = f"firewall/landing-zones/{key}"
+            where = f"{RULES}/landing-zones/{key}"
             rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
             collections(rules, [f"<landing zone {key}>"], where, key, None, 100, unknown_tier, problems)
         if keys and not problems:
             print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} are checked, and wait for it", file=sys.stderr)
         keys = []
     for key in keys:
-        where = f"firewall/landing-zones/{key}"
+        where = f"{RULES}/landing-zones/{key}"
         if key in held:
             # Its rules leave Azure with this run, before its range can be given to another landing zone; the
             # file goes in a pull request of its own (docs/vending.md, decommissioning).

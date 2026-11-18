@@ -30,13 +30,17 @@ class PlatformTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        (self.repo / "hubs").mkdir()
+        (self.repo / "connectivity").mkdir()
 
     def tearDown(self):
         self.tmp.cleanup()
 
     def hub(self, region: str, text: str) -> None:
-        (self.repo / "hubs" / f"{region}.yaml").write_text(text)
+        (self.repo / "connectivity" / f"{region}.yaml").write_text(text)
+
+    def network(self, name: str, region: str, text: str = "") -> None:
+        (self.repo / name).mkdir(exist_ok=True)
+        (self.repo / name / f"{region}.yaml").write_text(text)
 
     def problems(self, governance: dict = GOVERNANCE) -> str:
         with self.assertRaises(ConfigError) as caught:
@@ -75,22 +79,11 @@ class PlatformTest(unittest.TestCase):
                 build(self.repo, GOVERNANCE)
             self.assertIn(f"platform_address_space 10.100.0.0/{size} must be a /21: the hub's /22, management's /24, identity's /24 and a spare /23", str(caught.exception))
 
-    def test_the_old_address_space_says_what_to_write(self):
-        for value, expected in (
-            ("10.100.0.0/22", "address_space is now platform_address_space, a /21 that holds the hub (its first /22), management and identity; platform_address_space: 10.100.0.0/21 keeps the hub at 10.100.0.0/22."),
-            ("10.100.4.0/22", "the hub at 10.100.4.0/22 is not the first /22 of a /21, so choose a free /21 for the platform."),
-        ):
-            self.hub("norwayeast", f"address_space: {value}\nlanding_zone_ranges: 10.100.0.0/16\n")
-            with self.assertRaises(ConfigError) as caught:
-                build(self.repo, GOVERNANCE)
-            message = str(caught.exception)
-            self.assertIn(expected, message)
-            self.assertNotIn("platform_address_space is required", message)  # one problem, saying what to write
-            self.assertNotIn("is not a hub setting", message)
-
     def test_management_is_built_in_the_primary_region_and_identity_where_asked(self):
         self.hub("norwayeast", HUB)
-        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\n")
+        self.network("identity", "swedencentral", "# domain controllers here\n")  # comments only, as an empty file
+        self.network("management", "norwayeast")  # optional: the same network as without it
         config = build(self.repo, {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}})
         for regions in config["networks"].values():  # the names are tested on their own
             for net in regions.values():
@@ -112,7 +105,8 @@ class PlatformTest(unittest.TestCase):
 
     def test_every_name_comes_from_the_template_or_the_hub_file(self):
         self.hub("norwayeast", HUB + "names:\n  firewall: afw-legacy\n")
-        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nidentity: true\n")
+        self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\n")
+        self.network("identity", "swedencentral")
         governance = {**GOVERNANCE, "naming": {"org": "acme"}, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}}
         config = build(self.repo, governance)
         hub = config["hubs"]["norwayeast"]["names"]
@@ -136,10 +130,10 @@ class PlatformTest(unittest.TestCase):
     def test_a_hub_file_s_names_are_checked(self):
         self.hub("norwayeast", HUB + "names:\n  firewall: 'afw legacy'\n  gateway: vgw-1\n")
         message = self.problems()
-        self.assertIn("hubs/norwayeast: names.firewall: azure_firewall name afw legacy has characters Azure does not allow", message)
-        self.assertIn("hubs/norwayeast: names.gateway is not a hub component; use resource_group, virtual_network, firewall,", message)
+        self.assertIn("connectivity/norwayeast: names.firewall: azure_firewall name afw legacy has characters Azure does not allow", message)
+        self.assertIn("connectivity/norwayeast: names.gateway is not a hub component; use resource_group, virtual_network, firewall,", message)
         self.hub("norwayeast", HUB + "names: [afw-x]\n")
-        self.assertIn("hubs/norwayeast: names maps a hub component", self.problems())
+        self.assertIn("connectivity/norwayeast: names maps a hub component", self.problems())
 
     def test_a_name_azure_would_not_take_is_refused(self):
         self.hub("norwayeast", HUB)
@@ -174,7 +168,7 @@ class PlatformTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE, vending)
         message = str(caught.exception)
-        self.assertIn("hubs/norwayeast: management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24 (_generated/vending.yaml)", message)
+        self.assertIn("connectivity/norwayeast: management's network 10.100.4.0/24 would overlap payments-prod's range 10.100.4.0/24 (_generated/vending.yaml)", message)
         self.assertNotIn("website-prod", message)  # identity's /24, not built here: vending reports it
         self.assertEqual(build(self.repo, GOVERNANCE, {"landing_zones": {"website-prod": vending["landing_zones"]["website-prod"]}})["networks"]["identity"], {})
         # A landing zone removed but not yet released still holds its range, and its network may still exist.
@@ -201,7 +195,7 @@ class PlatformTest(unittest.TestCase):
     def test_the_starter_as_it_comes_waits_with_or_without_governance_s_contract(self):
         # On a first deployment governance's contract pull request is checked against the starter's hub file, every
         # setting commented out: it must pass, or it never merges itself, and no hub pull request can pass without it.
-        starter = Path(__file__).resolve().parents[2] / "starter" / "mlz-platform" / "hubs" / "norwayeast.yaml"
+        starter = Path(__file__).resolve().parents[2] / "starter" / "mlz-platform" / "connectivity" / "norwayeast.yaml"
         self.hub("norwayeast", starter.read_text())
         (self.repo / "platform.json").write_text("{}")  # an older config goes, so nothing plans with it
         for contract in (False, True):
@@ -222,7 +216,7 @@ class PlatformTest(unittest.TestCase):
         self.hub("norwayeast", HUB)
         self.hub("swedencentral", "# not yet\n")
         self.assertFalse(platform.unset(self.repo))
-        with self.assertRaisesRegex(ConfigError, "hubs/swedencentral: landing_zone_ranges is required"):
+        with self.assertRaisesRegex(ConfigError, "connectivity/swedencentral: landing_zone_ranges is required"):
             build(self.repo, GOVERNANCE)
 
     def test_a_hub_without_governance_s_contract_says_it_has_not_arrived(self):
@@ -238,17 +232,31 @@ class PlatformTest(unittest.TestCase):
         self.hub("norwayeast", HUB + "firewall: Basic\ndns_resolver: false\n")
         self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["management"]["norwayeast"]["dns_servers"], [])  # Azure's
 
-    def test_identity_needs_an_identity_subscription_and_a_yes_or_no(self):
-        self.hub("norwayeast", HUB + "identity: true\n")
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, GOVERNANCE)
-        self.assertIn("hubs/norwayeast: identity: true builds identity's network in the identity subscription, and customer.yaml names none", str(caught.exception))
-        self.hub("norwayeast", HUB + "identity: 'yes'\n")
-        with self.assertRaises(ConfigError) as caught:
-            build(self.repo, GOVERNANCE)
-        self.assertIn("identity must be true or false", str(caught.exception))
+    def test_identity_needs_an_identity_subscription(self):
         self.hub("norwayeast", HUB)
         self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["identity"], {})
+        self.network("identity", "norwayeast")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, GOVERNANCE)
+        self.assertIn("identity/norwayeast: builds identity's network in the identity subscription, and customer.yaml names none", str(caught.exception))
+
+    def test_a_network_file_takes_no_settings_and_needs_its_hub(self):
+        self.hub("norwayeast", HUB)
+        governance = {**GOVERNANCE, "platform_subscriptions": {**GOVERNANCE["platform_subscriptions"], "identity": "i"}}
+        self.network("identity", "norwayeast", "domain_controllers: 2\n")
+        self.network("identity", "swedencentral")
+        self.network("management", "francecentral")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, governance)
+        message = str(caught.exception)
+        self.assertIn("identity/norwayeast: takes no settings yet; its being there builds identity's network in norwayeast", message)
+        self.assertIn("identity/swedencentral: no hub in swedencentral (connectivity/swedencentral.yaml)", message)
+        self.assertIn("management/francecentral: no hub in francecentral", message)
+        self.hub("francecentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\n")
+        with self.assertRaises(ConfigError) as caught:
+            build(self.repo, governance)
+        self.assertIn("management/francecentral: management's network is built in the primary region, norwayeast, only", str(caught.exception))
+        self.assertNotIn("identity", "".join(platform.HUB_KEYS))  # identity is a file of its own now
 
     def test_basic_gets_the_management_subnet_and_bastion_its_own(self):
         self.hub("norwayeast", HUB + "firewall: Basic\nbastion: true\ndns_resolver: false\n")
@@ -260,10 +268,10 @@ class PlatformTest(unittest.TestCase):
     def test_a_hub_split_into_chunks_is_the_same_hub(self):
         self.hub("norwayeast", HUB + "bastion: true\n")
         whole = build(self.repo, GOVERNANCE)
-        (self.repo / "hubs/norwayeast.yaml").unlink()
-        (self.repo / "hubs/norwayeast").mkdir()
-        (self.repo / "hubs/norwayeast/network.yaml").write_text(HUB)
-        (self.repo / "hubs/norwayeast/bastion.yaml").write_text("bastion: true\n")
+        (self.repo / "connectivity/norwayeast.yaml").unlink()
+        (self.repo / "connectivity/norwayeast").mkdir()
+        (self.repo / "connectivity/norwayeast/network.yaml").write_text(HUB)
+        (self.repo / "connectivity/norwayeast/bastion.yaml").write_text("bastion: true\n")
         self.assertEqual(build(self.repo, GOVERNANCE), whole)
 
     def test_every_problem_is_reported_at_once(self):
@@ -272,7 +280,7 @@ class PlatformTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
-        self.assertIn("'firewal' is not a hub setting", message)
+        self.assertIn("'firewal' is not a connectivity setting", message)
         self.assertIn("10.100.0.0/24 must be a /21", message)
 
     def test_overlapping_hubs_and_missing_ranges_are_refused(self):
@@ -281,7 +289,7 @@ class PlatformTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
-        self.assertIn("hubs/swedencentral: landing_zone_ranges is required", message)
+        self.assertIn("connectivity/swedencentral: landing_zone_ranges is required", message)
         self.assertIn("platform address spaces 10.100.0.0/21 and 10.100.0.0/21 overlap", message)
 
     def test_the_primary_region_needs_a_hub(self):
@@ -304,14 +312,14 @@ class PlatformTest(unittest.TestCase):
         self.hub("norwayeast", HUB + "reserved: [10.100.4.0/24]\n")  # management's /24
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
-        self.assertIn("hubs/norwayeast: platform address space 10.100.0.0/21 overlaps 10.100.4.0/24, which hubs/norwayeast reserves", str(caught.exception))
+        self.assertIn("connectivity/norwayeast: platform address space 10.100.0.0/21 overlaps 10.100.4.0/24, which connectivity/norwayeast reserves", str(caught.exception))
 
     def test_landing_zone_ranges_belong_to_one_region(self):
         self.hub("norwayeast", HUB)
         self.hub("swedencentral", "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: [10.100.0.0/24, 10.200.0.0/16]\n")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
-        self.assertIn("hubs/norwayeast and hubs/swedencentral: landing zone ranges 10.100.0.0/16 and 10.100.0.0/24 overlap", str(caught.exception))
+        self.assertIn("connectivity/norwayeast and connectivity/swedencentral: landing zone ranges 10.100.0.0/16 and 10.100.0.0/24 overlap", str(caught.exception))
 
     def test_a_platform_range_lies_only_in_its_own_regions_landing_zone_ranges(self):
         self.hub("norwayeast", HUB)  # its /21 inside its own 10.100.0.0/16: fine
@@ -319,8 +327,8 @@ class PlatformTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
         message = str(caught.exception)
-        self.assertIn("hubs/swedencentral: platform address space 10.100.8.0/21 overlaps 10.100.0.0/16, a landing zone range of hubs/norwayeast", message)
-        self.assertNotIn("hubs/norwayeast: platform address space", message)
+        self.assertIn("connectivity/swedencentral: platform address space 10.100.8.0/21 overlaps 10.100.0.0/16, a landing zone range of connectivity/norwayeast", message)
+        self.assertNotIn("connectivity/norwayeast: platform address space", message)
 
     def test_every_hub_problem_is_reported_even_without_an_address_space(self):
         self.hub("norwayeast", "platform_address_space: []\nfirewall: Gold\n")

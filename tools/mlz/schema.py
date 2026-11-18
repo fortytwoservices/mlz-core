@@ -83,7 +83,7 @@ def landing_zone() -> dict:
         "archetype": text("The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).", enum=list(ARCHETYPES)),
         "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
         "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged. Without it, vending makes one where billing_scope says.", pattern=pattern(vending.GUID, ignore_case=True)),
-        "billing_scope": text("Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in _defaults/all.yaml; a landing zone with subscription: uses that one instead.", pattern=r"^/providers/Microsoft\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"),
+        "billing_scope": text("Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in defaults/landing-zone-defaults.yaml; a landing zone with subscription: uses that one instead.", pattern=r"^/providers/Microsoft\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"),
         "budget": or_empty(mapping({
             "monthly": {"description": "A whole amount per month, in the subscription's currency. No monthly, no budget.", "type": "integer", "exclusiveMinimum": 0},
             "contacts": or_empty({"description": "Who gets the budget alerts, as email addresses (default: the owner).", "type": "array", "items": email}),
@@ -98,12 +98,12 @@ def landing_zone() -> dict:
             }),
         }, "The spoke network. Its addresses come from the IP allocator, in _generated/ip-plan.yaml, never from here.")),
         "github": or_empty(mapping({
-            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
             "repo": text("An existing repo to use instead of one vending makes: vending only trusts it.", pattern=pattern(vending.GITHUB_REPO)),
             "create": {"description": "false: no repo for this landing zone, for example a sandbox. Vending makes one by default once github.organization is set.", "type": "boolean"},
-            "team": text("The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in _workload.yaml.", pattern=pattern(vending.GITHUB_TEAM)),
+            "team": text("The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in workload-defaults.yaml.", pattern=pattern(vending.GITHUB_TEAM)),
         }, "The landing zone's workload repo (docs/vending.md).")),
-        "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in _workload.yaml.", pattern="^[a-z0-9]{2,5}$"),
+        "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in workload-defaults.yaml.", pattern="^[a-z0-9]{2,5}$"),
         "names": or_empty(mapping({
             **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
             vending.SUBSCRIPTION: text("An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."),
@@ -120,12 +120,12 @@ def landing_zone() -> dict:
     return {
         "$schema": DRAFT,
         "title": "MLZ landing zone",
-        "description": "A layer of landing zone settings: landing-zones/_defaults/all.yaml, _defaults/<env>.yaml, <workload>/_workload.yaml or <workload>/<env>.yaml. Each says only what differs from the one above.",
+        "description": "A layer of landing zone settings: defaults/landing-zone-defaults.yaml, defaults/<env>-defaults.yaml, landing-zones/<workload>/workload-defaults.yaml or landing-zones/<workload>/<env>.yaml. Each says only what differs from the one above.",
         **mapping(properties),
     }
 
 
-def hub() -> dict:
+def connectivity() -> dict:
     cidr = {"type": "string", "pattern": CIDR}
     properties = {
         "platform_address_space": text("The region's platform range, a /21: the hub (its first /22, its subnets carved from it), management's /24, identity's /24 and a spare /23. No landing zone gets an address in it.", pattern=CIDR),
@@ -134,14 +134,22 @@ def hub() -> dict:
         "firewall": text("The hub's Azure Firewall tier.", enum=list(platform.FIREWALL_TIERS), default="Standard"),
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
-        "identity": {"description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.", "type": "boolean", "default": False},
         "names": {"description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.", "type": "object", "propertyNames": {"enum": list(names.HUB)}, "additionalProperties": {"type": "string"}},
     }
     return {
         "$schema": DRAFT,
-        "title": "MLZ hub",
-        "description": "The platform's networks in one region, the hub first: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+        "title": "MLZ connectivity",
+        "description": "The hub and the platform's range in one region: connectivity/<region>.yaml, or the chunks in connectivity/<region>/.",
         **mapping(properties),
+    }
+
+
+def network() -> dict:
+    return {
+        "$schema": DRAFT,
+        "title": "MLZ management or identity network",
+        "description": "management/<region>.yaml (optional, the primary region only) or identity/<region>.yaml (builds identity's network in that region). Neither takes a setting yet: leave it empty or comments only.",
+        **mapping({}),
     }
 
 
@@ -159,7 +167,7 @@ def firewall_rules() -> dict:
     return {
         "$schema": DRAFT,
         "title": "MLZ firewall rules",
-        "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one, firewall/management.yaml and firewall/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
+        "description": "Outbound rules: firewall-rules/platform.yaml for every landing zone, firewall-rules/landing-zones/<key>.yaml for one, firewall-rules/management.yaml and firewall-rules/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
         **mapping({"outbound": or_empty({"description": "The rules, each with name, description, to and ports.", "type": "array", "items": rule})}),
     }
 
@@ -241,8 +249,9 @@ def bootstrap() -> dict:
 SCHEMAS = {
     "customer.schema.json": customer,
     "bootstrap.schema.json": bootstrap,
-    "hub.schema.json": hub,
-    "firewall.schema.json": firewall_rules,
+    "connectivity.schema.json": connectivity,
+    "network.schema.json": network,
+    "firewall-rules.schema.json": firewall_rules,
     "landing-zone.schema.json": landing_zone,
 }
 
