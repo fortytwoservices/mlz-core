@@ -50,11 +50,27 @@ def resource_type(address: str) -> str:
     return f"{modules[-1]}: {name}" if modules else name
 
 
-def fingerprint(change: dict) -> str:
+# What a plan and its apply may read differently, so an update's fingerprint leaves it out. GitHub returns a repo's
+# merge settings only to a token with Administration: write: vending's plan reads them as unset, its apply as they
+# are. Vending ignores them once a workload repo is made (vending/terraform/main.tf), but an update for another
+# reason still carries them in its planned values. A repo that is made still has them counted.
+UNREAD_ON_UPDATE = {
+    "github_repository": {
+        "allow_merge_commit", "allow_rebase_merge", "allow_squash_merge", "delete_branch_on_merge",
+        "merge_commit_message", "merge_commit_title", "squash_merge_commit_message", "squash_merge_commit_title",
+    },
+}
+
+
+def fingerprint(change: dict, resource: str | None = None) -> str:
     """What the change does, values included, in a few characters. Sensitive values only ever leave as
     part of the hash. The ID of the resource it starts from counts too: a deletion has no planned values,
     and must not match the deletion of another resource at the same address."""
     what = {key: change.get(key) for key in ("actions", "after", "after_unknown")}
+    unread = UNREAD_ON_UPDATE.get(resource or "", set()) if change.get("actions") == ["update"] else set()
+    for key in ("after", "after_unknown"):
+        if unread and isinstance(what[key], dict):
+            what[key] = {name: value for name, value in what[key].items() if name not in unread}
     before = change.get("before")
     what["before_id"] = before.get("id") if isinstance(before, dict) else None
     return hashlib.sha256(json.dumps(what, sort_keys=True).encode()).hexdigest()[:16]
@@ -69,7 +85,7 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> in
         kind = KIND.get(tuple(change["change"]["actions"]))
         if kind:
             label = change["address"] + (f" deposed:{change['deposed']}" if change.get("deposed") else "")
-            records.append((kind, change["address"], label, fingerprint(change["change"])))
+            records.append((kind, change["address"], label, fingerprint(change["change"], change.get("type"))))
             before = change["change"].get("before")
             if "delete" in change["change"]["actions"] and isinstance(before, dict) and FIREWALL_POLICY.match(str(before.get("type", ""))):
                 refused.append((kind, before.get("name") or label, label))
