@@ -101,5 +101,58 @@ class StacksTest(unittest.TestCase):
         self.assertRegex(printed, r"\n  landing-zones/web/prod/network\.yaml +-> web-prod\n")  # a chunk of web-prod
 
 
+class ChangedTest(unittest.TestCase):
+    """What a pull request or a push plans: the stacks whose rendered config differs from the base commit's."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.head, self.base = Path(self.tmp.name) / "head", Path(self.tmp.name) / "base"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, root: Path, path: str, text: str) -> None:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(text)
+
+    def test_vending_plans_the_landing_zones_whose_config_changed_and_new_ones(self):
+        for root in (self.head, self.base):
+            self.write(root, ".mlz/vending/a-prod.json", "{}")
+            self.write(root, ".mlz/vending/b-prod.json", "{}")
+        self.write(self.head, ".mlz/vending/b-prod.json", '{"budget": 5}')
+        self.write(self.head, ".mlz/vending/c-dev.json", "{}")  # new: the base had none
+        self.assertEqual(stacks.changed("vending", ["a-prod", "b-prod", "c-dev"], self.head, self.base), ["b-prod", "c-dev"])
+
+    def test_the_platform_s_three_stacks_share_one_config_and_the_rules_have_their_own(self):
+        for root in (self.head, self.base):
+            self.write(root, ".mlz/platform.json", "{}")
+            self.write(root, ".mlz/firewall.json", "{}")
+        every = [s.name for s in stacks.STACKS if s.role == "platform"]
+        self.assertEqual(stacks.changed("platform", every, self.head, self.base), [])
+        self.write(self.head, ".mlz/firewall.json", '{"rules": 1}')
+        self.assertEqual(stacks.changed("platform", every, self.head, self.base), ["firewall-rules"])
+        self.write(self.head, ".mlz/platform.json", '{"hubs": 1}')
+        self.assertEqual(stacks.changed("platform", every, self.head, self.base), ["connectivity", "management", "identity", "firewall-rules"])
+
+    def test_governance_reads_its_rendered_library_and_the_bootstrap_s_contract(self):
+        for root in (self.head, self.base):
+            self.write(root, ".mlz/rendered/archetypes/corp.json", "{}")
+            self.write(root, "_generated/bootstrap.yaml", "state: {}\n")
+        self.assertEqual(stacks.changed("governance", ["governance"], self.head, self.base), [])
+        self.write(self.head, ".mlz/rendered/archetypes/online.json", "{}")  # a file more in the folder
+        self.assertEqual(stacks.changed("governance", ["governance"], self.head, self.base), ["governance"])
+        self.write(self.base, ".mlz/rendered/archetypes/online.json", "{}")
+        self.write(self.head, "_generated/bootstrap.yaml", "state: {account: x}\n")
+        self.assertEqual(stacks.changed("governance", ["governance"], self.head, self.base), ["governance"])
+
+    def test_check_sh_names_every_input_the_roots_are_given(self):
+        # What vars_for passes a root must be what inputs() compares, or a change to it would plan nothing.
+        lib = (stacks.CORE / "tools" / "ci" / "lib.sh").read_text()
+        for passed in ("$WORK/rendered", "_generated/bootstrap.yaml", "$WORK/firewall.json", "$WORK/platform.json", "$WORK/vending/$stack.json"):
+            self.assertIn(passed, lib)
+        # Those (platform.json twice), the stack's own name (network=) and the organization's ID, neither of which a change moves.
+        self.assertEqual(len(re.findall(r"-var [a-z_]+=", lib)), 8)
+
+
 if __name__ == "__main__":
     unittest.main()

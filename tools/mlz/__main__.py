@@ -13,6 +13,7 @@
                             [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
     python3 -m mlz map      --repo <a customer repo>                 each settings file's stack, root and modules
+    python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.sh
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
 
@@ -109,6 +110,11 @@ def main() -> int:
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     mp = roles.add_parser("map", help="each settings file's stack, that stack's Terraform root and its modules (see tools/mlz/stacks.py)")
     mp.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
+    st = roles.add_parser("stacks", help="of the stacks given, those whose rendered config differs from the base's (tools/ci/check.sh)")
+    st.add_argument("--role", dest="stack_role", required=True, choices=["governance", "platform", "vending"])
+    st.add_argument("--stacks", required=True, help="every stack, as JSON, as check.sh found them")
+    st.add_argument("--base", type=Path, required=True, help="the base commit's copy of the repo, checked by check.sh")
+    st.add_argument("--repo", type=Path, default=Path("."), help="this commit's repo, checked (default: here)")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -125,6 +131,15 @@ def main() -> int:
 
     if args.role == "map":
         print(stacks.render(args.repo), end="")
+        return 0
+
+    if args.role == "stacks":
+        every = json.loads(args.stacks)
+        touched = stacks.changed(args.stack_role, every, args.repo, args.base)
+        print(f"::notice::Planning {len(touched)} of {len(every)} stacks, those whose config this change touches: {', '.join(touched)}. "
+              "The others are as on the base, so they are not planned." if touched else
+              f"::notice::Nothing to plan: no stack's config differs from the base's ({len(every)} stacks).", file=sys.stderr)
+        print(json.dumps(touched))
         return 0
 
     if args.role == "install":

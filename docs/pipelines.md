@@ -75,7 +75,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 | Job | When | What it does |
 |---|---|---|
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
-| `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
+| `plan` | pull requests, `main`, and daily | One plan per stack the run plans ([below](#what-a-run-plans)) (the role's stacks, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
@@ -101,6 +101,19 @@ Self-hosted runners take only jobs from mlz-core's `role.yml` at the release a r
 request adds to `mlz.yml` gets none. Until then, and once it is deleted again, they run on
 GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
 runners.
+
+## What a run plans
+
+A pull request or a push to `main` plans only the stacks its change touches: those whose rendered config (what
+`check` writes for the roots) differs from the base commit's, rendered in the same run with the same mlz-core. The
+base is the commit before: a pull request's base branch, or where `main` was before the push. A change to one landing
+zone's file plans that landing zone; a change to `defaults/`, the IP plan, `_generated/names.yaml` or a contract plans
+every stack whose config it changes, and no other; a README plans nothing. The run page says which and why.
+
+Every stack is planned on the daily check, on a manual run (Actions, mlz, Run workflow), when the pipeline file changed
+(an upgrade to another mlz-core release), when a push brings more than one commit, and when the base does not check
+with this release. A stack whose apply failed is not planned again by the next push that does not touch it: start a
+manual run, which plans every stack, or wait for the daily check, which reports it.
 
 ## A plan that deletes a firewall policy is refused
 

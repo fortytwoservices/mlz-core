@@ -70,6 +70,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 2 # the commit before too: check.sh plans only the stacks a change touches, against it
 
       # The caller pins mlz-core with uses: ...@<release>; job.workflow_sha is the commit that release points
       # at, and every job checks out mlz-core there, so the code is always exactly the workflow's own. An
@@ -193,6 +194,8 @@ jobs:
 
       - name: Check the YAML
         id: check
+        env:
+          EVENT_BEFORE: ${{ github.event.before }} # a push's: where main was, to plan only what the push touches
         run: |
           stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")  # its own assignment, so that a failed check fails the step
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
