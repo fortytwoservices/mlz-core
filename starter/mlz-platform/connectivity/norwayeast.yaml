@@ -1,6 +1,7 @@
-# The platform's networks in one region, named after the region: rename the file if governance's primary
-# region is another. Every setting is commented out, so the platform waits and builds nothing; once a setting
-# is set, platform_address_space and landing_zone_ranges are required. What each setting does:
+# The hub and the platform's range in one region, named after the region: rename the file if governance's
+# primary region is another. Every setting is commented out, so the platform waits and builds nothing; once a
+# setting is set, platform_address_space and landing_zone_ranges are required. Identity's network, for domain
+# controllers, is built where identity/<region>.yaml exists (an empty file). What each setting does:
 # docs/platform.md in mlz-core.
 
 # platform_address_space: 10.100.0.0/21    # the hub, management and identity, a /21; mlz-core lays it out
@@ -10,4 +11,3 @@
 # firewall: Standard                       # Standard (the default), Premium or Basic
 # dns_resolver: true                       # resolves Private Link names for landing zones and on-premises (default)
 # bastion: false                           # Bastion for VMs in any landing zone (off by default)
-# identity: false                          # identity's network here, for domain controllers (off by default)

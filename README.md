@@ -17,19 +17,21 @@ governance/
   lib/                 Fortytwo's additions to the Azure Landing Zones library
   scripts/             render_library.py (customer.yaml -> the customer's library) and its tests
   terraform/           the governance root
-platform/terraform/    the platform root: hubs, firewalls, DNS
+platform/terraform/    the platform's connectivity root: hubs, firewalls, DNS; networks/ (management, identity)
+                       and rules/ (the firewall rules) beside it
 vending/terraform/     the vending root: one landing zone per state
 tools/mlz/             the loader: customer YAML in, checked config out; the IP allocator; the contracts;
                        mlz upgrade, which opens the pull request moving a customer to another release;
                        mlz install, which sets a new customer up step by step; mlz schema (below);
                        mlz explain, which shows where each of a landing zone's values comes from;
-                       mlz new landing-zone, which starts a landing zone's files
+                       mlz new landing-zone, which starts a landing zone's files;
+                       mlz map, which says what each settings file feeds: its stack, root and modules
 tools/ci/              the pipeline steps, run by .github/workflows/role.yml in each customer repo
 modules/
   naming/              the names of everything mlz-core creates, shared by every root
 starter/
   mlz-<role>/          what each template repo starts with: its pipeline, its editor settings, and
-                       example settings, commented out or in a folder the loader skips
+                       example settings, commented out or in examples/, which the loader does not read
 schemas/               JSON Schemas of the customer YAML, for editors (below)
 docs/                  one page per part
 ```

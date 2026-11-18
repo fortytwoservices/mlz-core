@@ -20,8 +20,8 @@ class ExplainTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
         self.allocate()
 
@@ -45,11 +45,11 @@ class ExplainTest(unittest.TestCase):
 
     def test_each_value_names_the_file_that_set_it_and_what_it_replaced(self):
         rows = self.rows()
-        self.assertEqual(rows["owner"], ("payments@demo.example", "landing-zones/payments/_workload.yaml"))
-        self.assertEqual(rows["location"], ("norwayeast", "landing-zones/_defaults/all.yaml"))
-        # _defaults/all.yaml says 500, payments/prod.yaml 2000: the later layer wins, and says what it replaced.
-        self.assertEqual(rows["budget.monthly"], ("2000", "landing-zones/payments/prod.yaml, replacing landing-zones/_defaults/all.yaml: 500"))
-        self.assertEqual(rows["budget.contacts"], ("[platform@demo.example]", "landing-zones/_defaults/all.yaml"))
+        self.assertEqual(rows["owner"], ("payments@demo.example", "landing-zones/payments/workload-defaults.yaml"))
+        self.assertEqual(rows["location"], ("norwayeast", "defaults/landing-zone-defaults.yaml"))
+        # defaults/landing-zone-defaults.yaml says 500, payments/prod.yaml 2000: the later layer wins, and says what it replaced.
+        self.assertEqual(rows["budget.monthly"], ("2000", "landing-zones/payments/prod.yaml, replacing defaults/landing-zone-defaults.yaml: 500"))
+        self.assertEqual(rows["budget.contacts"], ("[platform@demo.example]", "defaults/landing-zone-defaults.yaml"))
 
     def test_what_nothing_sets_is_mlz_cores_default(self):
         rows = self.rows()
@@ -62,11 +62,11 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(rows["name virtual_network"], ("vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
         self.assertEqual(rows["name NSG of default"], ("nsg-demo-pay-default-pd-nwe-01", "recorded in _generated/names.yaml"))
         # A changed short name renames nothing; explain shows what renewing would give.
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertEqual(self.rows()["name virtual_network"], (
             "vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml; the template now gives vnet-demo-pm-pd-nwe-01 (python3 -m mlz names --renew payments-prod)"))
         # Not recorded yet: the template's, which the pull request's run records.
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         (self.repo / vending.NAMES).unlink()
         self.assertEqual(self.rows()["name route_table"], ("rt-demo-pay-pd-nwe-01", "the naming template (docs/naming.md), recorded by the IP allocator on the pull request"))
         self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-legacy\n")
@@ -89,7 +89,7 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(explain.problems("payments-prod", lz(), vending.ip_plan(self.repo), GOVERNANCE, PLATFORM), [])
 
     def test_the_workload_repo_vending_makes(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
         self.allocate()
         rows = self.rows()
         self.assertEqual(rows["github.repo"], ("made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
@@ -100,18 +100,18 @@ class ExplainTest(unittest.TestCase):
 
     def test_a_subscription_vending_makes(self):
         ea = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + f"billing_scope: {ea}\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + f"billing_scope: {ea}\n")
         self.write("landing-zones/payments/prod.yaml", "budget: null\n")
         self.allocate()
         rows = self.rows()
         self.assertEqual(rows["subscription"], ("made by vending", "none is handed over: vending's apply makes it, by the alias demo-payments-prod, billed where billing_scope says (EA)"))
-        self.assertEqual(rows["billing_scope"], (ea, "landing-zones/_defaults/all.yaml"))
+        self.assertEqual(rows["billing_scope"], (ea, "defaults/landing-zone-defaults.yaml"))
         self.assertEqual(rows["name subscription"], ("sub-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml"))
         lz = vending.landing_zones(self.repo)["payments-prod"]
         self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), GOVERNANCE, PLATFORM, vending.recorded_names(self.repo)), [])
         # Without the contracts too: no subscription is asked for.
         self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None, vending.recorded_names(self.repo)), [])
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
         lz = vending.landing_zones(self.repo)["payments-prod"]
         self.assertEqual(explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None),
                          ["landing-zones/payments/prod: subscription is required, or billing_scope for vending to make one (set either here or in a layer above)."])
@@ -158,12 +158,12 @@ class ExplainTest(unittest.TestCase):
         value, source = self.rows()["budget"]
         self.assertEqual(value, "null")
         # Both values the defaults had under budget are named, contacts and monthly.
-        self.assertIn("replacing landing-zones/_defaults/all.yaml: budget.contacts [platform@demo.example]", source)
-        self.assertIn("landing-zones/_defaults/all.yaml: budget.monthly 500", source)
+        self.assertIn("replacing defaults/landing-zone-defaults.yaml: budget.contacts [platform@demo.example]", source)
+        self.assertIn("defaults/landing-zone-defaults.yaml: budget.monthly 500", source)
 
     def test_another_landing_zones_problems_stay_out(self):
         # internal-payments-prod ends with payments-prod; its own overlap is not payments-prod's problem.
-        self.write("landing-zones/internal/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/internal/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/internal/payments-prod.yaml", "subscription: 44444444-4444-4444-4444-444444444444\n")
         plan, _, retired = vending.allocate(self.repo, PLATFORM)
         plan["internal-payments-prod"]["range"] = vending.IPv4Network("10.100.0.0/24")  # inside the hub's range
@@ -171,7 +171,7 @@ class ExplainTest(unittest.TestCase):
         self.assertEqual(self.problems(), [])
 
     def test_an_overlap_with_another_landing_zone_is_reported(self):
-        self.write("landing-zones/internal/_workload.yaml", WORKLOAD)
+        self.write("landing-zones/internal/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/internal/web.yaml", "subscription: 44444444-4444-4444-4444-444444444444\n")
         plan, _, retired = vending.allocate(self.repo, PLATFORM)
         plan["internal-web"]["range"] = plan["payments-prod"]["range"]
@@ -179,7 +179,7 @@ class ExplainTest(unittest.TestCase):
         self.assertIn("payments-prod's range 10.100.8.0/24 overlaps internal-web's 10.100.8.0/24", "\n".join(self.problems()))
 
     def test_without_the_contracts_a_missing_required_setting_is_still_reported(self):
-        self.write("landing-zones/payments/_workload.yaml", "cost_center: '4711'\narchetype: corp\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", "cost_center: '4711'\narchetype: corp\n")
         lz = vending.landing_zones(self.repo)["payments-prod"]
         found = explain.problems("payments-prod", lz, vending.ip_plan(self.repo), None, None)
         self.assertEqual(found, ["landing-zones/payments/prod: owner is required (set it here or in a layer above)."])

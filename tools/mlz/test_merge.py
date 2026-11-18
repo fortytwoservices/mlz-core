@@ -74,7 +74,7 @@ class FilesTest(unittest.TestCase):
         self.assertIn("keep one", str(caught.exception))
 
     def test_names_skip_underscore_and_hidden_entries(self):
-        for name in ("norwayeast.yaml", "_defaults.yaml", ".hidden.yaml"):
+        for name in ("norwayeast.yaml", "_draft.yaml", ".hidden.yaml"):
             (self.dir / name).write_text("{}\n")
         (self.dir / "swedencentral").mkdir()
         self.assertEqual(setting_names(self.dir), ["norwayeast", "swedencentral"])

@@ -12,8 +12,8 @@
 #     to: [archive.ubuntu.com, security.ubuntu.com]
 #     ports: [https, http]
 
-# One landing zone's own rules go in firewall/landing-zones/<key>.yaml, from its own range, in the same
-# shape. For example, firewall/landing-zones/payments-prod.yaml:
+# One landing zone's own rules go in firewall-rules/landing-zones/<key>.yaml, from its own range, in the
+# same shape. For example, firewall-rules/landing-zones/payments-prod.yaml:
 #
 # outbound:
 #   - name: card-processor

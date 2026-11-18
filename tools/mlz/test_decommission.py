@@ -84,8 +84,8 @@ class DecommissionTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
         self.write("landing-zones/payments/dev.yaml", DEV)
         plan, _, retired = allocate(self.repo, PLATFORM)
@@ -107,25 +107,25 @@ class DecommissionTest(unittest.TestCase):
         decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append, sha="run-sha")
 
     def test_nothing_is_offered_while_no_landing_zone_is_decommissioned(self):
-        github = FakeGitHub(platform_files={"firewall/landing-zones/payments-dev.yaml"})
+        github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml"})
         self.cleanup(github)
         self.assertEqual((github.commits, github.pulls), ([], []))
 
     def test_the_platform_s_rules_file_goes_first(self):
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
-        github = FakeGitHub(platform_files={"firewall/landing-zones/payments-dev.yaml", "firewall/landing-zones/payments-prod.yaml"})
+        github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml", "firewall-rules/landing-zones/payments-prod.yaml"})
         self.cleanup(github)
         self.assertEqual(github.commits, [(REPOS["platform"], "mlz/decommission-payments-dev",
-                                           {"firewall/landing-zones/payments-dev.yaml": None},
+                                           {"firewall-rules/landing-zones/payments-dev.yaml": None},
                                            "chore: delete the firewall rules of decommissioned payments-dev")])
         self.assertEqual([pull[0] for pull in github.pulls], [REPOS["platform"]])  # vending's waits
         self.assertIn("its own pull request follows once that is merged", self.printed[0])
 
     def test_rules_kept_as_a_folder_of_chunks_go_whole(self):
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
-        github = FakeGitHub(platform_files={"firewall/landing-zones/payments-dev/web.yaml", "firewall/landing-zones/payments-dev/db.yaml"})
+        github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev/web.yaml", "firewall-rules/landing-zones/payments-dev/db.yaml"})
         self.cleanup(github)
-        self.assertEqual(set(github.commits[0][2]), {"firewall/landing-zones/payments-dev/web.yaml", "firewall/landing-zones/payments-dev/db.yaml"})
+        self.assertEqual(set(github.commits[0][2]), {"firewall-rules/landing-zones/payments-dev/web.yaml", "firewall-rules/landing-zones/payments-dev/db.yaml"})
 
     def test_then_the_landing_zone_s_file_goes_and_its_range_is_released(self):
         dev_range = read_yaml(self.repo / IP_PLAN)["payments-dev"]["range"]
@@ -135,7 +135,7 @@ class DecommissionTest(unittest.TestCase):
         repo, branch, files, message = github.commits[0]
         self.assertEqual((repo, branch, message), (REPOS["vending"], "mlz/decommission-payments-dev", "chore: remove decommissioned payments-dev and release its range"))
         self.assertIsNone(files["landing-zones/payments/dev.yaml"])
-        self.assertNotIn("landing-zones/payments/_workload.yaml", files)  # payments-prod still uses it
+        self.assertNotIn("landing-zones/payments/workload-defaults.yaml", files)  # payments-prod still uses it
         self.write(IP_PLAN, files[IP_PLAN])
         self.assertEqual(sorted(read_yaml(self.repo / IP_PLAN)), ["payments-prod"])
         self.write(NAMES, files[NAMES])  # its names go with it
@@ -190,7 +190,7 @@ class DecommissionTest(unittest.TestCase):
         github = FakeGitHub()
         self.cleanup(github)
         files = github.commits[0][2]
-        self.assertIsNone(files["landing-zones/payments/_workload.yaml"])
+        self.assertIsNone(files["landing-zones/payments/workload-defaults.yaml"])
         self.assertIsNone(files["landing-zones/payments/dev.yaml"])
 
     def test_an_open_pull_request_is_left_as_it_is(self):

@@ -10,8 +10,8 @@ from mlz import owners
 from mlz.merge import ConfigError
 
 UNKNOWN = {"line": 4, "column": 12, "kind": "Unknown owner", "path": ".github/CODEOWNERS",
-           "source": "/firewall/ @acme/network\n",
-           "message": "Unknown owner on line 4: make sure the team @acme/network exists, is publicly visible, and has write access to the repository\n\n  /firewall/ @acme/network\n             ^"}
+           "source": "/firewall-rules/ @acme/network\n",
+           "message": "Unknown owner on line 4: make sure the team @acme/network exists, is publicly visible, and has write access to the repository\n\n  /firewall-rules/ @acme/network\n             ^"}
 
 
 def unknown(line: int, source: str, name: str) -> dict:
@@ -98,7 +98,7 @@ class OwnersTest(unittest.TestCase):
 
     def errors(self):
         # The line GitHub's own errors API answered for in fortytwo-test: two owners, one without access.
-        return [unknown(2, "/firewall/ @acme/platform @acme/network", "@acme/network"), unknown(3, "/net/ @acme/network", "@acme/network")]
+        return [unknown(2, "/firewall-rules/ @acme/platform @acme/network", "@acme/network"), unknown(3, "/net/ @acme/network", "@acme/network")]
 
     def test_on_a_pull_request_a_visible_team_without_access_is_only_noted(self):
         self.owned()
@@ -127,7 +127,7 @@ class OwnersTest(unittest.TestCase):
         }
         for case, (teams, name) in cases.items():
             with self.subTest(case):
-                github = FakeGitHub([unknown(2, f"/firewall/ {name}", name)], teams=teams)
+                github = FakeGitHub([unknown(2, f"/firewall-rules/ {name}", name)], teams=teams)
                 with self.assertRaisesRegex(ConfigError, "line 2: Unknown owner"):
                     self.check(github, "grant")
                 self.assertEqual(github.granted, [])

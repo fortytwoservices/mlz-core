@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "MLZ hub",
-  "description": "The platform's networks in one region, the hub first: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+  "title": "MLZ connectivity",
+  "description": "The hub and the platform's range in one region: connectivity/<region>.yaml, or the chunks in connectivity/<region>/.",
   "type": "object",
   "properties": {
     "platform_address_space": {
@@ -59,11 +59,6 @@
     },
     "bastion": {
       "description": "Azure Bastion, for VMs in any landing zone.",
-      "type": "boolean",
-      "default": false
-    },
-    "identity": {
-      "description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.",
       "type": "boolean",
       "default": false
     },

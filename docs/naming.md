@@ -70,7 +70,7 @@ landing zone's environment (its file name) and its region:
 Subnets (`snet-<name>`) and peerings (`peer-<key>-to-hub`, `peer-hub-to-<key>`) are named inside their network,
 so they keep that pattern.
 
-- **`short_name`**, in `_workload.yaml`: the workload's short name, 2 to 5 lower-case letters and digits, one
+- **`short_name`**, in `workload-defaults.yaml`: the workload's short name, 2 to 5 lower-case letters and digits, one
   per workload. A workload whose folder name fits (`web`) needs none: that is its short name. Two workloads may
   not share one. `python3 -m mlz new landing-zone` writes it for a new workload (`--short-name`), or leaves it to
   fill in.
@@ -161,7 +161,7 @@ such as the DNS zones' group or management's network, comes from one place, so t
 Unlike a landing zone's, these are **worked out on every run** and not recorded: they change only with a reviewed
 change to `customer.yaml`, whose plans show every renamed resource replaced. Two ways to keep a name:
 
-- **A hub component**: under `names:` in its hub file (`docs/platform.md`).
+- **A hub component**: under `names:` in its connectivity file (`docs/platform.md`).
 - **The bootstrap's state account or resource group**: under `names:` in `bootstrap.yaml`. The state account
   holds every role's state, so it has `prevent_destroy`: a change that would rename it stops the plan instead
   (`docs/bootstrap.md`). A storage account's name is global, so this is also the way out when another tenant

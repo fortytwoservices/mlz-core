@@ -1,5 +1,5 @@
-# The payments workload, all its environments. An example: vending skips _examples/, so nothing here is
-# deployed. Copy the folder to landing-zones/payments/ and change it.
+# The payments workload, all its environments. An example: vending does not read examples/, so nothing here
+# is deployed. Copy the folder to landing-zones/payments/ and change it.
 
 short_name: pay                       # in every name: 2 to 5, unique among workloads (docs/naming.md)
 owner: payments-team@demo.example     # the owning team; becomes the Owner tag

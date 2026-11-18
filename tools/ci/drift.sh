@@ -52,7 +52,7 @@ fi
   echo "change main to match."
   if [[ ${ROLE:-} == platform ]]; then
     echo "A change in GitHub's own list of domains, which the private runners reach, shows here too, in the"
-    echo "firewall stack."
+    echo "firewall-rules stack."
   fi
   echo
   echo "This issue closes itself when a daily check finds every stack as main says."

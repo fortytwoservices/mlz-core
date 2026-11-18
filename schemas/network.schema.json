@@ -1,0 +1,8 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ management or identity network",
+  "description": "management/<region>.yaml (optional, the primary region only) or identity/<region>.yaml (builds identity's network in that region). Neither takes a setting yet: leave it empty or comments only.",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}

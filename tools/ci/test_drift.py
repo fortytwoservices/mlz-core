@@ -50,22 +50,22 @@ class DriftTest(unittest.TestCase):
         return self.log.read_text() if self.log.exists() else ""
 
     def test_drift_opens_one_issue_naming_the_stacks(self):
-        log = self.run_drift({"platform": 2, "management": 0, "firewall": 2, "identity": None})
+        log = self.run_drift({"connectivity": 2, "management": 0, "firewall-rules": 2, "identity": None})
         self.assertIn(f"issue create --title {TITLE} --body-file", log)
-        self.assertIn("- **Azure differs from main:** `platform`, `firewall`", log)
+        self.assertIn("- **Azure differs from main:** `connectivity`, `firewall-rules`", log)
         self.assertIn("- **No plan:** `identity`, the plan did not finish", log)
         self.assertNotIn("`management`", log)
         self.assertIn("https://example/run/1", log)
-        self.assertIn("A change in GitHub's own list of domains", log)  # the platform's firewall stack
+        self.assertIn("A change in GitHub's own list of domains", log)  # the platform's firewall-rules stack
 
     def test_a_job_that_never_planned_is_not_a_clean_one(self):
-        log = self.run_drift({"platform": "none"}, open_issue="12")  # what the job records when it stopped before planning
-        self.assertIn("- **No plan:** `platform`, the plan did not finish", log)
+        log = self.run_drift({"connectivity": "none"}, open_issue="12")  # what the job records when it stopped before planning
+        self.assertIn("- **No plan:** `connectivity`, the plan did not finish", log)
         self.assertNotIn("issue close 12", log)
 
     def test_a_refused_plan_is_reported_as_not_planned(self):
-        log = self.run_drift({"platform": 3})
-        self.assertIn("- **No plan:** `platform`, refused: it deletes or replaces a firewall policy", log)
+        log = self.run_drift({"connectivity": 3})
+        self.assertIn("- **No plan:** `connectivity`, refused: it deletes or replaces a firewall policy", log)
         self.assertNotIn("Azure differs from main:**", log)
 
     def test_a_failed_check_is_never_a_clean_one(self):
@@ -79,21 +79,21 @@ class DriftTest(unittest.TestCase):
         self.assertIn("issue close 12", log)
 
     def test_drift_again_comments_on_the_open_issue(self):
-        log = self.run_drift({"platform": 2}, open_issue="12")
+        log = self.run_drift({"connectivity": 2}, open_issue="12")
         self.assertIn("issue comment 12 --body-file", log)
         self.assertNotIn("issue create", log)
 
     def test_a_clean_check_closes_the_open_issue(self):
-        log = self.run_drift({"platform": 0, "firewall": 0}, open_issue="12")
+        log = self.run_drift({"connectivity": 0, "firewall-rules": 0}, open_issue="12")
         self.assertIn("issue close 12 --comment The daily check of", log)
         self.assertIn("found every stack as main says: https://example/run/1", log)
 
     def test_a_clean_check_without_an_issue_does_nothing_more(self):
-        log = self.run_drift({"platform": 0})
+        log = self.run_drift({"connectivity": 0})
         self.assertEqual([line.split()[:2] for line in log.splitlines()], [["issue", "list"]])
 
     def test_only_its_own_issue_is_looked_for(self):
-        log = self.run_drift({"platform": 0})
+        log = self.run_drift({"connectivity": 0})
         self.assertIn("--author app/github-actions", log)
         self.assertIn(f'in:title "{TITLE}"', log)
 

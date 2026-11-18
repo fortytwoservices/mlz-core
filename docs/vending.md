@@ -10,30 +10,35 @@ identity, and a budget. Built on Microsoft's `Azure/avm-ptn-alz-sub-vending/azur
 Four layers, each saying only what differs from the one above:
 
 ```
+defaults/
+  landing-zone-defaults.yaml          every landing zone
+  <env>-defaults.yaml                 every landing zone in that environment (optional)
 landing-zones/
-  _defaults/all.yaml          every landing zone
-  _defaults/<env>.yaml        every landing zone in that environment (optional)
-  <workload>/_workload.yaml   one workload, all its environments
-  <workload>/<env>.yaml       one landing zone
+  <workload>/workload-defaults.yaml   one workload, all its environments
+  <workload>/<env>.yaml               one landing zone
 ```
 
+`<env>` is any name the customer uses (dev, test, uat, prod); mlz-core gives none a meaning. A file in
+`defaults/` that is neither kind is refused, so a misnamed one never applies to nothing unnoticed.
+`python3 -m mlz map` prints which landing zones each file reaches.
+
 ```yaml
-# payments/_workload.yaml: the payments workload, all environments
+# landing-zones/payments/workload-defaults.yaml: the payments workload, all environments
 owner: payments-team@demo.example     # becomes the Owner tag
 cost_center: "4711"                   # becomes the CostCenter tag
 archetype: corp                       # corp, online or sandbox
 ```
 
 ```yaml
-# payments/prod.yaml: payments in production, one subscription
+# landing-zones/payments/prod.yaml: payments in production, one subscription
 subscription: 00000000-0000-0000-0000-000000000005
 budget:
   monthly: 2000
 ```
 
-The vending starter comes with `_defaults/all.yaml`, its settings commented out, and a complete landing
-zone in `landing-zones/_examples/payments/`, which vending skips: a folder whose name starts with `_` is
-never a workload. Copy the folder to `landing-zones/payments/` to start from it.
+The vending starter comes with `defaults/landing-zone-defaults.yaml`, its settings commented out, and a
+complete landing zone in `examples/payments/`, which vending does not read. Copy the folder to
+`landing-zones/payments/` to start from it.
 
 The landing zone's key is its folder and file name, `payments-prod`; two paths that make the same key
 (`payments-api/prod.yaml` and `payments/api-prod.yaml`) are refused. Settings:
@@ -41,10 +46,10 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 | Setting | What it is |
 |---|---|
 | `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. `subscription` is one handed over; without it, vending makes one ([below](#the-subscription)). |
-| `billing_scope` | Where the subscriptions vending makes are billed: an EA enrollment account or an MCA invoice section. Set once, in `_defaults/all.yaml` ([below](#the-subscription)). |
+| `billing_scope` | Where the subscriptions vending makes are billed: an EA enrollment account or an MCA invoice section. Set once, in `defaults/landing-zone-defaults.yaml` ([below](#the-subscription)). |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
 | `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
-| `github` | The landing zone's workload repo ([below](#the-workload-repo)). `organization`, set once in `_defaults/all.yaml`: from then on every landing zone has one. `repo`: an existing repo to use instead, which vending only trusts. `create: false`: none, for example for a sandbox. `team`: the owning team's GitHub team, by its slug, set once per workload in `_workload.yaml`. |
+| `github` | The landing zone's workload repo ([below](#the-workload-repo)). `organization`, set once in `defaults/landing-zone-defaults.yaml`: from then on every landing zone has one. `repo`: an existing repo to use instead, which vending only trusts. `create: false`: none, for example for a sandbox. `team`: the owning team's GitHub team, by its slug, set once per workload in `workload-defaults.yaml`. |
 | `tags` | Extra tags. `Owner`, `CostCenter`, `Environment`, `Workload` and `ManagedBy` are set for you. Azure ignores case in tag names, so the checks do too. At most 45, within Azure's limits on names and values. |
 
 Any layer can be a folder of chunks.
@@ -95,7 +100,7 @@ Any layer can be a folder of chunks.
   `python3 -m mlz names --renew <key>` gives a landing zone the template's names again (`docs/naming.md`).
 
 `python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
-the value (a mistake in `_defaults/all.yaml` is reported once, against that file, not once per landing zone),
+the value (a mistake in `defaults/landing-zone-defaults.yaml` is reported once, against that file, not once per landing zone),
 and writes `<key>.json` per landing zone; the Terraform root reads one of them. The output folder is
 its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
 folder holding anything else is refused.
@@ -103,7 +108,7 @@ folder holding anything else is refused.
 ## Starting a landing zone
 
 `python3 -m mlz new landing-zone --repo . <workload> <env>` writes `landing-zones/<workload>/<env>.yaml`,
-and `_workload.yaml` for a new workload, with only what no layer above sets:
+and `workload-defaults.yaml` for a new workload, with only what no layer above sets:
 
 ```sh
 python3 -m mlz new landing-zone --repo . billing prod --subscription <id> --owner billing@demo.example
@@ -114,7 +119,7 @@ python3 -m mlz new landing-zone --repo . billing prod --subscription <id> --owne
   out, and the check names it until someone fills it in. With `billing_scope` set above, no subscription is
   asked for: vending makes it, unless `--subscription` hands one over.
 - **Not repeated:** a setting given at the value a layer above already has is left out.
-- **Where it goes:** owner, cost center and archetype go in the new workload's `_workload.yaml`; the
+- **Where it goes:** owner, cost center and archetype go in the new workload's `workload-defaults.yaml`; the
   subscription goes in the landing zone's own file.
 
 It writes nothing over a file that is there, and refuses a key another landing zone already has. Then it
@@ -130,8 +135,8 @@ With four layers, a value can come from any of them, from mlz-core, or from anot
 payments-prod (landing-zones/payments/prod.yaml)
 
 Set in its layers
-  owner                payments-team@demo.example     <- landing-zones/payments/_workload.yaml
-  budget.monthly       2000                           <- landing-zones/payments/prod.yaml, replacing landing-zones/_defaults/all.yaml: 500
+  owner                payments-team@demo.example     <- landing-zones/payments/workload-defaults.yaml
+  budget.monthly       2000                           <- landing-zones/payments/prod.yaml, replacing defaults/landing-zone-defaults.yaml: 500
   ...
 Filled in by mlz-core
   network.size         24                             <- mlz-core's default
@@ -173,11 +178,11 @@ owner: payments@demo.example
   another landing zone, and its rules file only warns that it can be deleted (`docs/platform.md`).
 - **Then the files go, in pull requests a person merges.** Once the destroy is applied, vending's pipeline
   (its `decommission` job, `python3 -m mlz decommission`) opens one in the platform repo that deletes
-  `firewall/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
+  `firewall-rules/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
   taken the landing zone's rules out of Azure (the job reads every rule collection group of every hub's
   firewall policy, since shared rules are in each: none still changing or failed, none with the landing zone's collections, no rule with its
   range as source or destination; deleting the file alone does not take them out), it opens one here that
-  deletes the landing zone's file, and `_workload.yaml` when it was the workload's last landing zone, and
+  deletes the landing zone's file, and `workload-defaults.yaml` when it was the workload's last landing zone, and
   releases its range in the IP plan, and its names. In that order: released, the range may go to a new landing zone, which
   must not inherit the old one's rules, and the landing zone leaves vending's contract, so a rules file still
   there would stop the platform's check. The job runs after every run on `main` in which the landing zones are
@@ -192,7 +197,7 @@ A landing zone's subscription is handed over, or made by vending:
   before the file is merged (`docs/bootstrap.md`); vending places it in its management group and changes nothing
   else about it.
 - **Made by vending:** no `subscription`, and a `billing_scope`, usually once for every landing zone in
-  `_defaults/all.yaml`. Vending's apply makes the subscription there, straight into its management group, as a
+  `defaults/landing-zone-defaults.yaml`. Vending's apply makes the subscription there, straight into its management group, as a
   Production subscription tagged as the landing zone. Its display name comes from the template
   (`sub-acme-pay-pd-nwe-01`, recorded in `_generated/names.yaml`, `docs/naming.md`). Its alias, the handle Azure
   makes it by, is `<root>-<key>` (`mlz-payments-prod`): unique in the tenant, and never changed, so the subscription
@@ -200,7 +205,7 @@ A landing zone's subscription is handed over, or made by vending:
   landing zone may still set `subscription` to hand one over instead.
 
 ```yaml
-# landing-zones/_defaults/all.yaml
+# defaults/landing-zone-defaults.yaml
 billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321
 ```
 
@@ -244,7 +249,7 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
   branch `main` whatever the organization's default is. Decommissioned, it is archived, never deleted: the team's
   code and history stay. The merge settings are set when the repo is made and then left to the team: GitHub shows
   them only to a token with Administration: write, and vending's plans read with a read-only one.
-- **Its team**: `github.team`, required for a repo vending makes, set once per workload in `_workload.yaml`. The team
+- **Its team**: `github.team`, required for a repo vending makes, set once per workload in `workload-defaults.yaml`. The team
   maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. Every apply in MLZ
   waits for a reviewer, which GitHub allows in a private repo only on GitHub Enterprise (`docs/bootstrap.md`).
 - **Its identities**: a plan identity, `id-acme-pay-plan-pd-nwe-01`, Reader on the subscription, trusted for the

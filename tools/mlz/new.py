@@ -4,7 +4,7 @@
         [--owner <email>] [--cost-center <id>] [--archetype corp|online|sandbox] [--location <region>]
         [--short-name <2 to 5>]
 
-It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/_workload.yaml, with
+It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/workload-defaults.yaml, with
 only what no layer above sets: a required setting given on the command line is written as given, one
 not given is written commented out, so the check names it until someone fills it in. A setting given that
 a layer above already has at the same value is left out, but for the subscription, which is always the
@@ -22,7 +22,7 @@ from .files import read_setting
 from .merge import ConfigError, layer
 from .yamlout import scalar
 
-# Usually the same in all of a workload's environments, so a new workload's _workload.yaml holds them.
+# Usually the same in all of a workload's environments, so a new workload's workload-defaults.yaml holds them.
 WORKLOAD_SETTINGS = ("owner", "cost_center", "archetype")
 # What each required setting is, as the files say it.
 COMMENTS = {
@@ -56,6 +56,8 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
     for name, kind in ((workload, "workload"), (env, "environment")):
         if not vending.NAME.fullmatch(name):
             raise ConfigError(f"{kind} {name!r}: up to 24 lower-case letters, digits and hyphens (it is used in names).")
+    if env == vending.WORKLOAD_DEFAULTS:
+        raise ConfigError(f"environment {env!r}: that name is the workload's own file, {vending.WORKLOAD_DEFAULTS}.yaml; choose another.")
     key = f"{workload}-{env}"
     zones = vending.landing_zones(repo)
     if key in zones:
@@ -67,7 +69,8 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
 
     # What the layers above set, merged as the loader merges them.
     above: dict = {}
-    for base in (root / "_defaults" / "all", root / "_defaults" / env, folder / "_workload"):
+    defaults = repo / vending.DEFAULTS
+    for base in (defaults / vending.ALL_DEFAULTS, defaults / f"{env}-defaults", folder / vending.WORKLOAD_DEFAULTS):
         above = layer(above, read_setting(base) or {})
 
     def same(k: str) -> bool:
@@ -91,7 +94,7 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
     written: list[Path] = []
     short = given.get("short_name")
     if short is not None and folder.exists():
-        raise ConfigError(f"{workload} is a workload already; its short name is in {folder / '_workload.yaml'}, or its own name when that fits.")
+        raise ConfigError(f"{workload} is a workload already; its short name is in {folder / f'{vending.WORKLOAD_DEFAULTS}.yaml'}, or its own name when that fits.")
     if not folder.exists():
         folder.mkdir()
         # The workload's own name is its short name when it fits (docs/naming.md); otherwise one is needed.
@@ -99,7 +102,7 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         body = [("short_name", short)] if short is not None and short != workload or short is None and not fits else []
         body += needed(WORKLOAD_SETTINGS)
         if body:
-            create(folder / "_workload.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
+            create(folder / f"{vending.WORKLOAD_DEFAULTS}.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
         rest = ("location",)
     else:
         rest = (*WORKLOAD_SETTINGS, "location")

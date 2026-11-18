@@ -1,7 +1,7 @@
-# Settings every landing zone shares. Each layer after it says only what differs: _defaults/<env>.yaml for
-# an environment, <workload>/_workload.yaml for a workload, <workload>/<env>.yaml for one landing zone.
-# A complete landing zone is in _examples/, which vending skips. What each setting does: docs/vending.md
-# in mlz-core.
+# Settings every landing zone shares. Each layer after it says only what differs: defaults/<env>-defaults.yaml
+# for an environment, landing-zones/<workload>/workload-defaults.yaml for a workload, and
+# landing-zones/<workload>/<env>.yaml for one landing zone. A complete landing zone is in examples/, which vending
+# does not read. What each setting does: docs/vending.md in mlz-core.
 
 # billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321
 #                                   # vending makes the subscription of a landing zone without one, billed

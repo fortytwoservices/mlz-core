@@ -12,14 +12,14 @@ case $role in
     ;;
   platform)
     python3 -m mlz platform --repo . --out "$WORK/platform.json" >&2
-    # As the starter comes, no hub file has a setting: the platform waits and plans nothing. On a first deployment
-    # governance's contract then merges itself, and the pull request that writes the hub is checked against it.
+    # As the starter comes, no connectivity file has a setting: the platform waits and plans nothing. On a first
+    # deployment governance's contract then merges itself, and the pull request that writes the hub is checked against it.
     if [[ ! -f $WORK/platform.json ]]; then
-      echo "::notice::No hub file has a setting yet (hubs/): the platform waits for one; nothing is planned or changed." >&2
+      echo "::notice::No connectivity file has a setting yet (connectivity/): the platform waits for one; nothing is planned or changed." >&2
       echo '[]'
       exit 0
     fi
-    # The rules stack runs with or without firewall/: every hub's platform group holds the rules mlz-core
+    # The rules stack runs with or without firewall-rules/: every hub's platform group holds the rules mlz-core
     # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
     python3 -m mlz firewall --repo . --platform-config "$WORK/platform.json" --out "$WORK/firewall.json" >&2
     # Until vending publishes its first contract, the landing zones' rules have no sources, so the rules
@@ -28,10 +28,10 @@ case $role in
     # Management's and identity's networks run every time, built or not, so turning one off takes it out
     # of Azure. They apply after the hub, which they peer with, and before the rules.
     if [[ -f _generated/vending.yaml ]]; then
-      echo '["platform","management","identity","firewall"]'   # in this order: the rules need the hub's policy
+      echo '["connectivity","management","identity","firewall-rules"]'   # in this order: the rules need the hub's policy
     else
       echo "::notice::No vending contract yet (_generated/vending.yaml): the firewall rules stack waits for it; nothing in it is planned or changed." >&2
-      echo '["platform","management","identity"]'
+      echo '["connectivity","management","identity"]'
     fi
     ;;
   vending)

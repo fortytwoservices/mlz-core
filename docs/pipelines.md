@@ -77,7 +77,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
 | `plan` | pull requests, `main`, and daily | One plan per stack (the role, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
-| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (hub, management, identity, rules), stopping at the first that fails. |
+| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 | `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
 | `workload-repos` | vending's `main`, and daily | After every run in which nothing failed: each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values (`mlz.auto.tfvars.json`) whenever they change, by the MLZ App (`docs/vending.md`). |
@@ -104,7 +104,7 @@ runners.
 
 ## A plan that deletes a firewall policy is refused
 
-A hub's firewall policy holds the rules, and the rules are a stack of their own (`firewall`), planned before
+A hub's firewall policy holds the rules, and the rules are a stack of their own (`firewall-rules`), planned before
 the hub applies. If the hub's plan deleted or replaced the policy, every rule in it would go with it while
 the rules plan said nothing changes, and the firewall would deny traffic until the rules were written again.
 So `tools/ci/summary.py` refuses any plan that deletes or replaces a firewall policy: the summary on the run
@@ -161,8 +161,8 @@ file, from `bootstrap.yaml`'s `platform_team`:
   the line hands the area back, and leaves the team's access as it is:
 
   ```
-  *             @acme/platform
-  /firewall/    @acme/network
+  *                   @acme/platform
+  /firewall-rules/    @acme/network
   /_generated/
   ```
 
@@ -211,7 +211,7 @@ not make.
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
 2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
-   contract to vending. Its starter's hub file has every setting commented out, so governance's contract
+   contract to vending. Its starter's connectivity file has every setting commented out, so governance's contract
    merges itself and the platform waits, planning nothing, until the platform team writes the hub in a pull
    request (`docs/platform.md`).
 3. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
