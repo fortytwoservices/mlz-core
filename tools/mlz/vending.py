@@ -120,11 +120,16 @@ def landing_zones(repo: Path) -> dict[str, dict]:
                 merged = layer(merged, data)
                 record(origins, data, name)
             found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins, "layers": layers}
-    # Every file in defaults/ is one of the two kinds: a misnamed one would otherwise apply to nothing, unnoticed.
-    stray = [name for name in setting_names(repo / DEFAULTS) if not name.endswith("-defaults")]
+    # Every file in defaults/ is one of the two kinds, for an environment a landing zone's file could have: a
+    # misnamed one would otherwise apply to nothing, unnoticed.
+    def defaults_file(name: str) -> bool:
+        env = name.removesuffix("-defaults")
+        return name == ALL_DEFAULTS or name != env and env != WORKLOAD_DEFAULTS and NAME.fullmatch(env) is not None
+
+    stray = [name for name in setting_names(repo / DEFAULTS) if not defaults_file(name)]
     if stray:
         raise ConfigError(f"{DEFAULTS}/{stray[0]}: not a defaults file; {DEFAULTS}/ holds {ALL_DEFAULTS}.yaml for every landing zone "
-                          f"and <env>-defaults.yaml for one environment.")
+                          f"and <env>-defaults.yaml for one environment, <env> as a landing zone's file names it (prod, test).")
     return found
 
 

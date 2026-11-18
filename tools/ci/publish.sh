@@ -28,16 +28,22 @@ else
   # The contract as the state holds it, which is what terraform output prints, read without a Terraform
   # run: the plan identity may only read the state. A state without the output fails here, loudly.
   mkdir -p "$WORK/state"
+  # The state of the stack whose root outputs the contract: governance's, and the platform's connectivity stack
+  # (tools/mlz/stacks.py).
+  case $role in
+    platform) key=connectivity.tfstate ;;
+    *) key=$role.tfstate ;;
+  esac
   # No state at all: nothing was ever applied, as on a platform still waiting for its hub (check.sh).
   exists=$(az storage blob exists --auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" \
-    --container-name "$TFSTATE_CONTAINER" --name "$role.tfstate" --query exists -o tsv)
+    --container-name "$TFSTATE_CONTAINER" --name "$key" --query exists -o tsv)
   if [[ $exists != true ]]; then
     echo "No $role state yet: nothing has been applied, so there is no contract to offer."
     exit 0
   fi
   az storage blob download --auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" \
-    --container-name "$TFSTATE_CONTAINER" --name "$role.tfstate" --file "$WORK/state/$role.tfstate" --only-show-errors >/dev/null
-  python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["outputs"]["contract"]["value"]))' "$WORK/state/$role.tfstate" |
+    --container-name "$TFSTATE_CONTAINER" --name "$key" --file "$WORK/state/$key" --only-show-errors >/dev/null
+  python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["outputs"]["contract"]["value"]))' "$WORK/state/$key" |
     python3 -m mlz contract "$role" --out "$WORK/$role.yaml"
 fi
 # A run that gets here after a newer run on main must not replace the newer one's offer: only the run of

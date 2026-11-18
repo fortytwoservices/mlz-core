@@ -22,6 +22,16 @@ class StacksTest(unittest.TestCase):
         self.assertEqual(full, [s.name for s in stacks.STACKS if s.role == "platform"])
         self.assertIn('["governance"]', check)
 
+    def test_a_contract_is_read_from_the_state_of_the_stack_whose_root_outputs_it(self):
+        # publish.sh reads the contract from a state blob, <stack>.tfstate: the stack is not always named after its role.
+        # (The bootstrap's contract is published by mlz install, from its own state.)
+        publish = (stacks.CORE / "tools" / "ci" / "publish.sh").read_text()
+        for role in ("governance", "platform"):
+            [stack] = [s for s in stacks.STACKS if s.role == role and s.name != "bootstrap" and 'output "contract"' in "".join(
+                tf.read_text() for tf in (stacks.CORE / s.root).glob("*.tf"))]
+            expected = "*) key=$role.tfstate" if stack.name == role else f"{role}) key={stack.name}.tfstate"
+            self.assertIn(expected, publish, role)
+
     def test_every_root_is_there_and_names_its_modules(self):
         for stack in stacks.STACKS:
             self.assertTrue((stacks.CORE / stack.root).is_dir(), stack.root)
@@ -69,7 +79,21 @@ class StacksTest(unittest.TestCase):
             shutil.copytree(STARTERS / "mlz-platform", repo, dirs_exist_ok=True)
             (repo / "hubs").mkdir()
             (repo / "hubs" / "norwayeast.yaml").write_text("bastion: true\n")
-            self.assertRegex(stacks.render(repo), r"\n  hubs/norwayeast\.yaml +-> NOT READ by any stack\n")  # a folder from before L10
+            (repo / "firewall-rules" / "payments-prod.yaml").write_text("outbound: []\n")  # belongs in landing-zones/
+            printed = stacks.render(repo)
+        for path in ("hubs/norwayeast.yaml", "firewall-rules/payments-prod.yaml"):  # a folder from before L10; a misplaced file
+            self.assertRegex(printed, rf"\n  {re.escape(path)} +-> NOT READ by any stack\n")
+
+    def test_a_landing_zone_file_outside_a_workload_folder_is_not_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder)
+            shutil.copytree(STARTERS / "mlz-vending", repo, dirs_exist_ok=True)
+            (repo / "landing-zones" / "payments.yaml").write_text("owner: a@b.c\n")
+            (repo / "landing-zones" / "web" / "prod").mkdir(parents=True)
+            (repo / "landing-zones" / "web" / "prod" / "network.yaml").write_text("network:\n  size: 26\n")
+            printed = stacks.render(repo)
+        self.assertRegex(printed, r"\n  landing-zones/payments\.yaml +-> NOT READ by any stack\n")
+        self.assertRegex(printed, r"\n  landing-zones/web/prod/network\.yaml +-> web-prod\n")  # a chunk of web-prod
 
 
 if __name__ == "__main__":

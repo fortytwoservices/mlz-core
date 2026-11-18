@@ -23,19 +23,21 @@ CORE = Path(__file__).resolve().parents[2]
 class Stack(NamedTuple):
     role: str
     name: str  # as the pipeline names it: its state file, its plan comment, its apply
-    reads: tuple[str, ...]  # files, or folders (ending in /), relative to the repo
+    reads: str  # the files its loader reads, as a pattern on the path in the repo
     root: str  # relative to mlz-core
     note: str = ""
 
 
+# A setting is a file, x.yaml, or a folder of chunks, x/*.yaml, read as one file (tools/mlz/files.py).
+SETTING = r"(\.ya?ml|/[^/]+\.ya?ml)"
 STACKS = (
-    Stack("governance", "bootstrap", ("bootstrap.yaml",), "bootstrap/terraform", "run by mlz install from a laptop, not by the pipeline"),
-    Stack("governance", "governance", ("customer.yaml",), "governance/terraform"),
-    Stack("platform", "connectivity", ("connectivity/",), "platform/terraform"),
-    Stack("platform", "management", ("management/",), "platform/networks/terraform", "built in the primary region with or without a file"),
-    Stack("platform", "identity", ("identity/",), "platform/networks/terraform", "built in each region with a file"),
-    Stack("platform", "firewall-rules", ("firewall-rules/",), "platform/rules/terraform"),
-    Stack("vending", "<workload>-<env>", ("defaults/", "landing-zones/"), "vending/terraform", "one stack per landing zone"),
+    Stack("governance", "bootstrap", r"bootstrap\.ya?ml", "bootstrap/terraform", "run by mlz install from a laptop, not by the pipeline"),
+    Stack("governance", "governance", r"customer\.ya?ml", "governance/terraform"),
+    Stack("platform", "connectivity", rf"connectivity/[^/]+{SETTING}", "platform/terraform"),
+    Stack("platform", "management", rf"management/[^/]+{SETTING}", "platform/networks/terraform", "built in the primary region with or without a file"),
+    Stack("platform", "identity", rf"identity/[^/]+{SETTING}", "platform/networks/terraform", "built in each region with a file"),
+    Stack("platform", "firewall-rules", rf"firewall-rules/((platform|management|identity)|landing-zones/[^/]+){SETTING}", "platform/rules/terraform"),
+    Stack("vending", "<workload>-<env>", rf"(defaults/[^/]+-defaults|landing-zones/[^/]+/[^/]+){SETTING}", "vending/terraform", "one stack per landing zone"),
 )
 # Files in a role's repo that no stack reads.
 NOT_READ = {"vending": ("examples/",)}
@@ -94,7 +96,8 @@ def settings_files(repo: Path) -> list[str]:
 
 
 def stack_of(role_: str, path: str) -> Stack | None:
-    return next((s for s in STACKS if s.role == role_ and any(path == r or r.endswith("/") and path.startswith(r) for r in s.reads)), None)
+    """The stack whose loader reads the file; None for a file no loader reads, such as one a folder too deep."""
+    return next((s for s in STACKS if s.role == role_ and re.fullmatch(s.reads, path)), None)
 
 
 def feeds(stack: Stack, path: str) -> str:

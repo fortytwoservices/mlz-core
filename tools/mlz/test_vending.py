@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -88,10 +89,16 @@ class VendingTest(unittest.TestCase):
         self.assertNotIn("payments-workload-defaults", zones)  # the workload's own file is no environment
 
     def test_a_file_in_defaults_that_is_neither_kind_is_refused(self):
-        self.write("defaults/prod.yaml", "tags:\n  Tier: production\n")
-        with self.assertRaisesRegex(ConfigError, "defaults/prod: not a defaults file; defaults/ holds landing-zone-defaults.yaml for every "
-                                                 "landing zone and <env>-defaults.yaml for one environment."):
-            landing_zones(self.repo)
+        # Not ending in -defaults, or for an environment no landing zone's file could name.
+        for name in ("prod", "PROD-defaults", "-defaults", "workload-defaults-defaults"):
+            with self.subTest(name=name):
+                self.write(f"defaults/{name}.yaml", "tags:\n  Tier: production\n")
+                with self.assertRaisesRegex(ConfigError, f"defaults/{re.escape(name)}: not a defaults file; defaults/ holds landing-zone-defaults.yaml "
+                                                         "for every landing zone and <env>-defaults.yaml for one environment"):
+                    landing_zones(self.repo)
+                (self.repo / "defaults" / f"{name}.yaml").unlink()
+        self.write("defaults/uat-defaults.yaml", "tags:\n  Tier: test\n")  # an environment no landing zone has yet is fine
+        landing_zones(self.repo)
 
     def test_the_four_layers_merge_and_the_key_names_the_landing_zone(self):
         self.allocate()
