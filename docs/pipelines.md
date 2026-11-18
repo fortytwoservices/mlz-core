@@ -193,7 +193,7 @@ file, from `bootstrap.yaml`'s `platform_team`:
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Members read (Workflows: writing a workload repo's pipeline) |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
 | `.github/CODEOWNERS`, write access for the platform team, the ruleset `main` | `mlz install repos` ([code owners](#code-owners)) |
 
