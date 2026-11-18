@@ -52,6 +52,16 @@ resource "github_repository" "workload" {
   allow_squash_merge     = true
   delete_branch_on_merge = true
   archive_on_destroy     = true # decommissioned: archived, the team's code and history kept
+
+  # GitHub returns a repo's merge settings only to a token with Administration: write, which the plan's read-only
+  # token has not: the plan read them as false and empty and showed a change the apply did not, and apply.sh refused
+  # every apply (tested 18 November 2026). Set when the repo is made, then left to the team.
+  lifecycle {
+    ignore_changes = [
+      allow_merge_commit, allow_rebase_merge, allow_squash_merge, delete_branch_on_merge,
+      merge_commit_message, merge_commit_title, squash_merge_commit_message, squash_merge_commit_title,
+    ]
+  }
 }
 
 # auto_init makes the organization's default branch, which need not be main: the apply environment allows main alone.
