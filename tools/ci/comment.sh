@@ -16,7 +16,9 @@ run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
     echo "The full plan is attached to [the run]($run)."
   fi
 } > "$WORK/comment-$stack.md"
-existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -1)
+# Its own earlier comment only (the run's token posts as github-actions[bot]): never one someone else wrote with the marker.
+existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+  --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$marker\"))) | .id" | head -1)
 if [[ -n $existing ]]; then
   gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@"$WORK/comment-$stack.md" >/dev/null
 else
