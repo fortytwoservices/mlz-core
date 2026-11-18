@@ -84,6 +84,11 @@ class StacksTest(unittest.TestCase):
         for path in ("hubs/norwayeast.yaml", "firewall-rules/payments-prod.yaml"):  # a folder from before L10; a misplaced file
             self.assertRegex(printed, rf"\n  {re.escape(path)} +-> NOT READ by any stack\n")
 
+    def test_governance_s_files_are_read_by_their_exact_names(self):
+        self.assertEqual(stacks.stack_of("governance", "customer.yaml").name, "governance")
+        self.assertIsNone(stacks.stack_of("governance", "customer.yml"))
+        self.assertIsNone(stacks.stack_of("governance", "bootstrap.yml"))
+
     def test_a_landing_zone_file_outside_a_workload_folder_is_not_read(self):
         with tempfile.TemporaryDirectory() as folder:
             repo = Path(folder)

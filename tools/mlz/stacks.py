@@ -28,11 +28,12 @@ class Stack(NamedTuple):
     note: str = ""
 
 
-# A setting is a file, x.yaml, or a folder of chunks, x/*.yaml, read as one file (tools/mlz/files.py).
+# A setting is a file, x.yaml, or a folder of chunks, x/*.yaml, read as one file (tools/mlz/files.py); governance's
+# two files are opened by their exact names.
 SETTING = r"(\.ya?ml|/[^/]+\.ya?ml)"
 STACKS = (
-    Stack("governance", "bootstrap", r"bootstrap\.ya?ml", "bootstrap/terraform", "run by mlz install from a laptop, not by the pipeline"),
-    Stack("governance", "governance", r"customer\.ya?ml", "governance/terraform"),
+    Stack("governance", "bootstrap", r"bootstrap\.yaml", "bootstrap/terraform", "run by mlz install from a laptop, not by the pipeline"),
+    Stack("governance", "governance", r"customer\.yaml", "governance/terraform"),
     Stack("platform", "connectivity", rf"connectivity/[^/]+{SETTING}", "platform/terraform"),
     Stack("platform", "management", rf"management/[^/]+{SETTING}", "platform/networks/terraform", "built in the primary region with or without a file"),
     Stack("platform", "identity", rf"identity/[^/]+{SETTING}", "platform/networks/terraform", "built in each region with a file"),
