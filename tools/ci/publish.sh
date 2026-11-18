@@ -28,6 +28,13 @@ else
   # The contract as the state holds it, which is what terraform output prints, read without a Terraform
   # run: the plan identity may only read the state. A state without the output fails here, loudly.
   mkdir -p "$WORK/state"
+  # No state at all: nothing was ever applied, as on a platform still waiting for its hub (check.sh).
+  exists=$(az storage blob exists --auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" \
+    --container-name "$TFSTATE_CONTAINER" --name "$role.tfstate" --query exists -o tsv)
+  if [[ $exists != true ]]; then
+    echo "No $role state yet: nothing has been applied, so there is no contract to offer."
+    exit 0
+  fi
   az storage blob download --auth-mode login --account-name "$TFSTATE_STORAGE_ACCOUNT" \
     --container-name "$TFSTATE_CONTAINER" --name "$role.tfstate" --file "$WORK/state/$role.tfstate" --only-show-errors >/dev/null
   python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1]))["outputs"]["contract"]["value"]))' "$WORK/state/$role.tfstate" |

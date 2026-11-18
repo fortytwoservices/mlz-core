@@ -211,7 +211,9 @@ not make.
 1. **Governance** (needs the bootstrap's contract): the tree, the policies, central management. It offers
    its contract to platform and vending.
 2. **Platform** (needs governance's): the hubs, then management's and identity's networks. It offers its
-   contract to vending.
+   contract to vending. Its starter's hub file has every setting commented out, so governance's contract
+   merges itself and the platform waits, planning nothing, until the platform team writes the hub in a pull
+   request (`docs/platform.md`).
 3. **Vending** (needs both): the landing zones. A new landing zone's subscription is handed to vending
    first (`docs/bootstrap.md`), or made by vending where `billing_scope` says (`docs/vending.md`).
 

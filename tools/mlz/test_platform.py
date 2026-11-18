@@ -192,6 +192,46 @@ class PlatformTest(unittest.TestCase):
             self.assertEqual(main(), 1)
         self.assertIn("management's network 10.100.4.0/24 would overlap payments-prod's range", err.getvalue())
 
+    def run_command(self) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "platform", "--repo", str(self.repo), "--out", str(self.repo / "platform.json")]), redirect_stdout(out), redirect_stderr(err):
+            code = main()
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_starter_as_it_comes_waits_with_or_without_governance_s_contract(self):
+        # On a first deployment governance's contract pull request is checked against the starter's hub file, every
+        # setting commented out: it must pass, or it never merges itself, and no hub pull request can pass without it.
+        starter = Path(__file__).resolve().parents[2] / "starter" / "mlz-platform" / "hubs" / "norwayeast.yaml"
+        self.hub("norwayeast", starter.read_text())
+        (self.repo / "platform.json").write_text("{}")  # an older config goes, so nothing plans with it
+        for contract in (False, True):
+            if contract:
+                (self.repo / "_generated").mkdir()
+                (self.repo / "_generated/governance.yaml").write_text(render("governance", GOVERNANCE))
+            code, out, _ = self.run_command()
+            self.assertEqual(code, 0)
+            self.assertIn("has a setting yet; nothing written until one does", out)
+            self.assertFalse((self.repo / "platform.json").exists())
+        self.assertTrue(platform.unset(self.repo))
+
+    def test_once_a_hub_has_a_setting_it_is_checked_and_every_hub_must_be_complete(self):
+        self.hub("norwayeast", "firewall: Basic\n")
+        self.assertFalse(platform.unset(self.repo))
+        with self.assertRaisesRegex(ConfigError, "platform_address_space is required"):
+            build(self.repo, GOVERNANCE)
+        self.hub("norwayeast", HUB)
+        self.hub("swedencentral", "# not yet\n")
+        self.assertFalse(platform.unset(self.repo))
+        with self.assertRaisesRegex(ConfigError, "hubs/swedencentral: landing_zone_ranges is required"):
+            build(self.repo, GOVERNANCE)
+
+    def test_a_hub_without_governance_s_contract_says_it_has_not_arrived(self):
+        self.hub("norwayeast", HUB)
+        code, _, err = self.run_command()
+        self.assertEqual(code, 1)
+        self.assertIn("_generated/governance.yaml is not there: governance's contract has not arrived yet. Governance offers it", err)
+        self.assertNotIn("Errno", err)
+
     def test_behind_a_basic_firewall_the_networks_resolve_through_the_resolver(self):
         self.hub("norwayeast", HUB + "firewall: Basic\n")
         self.assertEqual(build(self.repo, GOVERNANCE)["networks"]["management"]["norwayeast"]["dns_servers"], ["10.100.1.68"])

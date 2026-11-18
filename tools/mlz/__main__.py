@@ -207,6 +207,10 @@ def main() -> int:
 
     def published(name: str) -> dict:
         path = getattr(args, name, None) or args.repo / "_generated" / f"{name}.yaml"
+        if not path.is_file():
+            raise ConfigError(f"{path} is not there: {name}'s contract has not arrived yet. {name.capitalize()} offers it by pull request "
+                              f"after each run on its main in which nothing failed (docs/pipelines.md); once it is merged here, bring "
+                              f"this branch up to date with main.")
         return read_yaml(path)
 
     # Every file the command reads, parsed in one terraform run before anything is read.
@@ -266,6 +270,11 @@ def main() -> int:
             args.out.write_text(contract.render("vending", data))
             print(f"mlz vending-contract: wrote {args.out}")
         elif args.role == "platform":
+            if platform.unset(args.repo):
+                # An older config at --out goes too, so that nothing plans with it.
+                args.out.unlink(missing_ok=True)
+                print(f"mlz platform: no hub file in {args.repo / 'hubs'} has a setting yet; nothing written until one does")
+                return 0
             path = args.repo / "_generated" / "vending.yaml"
             config = platform.build(args.repo, published("governance"), read_yaml(path) if path.exists() else None)
             args.out.parent.mkdir(parents=True, exist_ok=True)

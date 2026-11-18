@@ -29,11 +29,13 @@ Defaults: `firewall: Standard`, `dns_resolver: true`, `bastion: false`, `identit
 region (from governance) must have a hub.
 
 The platform starter comes with `hubs/norwayeast.yaml`, `firewall/platform.yaml` and `firewall/management.yaml`, every setting in them
-commented out. Until the hub file has its platform address space and landing zone ranges, the platform's check
-stops, so nothing is built from the starter as it comes; rename the file if the primary region is another.
-If governance's contract pull request has already failed its run for that reason, bring its branch up to
-date once the hub file is merged (`gh pr update-branch <number> -R <the platform repo>`): a re-run would check
-the same commit again, while the run of that merge checks the pull request with the hub, and merges it.
+commented out; rename the hub file if the primary region is another. While no hub file has a setting, the
+platform waits: its check passes with a notice, and nothing is planned, built or offered to vending. So on a
+first deployment governance's contract pull request merges itself, and the pull request that writes the hub
+is checked against that contract. Once a hub file has a setting, `platform_address_space` and
+`landing_zone_ranges` are required. A hub pull request opened before governance's contract has arrived fails
+its check, saying so; bring its branch up to date once the contract is merged (`gh pr update-branch <number>
+-R <the platform repo>`): a re-run would check the same commit again.
 
 `reserved` lists ranges the IP allocator must never hand out: existing virtual networks, on-premises
 sites, partner links, anything inside `landing_zone_ranges` that mlz-core does not manage. A region's

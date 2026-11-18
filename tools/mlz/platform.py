@@ -192,6 +192,15 @@ def moved(where: str, value) -> str:
     return f"{text}; the hub at {value} is not the first /22 of a /21, so choose a free /21 for the platform."
 
 
+def unset(repo: Path) -> bool:
+    """True while no hub file has a setting, as the platform starter comes. The platform then waits: it checks,
+    plans and offers nothing, so governance's first contract can merge itself before anyone has written a hub,
+    and the pull request that writes one is checked against that contract (docs/platform.md)."""
+    regions = setting_names(repo / "hubs")
+    preload(yaml_files(repo / "hubs"))
+    return bool(regions) and not any(read_setting(repo / "hubs" / region) for region in regions)
+
+
 def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
     """The platform root's config from the platform repo, the governance contract and, once there, the
     vending contract."""
