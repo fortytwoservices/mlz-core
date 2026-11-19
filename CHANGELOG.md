@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.2](https://github.com/fortytwoservices/mlz-core/compare/v0.11.1...v0.11.2) (2026-11-19)
+
+
+### Features
+
+* **pipeline:** an apply refuses a changed state or a superseded change, and decommission waits for the applied teardown ([#100](https://github.com/fortytwoservices/mlz-core/issues/100)) ([946a6ab](https://github.com/fortytwoservices/mlz-core/commit/946a6abd7ece2b67971233dc04a1f2e23cea6dbd))
+* **pipeline:** plan in groups on the daily check and on large runs ([#98](https://github.com/fortytwoservices/mlz-core/issues/98)) ([762f1a0](https://github.com/fortytwoservices/mlz-core/commit/762f1a03094c89b23a26357080de56fb24829eea))
+* **reference:** who owns each module input ([#102](https://github.com/fortytwoservices/mlz-core/issues/102)) ([68882e2](https://github.com/fortytwoservices/mlz-core/commit/68882e2b98a922c63421ece1f57eb8c06e933030))
+* **workload:** the landing zone's network, tags and what vending owns, in the workload repo ([#101](https://github.com/fortytwoservices/mlz-core/issues/101)) ([cfc8455](https://github.com/fortytwoservices/mlz-core/commit/cfc84553ba29895597c2bc91d6d5fa666f05c935))
+
 ## [0.11.1](https://github.com/fortytwoservices/mlz-core/compare/v0.11.0...v0.11.1) (2026-11-18)
 
 
