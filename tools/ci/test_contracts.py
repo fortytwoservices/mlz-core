@@ -226,6 +226,8 @@ class PublishTest(Case):
 
         def run(command, **kwargs):
             keys.append(command[command.index("--name") + 1])
+            self.assertNotIn("capture_output", kwargs)  # the Azure CLI's message about a failure stays in the log
+            self.assertNotIn("stderr", kwargs)
             return mock.Mock(stdout="false\n")
         with mock.patch.dict(os.environ, {"TFSTATE_STORAGE_ACCOUNT": "st", "TFSTATE_CONTAINER": "platform"}), mock.patch.object(publish.subprocess, "run", run):
             self.assertIsNone(publish.state_contract("platform"))
