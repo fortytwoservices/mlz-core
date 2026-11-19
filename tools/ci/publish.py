@@ -61,7 +61,7 @@ def offer(role: str, github: Pipeline, state: Callable[[str], dict | None] = sta
         out.write_text(contract.render("vending", firewall.vending_contract(vending.landing_zones(Path(".")), vending.ip_plan(Path(".")))))
     else:
         value = state(role)
-        if value is None:  # nothing was ever applied, as on a platform still waiting for its hub (check.sh)
+        if value is None:  # nothing was ever applied, as on a platform still waiting for its hub (mlz check)
             say(f"No {role} state yet: nothing has been applied, so there is no contract to offer.")
             return 0
         out.write_text(contract.render(role, value))

@@ -288,7 +288,7 @@ way, so its workflows sign in from its `apply` environment and its pull requests
 - `.github/workflows/mlz.yml`, which calls mlz-core's `workload.yml` at the release vending runs on. Every pull request
   and every push to `main` plans, as the plan identity, from a read-only copy of the state; on `main` the apply then
   waits for the team in `apply`, and applies, as the deploy identity, only the changes that plan showed. The scripts
-  are the role repos' own (`tools/ci/plan.sh`, `apply.sh`).
+  are the role repos' own (`tools/ci/plan.py`, `apply.py`).
 - `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with examples (commented out):
   a resource group named through mlz-core's naming helper (`modules/naming`, `docs/naming.md`), and a virtual machine
   (`az-tf-mlz-virtual-machine`) in the landing zone's app subnet with its tags; a README.

@@ -1,5 +1,5 @@
 """stale_comments.py: on a pull request, marks the plan comment of every stack this commit does not plan, its config being
-as on the base again (check.sh), so that no earlier plan or failure stays on the pull request as if it still held.
+as on the base again (check.py), so that no earlier plan or failure stays on the pull request as if it still held.
 Needs GH_TOKEN, GITHUB_REPOSITORY, PR_NUMBER and STACKS (what this run plans, as JSON).
 """
 

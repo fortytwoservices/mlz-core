@@ -1,9 +1,10 @@
-"""apply_guard.py: apply.sh's refusals, each a check it makes before it applies, so that an apply never does what the
-reviewer did not see. apply.sh stays the Terraform around them.
+"""apply_guard.py: apply.py's refusals, each a check it makes before it applies, so that an apply never does what the
+reviewer did not see; apply.py is the Terraform around them. Each returns GO, REFUSE or, from before alone, STAND_DOWN
+(nothing applied, no failure):
 
-    apply_guard.py before <role> <stack>     exit 0 to go on, 1 to refuse, 2 to stand down (nothing applied, no failure)
-    apply_guard.py state <stack> <version>   the state's version now; exit 1 when it is not the one the plan started from
-    apply_guard.py matches <stack>           exit 1 when this plan's changes are not the reviewed plan's
+    before(role, stack)    before planning: a reviewed plan of this run, and for vending a change main still says
+    state(stack, version)  the state's version now must be the one the reviewed plan started from
+    matches(stack)         this plan's changes must be the reviewed plan's
 
 Reads .mlz/reviewed/ (the plan job's files of this run), .mlz/vending/ and, for vending, MLZ_MAIN and GITHUB_SHA.
 """
@@ -14,12 +15,9 @@ import difflib
 import filecmp
 import os
 import subprocess
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
-
-from ci.run_mlz import mlz  # noqa: E402
+from ci.run_mlz import mlz  # tools/ is on the path: apply.py puts it there
 
 GO, REFUSE, STAND_DOWN = 0, 1, 2
 
@@ -82,18 +80,3 @@ def matches(stack: str, say=print) -> int:
     say(f"The plan matches the reviewed one: {len(expected)} change(s).")
     return GO
 
-
-def main(args: list[str]) -> int:
-    check = args[0]
-    if check == "before":
-        return before(args[1], args[2])
-    if check == "state":
-        return state(args[1], args[2])
-    if check == "matches":
-        return matches(args[1])
-    print(f"apply_guard.py: no check {check!r}", file=sys.stderr)
-    return REFUSE
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))

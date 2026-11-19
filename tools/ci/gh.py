@@ -27,7 +27,7 @@ def env(name: str) -> str:
 
 
 def work() -> Path:
-    """.mlz/ in the customer repo, where everything a run works out goes (tools/ci/lib.sh's WORK)."""
+    """.mlz/ in the customer repo, where everything a run works out goes (WORK, as every step names it)."""
     path = Path.cwd() / ".mlz"
     path.mkdir(exist_ok=True)
     return path

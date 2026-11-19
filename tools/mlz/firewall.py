@@ -364,7 +364,7 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         # The platform's first deployment comes before any landing zone, and vending needs the platform's
         # contract first, so refusing these files would stop the hub for good (met rebuilding the canary,
         # 2026-11-11). They are checked like any other, with landing zones by key left unresolved, and go into
-        # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
+        # no group: mlz check leaves the rules stack out of the run until vending's contract exists, so nothing
         # in Azure changes, not even when the contract has gone missing from a platform already deployed.
         for key in keys:
             where = f"{RULES}/landing-zones/{key}"
@@ -408,7 +408,7 @@ def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -
         raise ConfigError("firewall rules are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
     if zones is None:
         # Checked, but not a config anyone may plan with: without the landing zones it would plan their rules
-        # away. The rules stack waits for vending's contract (check.sh).
+        # away. The rules stack waits for vending's contract (mlz check).
         return None
     return {
         "root_id": platform["root_id"],

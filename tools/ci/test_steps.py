@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -213,16 +211,6 @@ class ApplyGuardTest(Case):
         self.assertTrue(self.said[1].startswith("::error::The plan differs from the one the reviewer saw; nothing is applied."))
         self.assertIn("-update b\n+update c", self.said[2])
         self.assertEqual(Path(".mlz/difference-pay-prod.txt").read_text().splitlines()[-2:], ["-update b", "+update c"])
-
-    def test_apply_sh_asks_the_guard_at_each_refusal(self):
-        apply = (Path(apply_guard.__file__).parent / "apply.sh").read_text()
-        for check in ('apply_guard.py" before "$role" "$stack"', 'apply_guard.py" state "$stack" "$now_version"', 'apply_guard.py" matches "$stack"'):
-            self.assertIn(check, apply)
-        self.assertIn("case $verdict in 0) ;; 2) exit 0 ;; *) exit 1 ;; esac", apply)  # stand down is no failure
-        self.assertLess(apply.index("matches"), apply.index('terraform -chdir="$root" apply'))
-
-    def test_the_command_line(self):
-        self.assertEqual(subprocess.run([sys.executable, apply_guard.__file__, "before", "vending", "nothing"], capture_output=True, text=True).returncode, 1)
 
 
 if __name__ == "__main__":

@@ -54,7 +54,7 @@ resource "github_repository" "workload" {
   archive_on_destroy     = true # decommissioned: archived, the team's code and history kept
 
   # GitHub returns a repo's merge settings only to a token with Administration: write, which the plan's read-only
-  # token has not: the plan read them as false and empty and showed a change the apply did not, and apply.sh refused
+  # token has not: the plan read them as false and empty and showed a change the apply did not, and the apply step refused
   # every apply (tested 18 November 2026). Set when the repo is made, then left to the team; an update for another
   # reason still carries them, so tools/ci/summary.py leaves them out of its fingerprint.
   lifecycle {
