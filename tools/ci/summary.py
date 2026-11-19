@@ -152,7 +152,7 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> in
         for state_kind, carried in state_only(change):
             records.append((state_kind, change["address"], label, hashlib.sha256(f"{state_kind} {carried}".encode()).hexdigest()[:16]))
             if state_kind == "move":
-                moves[change["address"]] = carried
+                moves[label] = carried  # by label, as the summary looks it up: a deposed object's carries its key
         if kind:
             kind = "unknown" if kind == "change" and unknown_only(change["change"]) else kind
             records.append((kind, change["address"], label, fingerprint(change["change"], change.get("type"))))

@@ -209,6 +209,13 @@ class SummaryTest(unittest.TestCase):
         # A map's key added with a value unknown until apply: it is only in after_unknown, and the key is a known change.
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"input": {}}, "after": {"input": {}}, "after_unknown": {"input": {"new_key": True}}}))
 
+    def test_a_moved_object_left_deposed_keeps_its_previous_address(self):
+        moved = {"address": "azapi_resource.x", "previous_address": "azapi_resource.old", "deposed": "a1b2",
+                 "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}}
+        summary, changes = self.summarise([moved])
+        self.assertIn("- moves `azapi_resource.old` to `azapi_resource.x deposed:a1b2`", summary)
+        self.assertTrue(changes.startswith("move azapi_resource.x deposed:a1b2 "))
+
     def test_a_long_list_of_state_only_changes_is_cut_short(self):
         # A module moved wholesale: the summary stays short enough for a pull request comment, as the rest of it does.
         moved = [{"address": f"azapi_resource.x[{n}]", "previous_address": f"azapi_resource.old[{n}]",
