@@ -1,0 +1,134 @@
+"""The pipeline's GitHub calls, through the gh CLI and the run's token (GH_TOKEN). A step's tests give it a fake of this
+class instead. Apart from mlz install's and mlz upgrade's client (tools/mlz/github.py) on purpose: the pipeline's calls
+stay as they are when that one changes."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/, for mlz
+
+from mlz.merge import ConfigError  # noqa: E402
+
+__all__ = ["ConfigError", "Pipeline", "env", "work"]
+
+
+def env(name: str) -> str:
+    """A variable the step needs: a missing one fails it, as bash's set -u did."""
+    value = os.environ.get(name)
+    if value is None:
+        raise ConfigError(f"{name} is not set.")
+    return value
+
+
+def work() -> Path:
+    """.mlz/ in the customer repo, where everything a run works out goes (tools/ci/lib.sh's WORK)."""
+    path = Path.cwd() / ".mlz"
+    path.mkdir(exist_ok=True)
+    return path
+
+
+class Pipeline:
+    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
+        """gh api, with a JSON body; None for HTTP 404 where missing_ok; a ConfigError with gh's answer otherwise."""
+        command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else [])
+        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
+        if run.returncode:
+            if missing_ok and "HTTP 404" in run.stderr:
+                return None
+            raise ConfigError(f"gh api {method} {path}: {run.stderr.strip() or run.stdout.strip()}")
+        return json.loads(run.stdout) if run.stdout.strip() else None
+
+    def _pages(self, path: str) -> list:
+        """Every item of a listing, not only its first page."""
+        found, page = [], 1
+        while True:
+            batch = self._api(f"{path}{'&' if '?' in path else '?'}per_page=100&page={page}") or []
+            found += batch
+            if len(batch) < 100:
+                return found
+            page += 1
+
+    def head(self, repo: str, branch: str) -> str:
+        return self._api(f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
+
+    def reset_branch(self, repo: str, branch: str, base: str) -> None:
+        """The branch at the base branch's head, created or moved back there: it is the pipeline's own."""
+        sha = self.head(repo, base)
+        try:
+            self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
+        except ConfigError:
+            self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True})
+
+    def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
+        return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]
+
+    def sha(self, repo: str, ref: str) -> str:
+        """The commit a branch or a ref is at."""
+        return self._api(f"repos/{repo}/commits/{ref}")["sha"]
+
+    def commit_message(self, repo: str, sha: str) -> str:
+        return self._api(f"repos/{repo}/commits/{sha}")["commit"]["message"]
+
+    def text(self, repo: str, path: str, ref: str | None = None) -> str | None:
+        """A file's text, or None when there is no such file (on that ref)."""
+        found = self._api(f"repos/{repo}/contents/{path}" + (f"?ref={ref}" if ref else ""), missing_ok=True)
+        return None if not found else base64.b64decode(found["content"]).decode()
+
+    def raw(self, repo: str, path: str, ref: str) -> str | None:
+        """A file's bytes as text, read raw (no size limit), or None for HTTP 404; any other failure raises."""
+        run = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw", f"repos/{repo}/contents/{path}?ref={ref}"],
+                             capture_output=True, text=True)
+        if run.returncode:
+            if "HTTP 404" in run.stderr:
+                return None
+            raise ConfigError(run.stderr.strip() or run.stdout.strip())
+        return run.stdout
+
+    def put_file(self, repo: str, path: str, branch: str, text: str, message: str) -> None:
+        """The file as one commit on the branch, over whatever the branch holds at that path."""
+        found = self._api(f"repos/{repo}/contents/{path}?ref={branch}", missing_ok=True)
+        body = {"message": message, "content": base64.b64encode(text.encode()).decode(), "branch": branch}
+        if found:
+            body["sha"] = found["sha"]
+        self._api(f"repos/{repo}/contents/{path}", "PUT", body)
+
+    def open_pulls(self, repo: str, branch: str) -> list[int]:
+        """The open pull requests from the branch into main, by number."""
+        owner = repo.split("/")[0]
+        return [pull["number"] for pull in self._api(f"repos/{repo}/pulls?state=open&base=main&head={owner}:{branch}") or []]
+
+    def close_pull(self, repo: str, number: int, comment: str) -> None:
+        """Closes a pull request with a comment, and deletes its branch, as gh pr close --delete-branch does."""
+        pull = self._api(f"repos/{repo}/pulls/{number}")
+        self._api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": comment})
+        self._api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
+        self._api(f"repos/{repo}/git/refs/heads/{pull['head']['ref']}", "DELETE", missing_ok=True)
+
+    def pull_files(self, repo: str, number: int) -> list[dict]:
+        return self._pages(f"repos/{repo}/pulls/{number}/files")
+
+    def pull_head(self, repo: str, number: int) -> str:
+        return self._api(f"repos/{repo}/pulls/{number}")["head"]["sha"]
+
+    def squash_allowed(self, repo: str) -> bool:
+        return bool(self._api(f"repos/{repo}")["allow_squash_merge"])
+
+    def behind_by(self, repo: str, base: str, head: str) -> int:
+        return int(self._api(f"repos/{repo}/compare/{base}...{head}")["behind_by"])
+
+    def changed_files(self, repo: str, base: str, head: str) -> list[str]:
+        return [item["filename"] for item in self._api(f"repos/{repo}/compare/{base}...{head}").get("files") or []]
+
+    def update_branch(self, repo: str, number: int, expected_head: str) -> None:
+        """GitHub's update branch: main merged into the pull request's branch, only if it is still at expected_head."""
+        self._api(f"repos/{repo}/pulls/{number}/update-branch", "PUT", {"expected_head_sha": expected_head})
+
+    def merge_pull(self, repo: str, number: int, method: str, sha: str) -> None:
+        """Merges the pull request if its head is still sha; GitHub answers HTTP 409 when it is not."""
+        self._api(f"repos/{repo}/pulls/{number}/merge", "PUT", {"merge_method": method, "sha": sha})
