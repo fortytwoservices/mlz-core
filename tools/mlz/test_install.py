@@ -49,7 +49,7 @@ class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always"):
+                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -82,6 +82,7 @@ class FakeGitHub:
         self.ruleset_bodies = {}
         # The push ruleset that guards .github/ (finding 17), as GitHub would answer for the person signed in.
         self.push_guard, self.can_bypass = push_guard, can_bypass
+        self.main_bypass = main_bypass  # whether the ruleset main (ID 7) lets the bypass team merge without the approval
 
     def repo(self, repo):
         return self.repos.get(repo)
@@ -133,7 +134,7 @@ class FakeGitHub:
         if (repo, ruleset["name"]) in self.existing_rulesets:
             return False
         self.made_rulesets.append((repo, ruleset["name"]))
-        self.ruleset_bodies[repo] = ruleset
+        self.ruleset_bodies[(repo, ruleset["name"])] = ruleset
         return True
 
     def has_variable(self, repo, name):
@@ -143,9 +144,10 @@ class FakeGitHub:
         return {"slug": slug, "id": TEAM_IDS.get(slug, 1), "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
 
     def rulesets(self, repo):
+        main = {**install.main_ruleset("platform", TEAM_IDS["mlz-admins"] if self.main_bypass else None), "id": 7}
         if not self.push_guard:
-            return []
-        return [{**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}]
+            return [main]
+        return [main, {**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}]
 
     def team_can_write(self, org, slug, repo):
         return (slug, repo) in self.writers
@@ -160,8 +162,8 @@ class FakeGitHub:
     def branch_rules(self, repo, branch):
         role = next(role for role, name in REPOS.items() if name == repo)
         checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check is True else self.required_check(role)
-        return [{"type": "deletion"}, {"type": "pull_request", "parameters": {"require_code_owner_review": self.ruleset_review}},
-                {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": self.strict, "required_status_checks": checks}}]
+        return [{"type": "deletion", "ruleset_id": 7}, {"type": "pull_request", "ruleset_id": 7, "parameters": {"require_code_owner_review": self.ruleset_review}},
+                {"type": "required_status_checks", "ruleset_id": 8, "parameters": {"strict_required_status_checks_policy": self.strict, "required_status_checks": checks}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -442,8 +444,11 @@ class InstallTest(unittest.TestCase):
         # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
         self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
         self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
+        # main lets the bypass team merge without the approval, pull requests only (decision D8).
+        self.assertEqual(github.ruleset_bodies[("acme/mlz-vending", "main")]["bypass_actors"], [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}])
+        self.assertNotIn("bypass_actors", github.ruleset_bodies[("acme/mlz-vending", "main-checks")])  # the check binds the team too
         # The push ruleset first, after the starter's first commit; then main.
-        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "main")])
+        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "main", "main-checks")])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
         # Only the repo that existed: its branches may predate the push ruleset.
         warned = [line for line in self.printed if "pushed before the ruleset" in line]
@@ -510,7 +515,7 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         self.assertNotIn(("acme/mlz-platform", "main"), github.made_rulesets)  # the customer's own may be stricter
         self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
-                      "and requires a code owner's review and platform / check (mlz install check says)", self.printed)
+                      "and requires a code owner's review (mlz install check says)", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
         own = ("acme/mlz-governance", "customer.yaml")
@@ -543,20 +548,26 @@ class InstallTest(unittest.TestCase):
     def test_the_main_ruleset_allows_changes_through_pull_requests_only(self):
         ruleset = install.main_ruleset("platform")
         rules = {rule["type"] for rule in ruleset["rules"]}
-        self.assertEqual(rules, {"deletion", "non_fast_forward", "pull_request", "required_status_checks"})
+        self.assertEqual(rules, {"deletion", "non_fast_forward", "pull_request"})
         self.assertNotIn("bypass_actors", ruleset)
+        # The check in a ruleset of its own, which the bypass team's pull request bypass does not reach.
+        checks = install.checks_ruleset("platform")
+        self.assertEqual(([rule["type"] for rule in checks["rules"]], checks["conditions"]), (["required_status_checks"], ruleset["conditions"]))
+        self.assertNotIn("bypass_actors", checks)
 
     def test_a_merge_waits_for_the_role_s_check(self):
         github = FakeGitHub()
         install.step_repos(github, self.folder, self.out)
         for role, repo in REPOS.items():
-            required = next(rule["parameters"] for rule in github.ruleset_bodies[repo]["rules"] if rule["type"] == "required_status_checks")
+            required = next(rule["parameters"] for rule in github.ruleset_bodies[(repo, "main-checks")]["rules"] if rule["type"] == "required_status_checks")
             # By GitHub Actions, as the canary's runs named it; strict, so a pull request checked before a code owner
             # handover merged is checked again against the new owners.
             self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
             self.assertTrue(required["strict_required_status_checks_policy"])
-        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed "
-                      "on a branch up to date with main, no force push or deletion)", self.printed)
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, no force push or deletion; "
+                      "acme/mlz-admins may merge a pull request without the approval)", self.printed)
+        self.assertIn("acme/mlz-vending: ruleset main-checks (vending / check passed on a branch up to date with main, before any merge; "
+                      "nobody bypasses it)", self.printed)
         # The starter workflow's job gives the check its name.
         for role in REPOS:
             workflow = (install.CORE / "starter" / f"mlz-{role}" / WORKFLOW).read_text()
@@ -572,7 +583,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(len(self.printed), 15)
         self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
         self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
-        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
                       "and a code owner's review is required on main", self.printed)
 
@@ -693,6 +704,18 @@ class InstallTest(unittest.TestCase):
             install.step_repos(github, self.folder, self.out)
         self.assertEqual((github.commits, github.branches), ([], []))  # nothing pushed, no branch made
 
+    def test_check_notes_a_review_ruleset_on_main_the_bypass_team_cannot_pass(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        install.step_check(FakeGitHub(main_bypass=False, **everywhere), self.folder, self.out)  # only noted: it passes
+        self.assertIn("acme/mlz-vending: acme/mlz-admins may not merge a pull request without a code owner's approval past ruleset main. "
+                      "mlz install repos gives a new repo's ruleset main that bypass. For an existing one: first run mlz install repos, so "
+                      "that main-checks, without bypass actors, requires the check on an up-to-date branch, and take the check out of main; "
+                      "then add the team to main as a bypass actor, pull requests only", "\n".join(self.printed))
+        self.printed.clear()
+        install.step_check(FakeGitHub(**everywhere), self.folder, self.out)
+        self.assertFalse([line for line in self.printed if "may not merge a pull request" in line])
+
     def test_a_wrapper_left_without_its_mode_is_offered_the_mode(self):
         # An earlier run made the repo and its starter commit, and stopped before the commit that makes ./mlz executable.
         github = FakeGitHub(existing=REPOS.values(), not_executable=[("acme/mlz-vending", "mlz")])
@@ -729,10 +752,10 @@ class InstallTest(unittest.TestCase):
         self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
         self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
         self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
-                      "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
-                      "Rulesets), with GitHub Actions as its source, and turn on 'Require branches to be up to date before merging'.", message)
+                      "refuses can still be merged; mlz install repos makes the ruleset main-checks, without bypass actors, which requires "
+                      "it from GitHub Actions on a branch up to date with main.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
-                      "The run on main gives write access to a visible team of acme that CODEOWNERS names there", message)
+                      "The platform team must be a visible team of acme that can write to acme/mlz-vending", message)
 
     def test_check_counts_only_a_required_check_from_github_actions(self):
         # Another app's check never comes; one from any source can be passed by any token that may write statuses.
@@ -749,7 +772,7 @@ class InstallTest(unittest.TestCase):
                                                  "a branch up to date with it"):
             install.step_check(FakeGitHub(**ready, strict=False), self.folder, self.out)
         install.step_check(FakeGitHub(**ready), self.folder, self.out)
-        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
 
         # Another ruleset, such as the organization's, strict about a check of its own keeps the branch up to date too.
         class Layered(FakeGitHub):
@@ -758,7 +781,27 @@ class InstallTest(unittest.TestCase):
                     "strict_required_status_checks_policy": True, "required_status_checks": [{"context": "security / scan"}]}}]
         self.printed.clear()
         install.step_check(Layered(**ready, strict=False), self.folder, self.out)
-        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
+
+        # Required only by a ruleset its bypass actors may skip, as an existing repo's own main-checks, or the old main, may be.
+        class Bypassable(FakeGitHub):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{**install.checks_ruleset("platform"), "id": 8,
+                                                  "bypass_actors": [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}]}]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check is required only by ruleset main-checks, whose bypass "
+                                                 "actors may merge without it; require it in a ruleset without bypass actors"):
+            install.step_check(Bypassable(**ready), self.folder, self.out)
+
+        # The check from a bypass-free ruleset, but up to date only by a ruleset someone may bypass: not up to date for them.
+        class StrictOnlyBypassable(Layered):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{"id": 99, "name": "org-strict", "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}]
+
+            def branch_rules(self, repo, branch):
+                return [{**rule, "ruleset_id": 99} if (rule.get("parameters") or {}).get("required_status_checks") == [{"context": "security / scan"}] else rule
+                        for rule in super().branch_rules(repo, branch)]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on a branch up to date"):
+            install.step_check(StrictOnlyBypassable(**ready, strict=False), self.folder, self.out)
 
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],

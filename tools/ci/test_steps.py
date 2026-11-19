@@ -1,5 +1,5 @@
 """Tests for the plan side's steps that bash or role.yml held without tests: comment.py, stale_comments.py, changed.py,
-code_owners.py, and apply_guard.py, which holds apply.sh's refusals (one test each)."""
+and apply_guard.py, which holds the apply's refusals (one test each)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ci import apply_guard, changed, code_owners, comment, run_mlz, stale_comments
+from ci import apply_guard, changed, comment, run_mlz, stale_comments
 
 RUN = "https://github.com/acme/mlz-vending/actions/runs/7"
 
@@ -128,24 +128,6 @@ class ChangedTest(Case):
         out, summary = self.run_changed("platform", ["a-prod"], [])
         self.assertTrue(out.startswith("stacks=[]\n"))
         self.assertEqual(summary, "To apply: nothing. No changes, so no approval: a-prod.\n")
-
-
-class CodeOwnersTest(Case):
-    def command(self, **environment):
-        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "acme/mlz-vending", "REF": "sha", "GITHUB_EVENT_NAME": "push", **environment}):
-            return code_owners.command()
-
-    def test_a_fork_s_pull_request_is_refused(self):
-        with mock.patch("builtins.print") as printed:
-            self.assertIsNone(self.command(GITHUB_EVENT_NAME="pull_request", HEAD_REPO="someone/mlz-vending"))
-        self.assertEqual(printed.call_args.args[0], "::error::someone/mlz-vending is a fork, whose run cannot check the code owners as the MLZ App. "
-                                                    "Push the branch to acme/mlz-vending and open the pull request from there.")
-
-    def test_the_new_teams_mode_and_a_pull_request_s_base(self):
-        self.assertEqual(self.command(), run_mlz.mlz("owners", "--repo", "acme/mlz-vending", "--ref", "sha"))  # mlz-core's own mlz
-        self.assertEqual(self.command(NEW_TEAMS="grant")[-2:], ["--new-teams", "grant"])
-        self.assertEqual(self.command(GITHUB_EVENT_NAME="pull_request", HEAD_REPO="acme/mlz-vending", NEW_TEAMS="note", BASE="b")[-4:],
-                         ["--new-teams", "note", "--base", "b"])
 
 
 class ApplyGuardTest(Case):

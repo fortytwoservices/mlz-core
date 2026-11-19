@@ -77,6 +77,35 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(json.loads(out), ["connectivity", "management", "identity", "firewall-rules"])
         self.assertTrue((self.dir / "work" / "firewall.json").is_file())
 
+    def test_code_owners_other_than_the_installer_s_fail_every_role_s_check(self):
+        from mlz import owners
+        repo = self.starter("vending")
+        (repo / ".github" / "CODEOWNERS").write_text(owners.render("acme", "platform"))
+        self.assertEqual(self.check(repo, "--json")[0], 0)
+        # A handover line, as releases before 19 November allowed (decision D8 took it out).
+        (repo / ".github" / "CODEOWNERS").write_text(owners.render("acme", "platform") + "/landing-zones/payments/ @acme/payments\n")
+        code, out, err = self.check(repo, "--json", actions=True)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("::error::.github/CODEOWNERS is not what mlz install repos writes", err)
+        self.assertIn("Remove `/landing-zones/payments/ @acme/payments`.", err)
+
+    def test_in_the_governance_repo_the_owner_is_bootstrap_yaml_s_platform_team(self):
+        from mlz import owners
+        repo = self.starter("governance")  # its bootstrap.yaml: demo-org, platform
+        (repo / ".github" / "CODEOWNERS").write_text(owners.render("demo-org", "platform"))
+        self.assertEqual(self.check(repo, "--json")[0], 0)
+        (repo / ".github" / "CODEOWNERS").write_text(owners.render("demo-org", "network"))
+        code, _, err = self.check(repo)
+        self.assertEqual(code, 1)
+        self.assertIn("names @demo-org/network as the owner, but bootstrap.yaml's platform team is @demo-org/platform", err)
+
+    def test_a_bootstrap_yaml_mlz_cannot_read_fails_the_check_and_says_why(self):
+        repo = self.starter("governance")
+        (repo / "bootstrap.yaml").write_text("github: [not, a, mapping]\n")
+        code, out, err = self.check(repo, "--json")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("mlz check: bootstrap.yaml: github is not a mapping of the organization's settings", err)
+
     def test_a_failed_check_fails_and_prints_no_stacks(self):
         repo = self.starter("governance")
         (repo / "customer.yaml").write_text((repo / "customer.yaml").read_text() + "\nroot_id: NOT VALID\n")

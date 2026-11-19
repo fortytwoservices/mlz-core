@@ -83,7 +83,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 
 | Job | When | What it does |
 |---|---|---|
-| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
+| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main-checks` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
 | `plan` | pull requests, `main`, and daily | One plan per stack the run plans ([below](#what-a-run-plans)) (the role's stacks, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
@@ -172,7 +172,7 @@ merge would add no control: the contract says what the other role has already de
 changes. A contract that fails this repo's check or plan stays on its pull request, not on `main`. On
 vending, a contract that gives landing zones their addresses or names gets the IP plan and the names committed
 to the pull request first, and the run of that commit merges it. A contract that another merge left behind
-`main` is first brought up to date with it, since the ruleset `main` merges only such a branch, and the run of
+`main` is first brought up to date with it, since the ruleset `main-checks` merges only such a branch, and the run of
 that merge merges it. Until vending has both governance's and platform's contracts,
 it waits: its check plans nothing, and it publishes nothing.
 
@@ -186,49 +186,34 @@ App that may write to the three repos, and the App merges them.
 
 Each repo's `.github/CODEOWNERS` says who must approve a change: the platform team owns every file, and
 `_generated/` has no owner, so the contract pull requests still merge themselves. The ruleset `main` requires a
-code owner's approval, so a change merges only once its owner has approved it. `mlz install repos` writes the
-file, from `bootstrap.yaml`'s `platform_team`:
+code owner's approval, so a change merges only once the platform team has approved it. `mlz install repos` writes
+the file, from `bootstrap.yaml`'s `platform_team`:
 
 ```
 *             @acme/platform
 /_generated/
 ```
 
-- **Owners are GitHub teams** of the customer's organization (or users), each with write access to the repo,
-  and visible. A team can take its members from an Entra ID group: the organization's owner connects the two in
-  the team's settings (team synchronization, on GitHub Enterprise Cloud), and GitHub refreshes it at least hourly.
-- **Handing an area over** to a team on the customer's side is a line below `*`, in a pull request the
-  current owner approves; the last line that matches a file wins. The team needs write access to the repo, which
-  the run on `main` after the merge gives it; the pull request's check only notes that it has none yet. Deleting
-  the line hands the area back, and leaves the team's access as it is:
-
-  ```
-  *                   @acme/platform
-  /firewall-rules/    @acme/network
-  /_generated/
-  ```
-
-  A code owner approves merges to `main`; the apply still waits for the role's environment's reviewer.
-- **Every run checks the file as GitHub reads it** (`python3 -m mlz owners`, in `check`), at the commit the run
-  checked out: on a pull request, the merge of it into its base. GitHub skips a line it cannot use, such as a team that does not exist or
-  has no write access, and the paths that line matches then have no owner at all; they do not fall back to the
-  line above (tested on 14 November 2026). So any error stops the run, saying which line and why. A repo without
-  the file is only noted.
-- **But a visible team of the organization that cannot write to the repo yet** is no error in the pull request
-  that names it: its run notes it, and the run of `main`'s latest commit after the merge gives it write access, as
-  the MLZ App, and only to that repo. GitHub reads its lines at once (tested on 15 November 2026). A person, a
-  secret team, a team that does not exist or another organization's still stops the run: MLZ never invites anyone.
-  The daily check gives no access, and a run of an older commit leaves it to the latest one.
-- **Until that run has given access, no other pull request merges:** the team's paths have no owner on `main`,
-  so a change to them would need nobody's approval, and every pull request's check stops on it, one that deletes
-  the file too. The run waits behind any apply waiting for its reviewer: approve or reject that apply, or run it
-  again if it failed. Then run the pull requests' checks again.
-- **A pull request checked before the handover merged checks again:** the ruleset `main` merges only a branch up
-  to date with `main` (decided by the user on 2026-11-15), so it must be brought up to date first, and its check
-  then reads the new owners. A contract pull request another merge left behind is brought up to date by its own
-  run, and the run of that merge merges it.
-- **A pull request from a fork stops at the check:** its run gets none of the repo's secrets, so it cannot look
-  teams up as the MLZ App. Push the branch to the repo itself and open the pull request from there.
+- **Nothing else goes in the file** (decision D8, 19 November).
+  - Every run's check reads it offline (`mlz check`, which `./mlz check` runs on a person's checkout too).
+  - The check fails on any other rule and names it. Handing a folder to another team is not supported.
+  - In the governance repo, whose `bootstrap.yaml` names the platform team, the owner must be that team.
+- **The owner is a GitHub team** of the customer's organization, visible, with write access to the repo, which
+  `mlz install repos` gives it. GitHub skips a line naming a team that does not exist, is secret or cannot write,
+  and the paths that line matches then have no owner at all (tested on 14 November 2026). `mlz install check`
+  shows any error GitHub reports in the file.
+  - A team can take its members from an Entra ID group: the organization's owner connects the two in the team's
+    settings (team synchronization, on GitHub Enterprise Cloud), and GitHub refreshes it at least hourly.
+- **The bypass team may merge without the approval,** pull requests only: `bootstrap.yaml`'s `bypass_team`, which
+  alone may also change `.github/` ([below](#changes-to-github)). The check still binds it: it lives in the
+  ruleset `main-checks`, which has no bypass, since a bypass covers its whole ruleset.
+  - GitHub records each bypass under the repo's Insights, Rules.
+  - `mlz install repos` gives a new repo's ruleset `main` that bypass.
+  - For a repo made before, first run `mlz install repos`, so that `main-checks` requires the check, and take the
+    check out of the old `main`. Only then add the team to `main` as a bypass actor, pull requests only: a bypass
+    covers its whole ruleset. `mlz install check` notes the missing bypass, and fails while the check is required
+    only by a ruleset someone may bypass.
+- A code owner approves merges to `main`; the apply still waits for the role's environment's reviewer.
 
 ## Changes to `.github/`
 
@@ -257,9 +242,9 @@ identity, from its own pull request (proved on a test customer on 19 November). 
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, makes the landing zones' workload repos, and gives a team `CODEOWNERS` names write access. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
-| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
+| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main`, `main-checks` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions

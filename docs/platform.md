@@ -17,10 +17,6 @@ A folder per stack, each named after it, and in each a file per region (or a fol
 | `identity/<region>.yaml` | `identity` | nothing yet: the file being there builds identity's network in that region, so an empty or comment-only file will do |
 | `firewall-rules/` | `firewall-rules` | outbound rules ([below](#firewall-rules)) |
 
-Since a folder is one stack, handing an area to a team on the customer's side is one line in
-`.github/CODEOWNERS`, below `*`: `/identity/ @acme/identity-team` ([code owners](pipelines.md#code-owners)). That
-team then approves the folder's pull requests; the apply still waits for the platform environment's reviewer.
-
 A connectivity file:
 
 ```yaml

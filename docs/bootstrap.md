@@ -175,9 +175,11 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    Then it creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
    commit from its starter, calling the copy. The governance repo gets the customer's own `customer.yaml` and
    `bootstrap.yaml`.
-   - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, the pipeline's
-     check passed (`platform / check` in the platform repo) on a branch up to date with `main`, no force push, no
-     deletion.
+   - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, no force push, no
+     deletion. The bypass team may merge a pull request without the approval, pull requests only.
+   - Each gets the ruleset `main-checks`: the pipeline's check passed (`platform / check` in the platform repo) on a
+     branch up to date with `main`. It is a ruleset of its own because a bypass covers its whole ruleset, so nobody
+     bypasses the check, the bypass team included.
    - Each gets the push ruleset `pipeline-files`, after its first commit: changes under `.github/` are refused on every
      branch, but from `bypass_team` ([pipelines](pipelines.md#changes-to-github)). The team must exist first, be
      visible, and not be the platform team. Whoever runs `mlz install repos` again, or `mlz upgrade`, must be in it.
