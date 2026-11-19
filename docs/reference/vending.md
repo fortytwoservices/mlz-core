@@ -106,7 +106,7 @@ Settings from a landing zone's file or a layer above it.
 | `user_managed_identities.resource_group_name_existing` | string | derived | the landing zone's identity resource group |
 | `user_managed_identities.location` | string | setting | `location` in a landing zone's file or a layer above it |
 | `user_managed_identities.tags` | map(string) | setting | `tags` in a landing zone's file or a layer above it: with Owner, CostCenter, Environment, Workload and ManagedBy |
-| `user_managed_identities.role_assignments` | map(object) | fixed | `{"deploy": "Contributor", "plan": "Reader"}`: on the landing zone's subscription: the platform team runs every pipeline (decision D2) |
+| `user_managed_identities.role_assignments` | map(object) | fixed | `{}`: vending gives the identities their roles itself (identity_role: plan Reader, deploy Contributor, on the landing zone's subscription, decision D2), named from each identity's resource ID: sub-vending names its from the principal ID, which a tag change leaves unknown until the apply, and would replace them |
 | `user_managed_identities.federated_credentials_github` | map(object) | closed | the identities trust GitHub's immutable subjects, through federated_credentials_advanced |
 | `user_managed_identities.federated_credentials_terraform_cloud` | map(object) | closed | the workload repo runs on GitHub |
 | `user_managed_identities.federated_credentials_advanced` | map(object) | derived | the workload repo's GitHub subjects, by ID: its pull requests and main for plan, its apply environment for deploy |
