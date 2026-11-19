@@ -707,8 +707,12 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, GOVERNANCE, PLATFORM)
         # An existing repo, which vending only trusts; and one vending makes, named by naming.repository.
         self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": "demo-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."})
-        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs", "description": "Workload repo of landing zone payments-dev, made by mlz-core's vending."})
+        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs", "description": "Workload repo of landing zone payments-dev, made by mlz-core's vending.", "bypass_team": None})
         self.assertNotIn("repository", configs["payments-prod"]["names"])
+        # Governance's bypass team (bootstrap.yaml's), for the rules of a repo vending makes only.
+        configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins"}}, PLATFORM)
+        self.assertEqual(configs["payments-dev"]["github"]["bypass_team"], "acme-admins")
+        self.assertNotIn("bypass_team", configs["payments-prod"]["github"])
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
 
@@ -778,7 +782,7 @@ class VendingTest(unittest.TestCase):
         own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
         self.allocate(governance=own)
         configs = build(self.repo, own, PLATFORM)
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."})
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending.", "bypass_team": None})
         # Recorded, as every landing zone name is: a changed template renames nothing until renewed.
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["github"]["repo"], "demo-payments-prod")

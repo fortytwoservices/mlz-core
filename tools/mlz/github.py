@@ -122,6 +122,10 @@ class GitHub:
             self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
         return sha
 
+    def app_id(self, slug: str) -> int:
+        """A GitHub App's ID, which a ruleset's bypass names it by, from its slug."""
+        return self._api(f"apps/{slug}")["id"]
+
     def delete_branch(self, repo: str, branch: str) -> None:
         self._api(f"repos/{repo}/git/refs/heads/{branch}", "DELETE", missing_ok=True)
 

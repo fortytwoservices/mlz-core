@@ -91,23 +91,33 @@ def push_ruleset(team_id: int) -> dict:
 CHECKS_RULESET = "main-checks"
 
 
-def main_ruleset(role: str, team_id: int | None = None) -> dict:
+def app_bypass(app_id: int | None) -> list[dict]:
+    """The MLZ App as a bypass actor, in a workload repo only: its own commits of the landing zone's values go
+    straight to main (tools/mlz/workload.py, decision D14)."""
+    return [{"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"}] if app_id else []
+
+
+def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = None, approvals: int = 0,
+                 dismiss_stale: bool = False) -> dict:
     """The ruleset main: pull requests only, a code owner's approval, no force push or deletion. The bypass team
     (team_id) may merge a pull request without the approval, and only a pull request (decision D8): GitHub records each
     bypass under the repo's Insights, Rules. A bypass covers its whole ruleset, so the check lives in a ruleset of its
-    own (checks_ruleset), which nobody bypasses."""
+    own (checks_ruleset), which nobody bypasses but, in a workload repo, the MLZ App (app_id). approvals: how many
+    approvals besides the code owner rule, and dismiss_stale whether a push after an approval needs a new one (a workload
+    repo asks both, tools/mlz/workload.py)."""
+    actors = ([{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "pull_request"}] if team_id else []) + app_bypass(app_id)
     return {
         "name": "main",
         "target": "branch",
         "enforcement": "active",
-        **({"bypass_actors": [{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "pull_request"}]} if team_id else {}),
+        **({"bypass_actors": actors} if actors else {}),
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
         "rules": [
             {"type": "deletion"},
             {"type": "non_fast_forward"},
             {"type": "pull_request", "parameters": {
-                "required_approving_review_count": 0,
-                "dismiss_stale_reviews_on_push": False,
+                "required_approving_review_count": approvals,
+                "dismiss_stale_reviews_on_push": dismiss_stale,
                 "require_code_owner_review": True,
                 "require_last_push_approval": False,
                 "required_review_thread_resolution": False,
@@ -116,18 +126,19 @@ def main_ruleset(role: str, team_id: int | None = None) -> dict:
     }
 
 
-def checks_ruleset(role: str) -> dict:
-    """The ruleset main-checks: the role's check passed, on a branch up to date with main, before any merge into main,
-    the bypass team's included. No bypass actor."""
+def checks_ruleset(role: str, app_id: int | None = None, check: str | None = None) -> dict:
+    """The ruleset main-checks: the role's check (or check) passed, on a branch up to date with main, before any merge
+    into main, the bypass team's included. No bypass actor but, in a workload repo, the MLZ App (app_id)."""
     return {
         "name": CHECKS_RULESET,
         "target": "branch",
         "enforcement": "active",
+        **({"bypass_actors": app_bypass(app_id)} if app_id else {}),
         "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
         "rules": [
             {"type": "required_status_checks", "parameters": {
                 "strict_required_status_checks_policy": True,
-                "required_status_checks": [{"context": required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
+                "required_status_checks": [{"context": check or required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
             }},
         ],
     }
