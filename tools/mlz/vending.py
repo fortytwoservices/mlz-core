@@ -440,7 +440,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         for name, block in plan.get(key, {}).get("removed_subnets", {}).items():
             length = (wanted[key] or (0, {}))[1].get(name)
             if length is not None and length != block.prefixlen:
-                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (./mlz release).")
+                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (./mlz release --repo . {key}).")
     problems += plan_problems(plan, zones, wanted, platform)
     if problems:
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))

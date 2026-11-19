@@ -193,12 +193,20 @@ class FakeGitHub:
         return f"https://github.com/{repo}/pull/1"
 
 
-class FakeTerraform:
-    """Answers like terraform would. migrate_failures: how many state moves fail before one succeeds."""
+# The JSON of a plan as terraform show -json gives it: one resource to add, or nothing (tools/ci/summary.py reads it).
+ONE_CHANGE = {"applyable": True, "complete": True, "errored": False, "output_changes": {}, "resource_changes": [
+    {"address": "azapi_resource.x", "type": "azapi_resource", "change": {"actions": ["create"], "before": None, "after": {"name": "x"}, "after_unknown": {}}}]}
+NO_CHANGE = {"applyable": False, "complete": True, "errored": False, "output_changes": {}, "resource_changes": []}
 
-    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False, contract_identities=None):
+
+class FakeTerraform:
+    """Answers like terraform would. plan_status: 1 for a plan that fails, 2 for one with a change, 0 for one without;
+    plan_json, a plan of its own. migrate_failures: how many state moves fail before one succeeds."""
+
+    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False, contract_identities=None, plan_json=None):
         self.work, self.root = work, work / "bootstrap" / "terraform"
         self.contract_identities = contract_identities or {}
+        self.plan_json = plan_json if plan_json is not None else ONE_CHANGE if plan_status == 2 else NO_CHANGE
         self.plan_status, self.migrate_failures = plan_status, migrate_failures
         self.state_endpoint = state_endpoint
         self.subjects = subjects or {f"{role}-plan": f"repo:acme@1/mlz-{role}@2:pull_request" for role in install.ROLES}
@@ -209,13 +217,17 @@ class FakeTerraform:
 
     def run(self, *arguments, capture=False):
         self.calls.append(arguments)
-        status = 0
-        if arguments[0] == "plan":
-            status = self.plan_status
+        status, shown = 0, ""
+        if arguments[0] == "plan":  # exits 0 or 1 only: no -detailed-exitcode
+            status = 1 if self.plan_status == 1 else 0
+            if not status:
+                Path(next(a for a in arguments if a.startswith("-out="))[len("-out="):]).write_text("plan")
+        elif arguments[:2] == ("show", "-json"):
+            shown = json.dumps(self.plan_json)
         elif "-migrate-state" in arguments:
             status = 1 if self.migrate_failures > 0 else 0
             self.migrate_failures -= 1
-        return subprocess.CompletedProcess(arguments, status, "", "")
+        return subprocess.CompletedProcess(arguments, status, shown, "")
 
     def output(self, name):
         return json.dumps({
@@ -882,7 +894,36 @@ class InstallTest(unittest.TestCase):
         terraform = FakeTerraform(self.work, plan_status=0)
         install.step_bootstrap(FakeGitHub(), terraform, self.folder, out=self.out)
         self.assertIn(f"-backend-config={self.work / 'backend.hcl'}", terraform.calls[0])
-        self.assertEqual([c[0] for c in terraform.calls], ["init", "plan"])
+        self.assertEqual([c[0] for c in terraform.calls], ["init", "plan", "show"])
+        self.assertNotIn("-detailed-exitcode", terraform.calls[1])  # never relied on (D12)
+        self.assertIn("**bootstrap**: no changes.", self.printed)
+
+    def test_an_import_or_a_move_alone_is_applied(self):
+        # Terraform's exit code once decided; an import alone changes nothing in Azure, but the state must record it.
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        imported = {**NO_CHANGE, "applyable": True, "resource_changes": [
+            {"address": "azapi_resource.vault", "type": "azapi_resource", "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {},
+                                                                                     "importing": {"id": "/subscriptions/s/resourceGroups/g"}}},
+            {"address": "azapi_resource.group", "previous_address": "azapi_resource.rg", "type": "azapi_resource",
+             "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}}]}
+        terraform = FakeTerraform(self.work, plan_json=imported)
+        install.step_bootstrap(FakeGitHub(), terraform, self.folder, yes=True, out=self.out)
+        self.assertIn("apply", [call[0] for call in terraform.calls])
+        summary = "\n".join(self.printed)
+        self.assertIn("**bootstrap**: no resource changes.", summary)
+        self.assertIn("- imports `azapi_resource.vault`", summary)
+        self.assertIn("- moves `azapi_resource.rg` to `azapi_resource.group`", summary)
+
+    def test_a_plan_terraform_cannot_show_or_that_errored_stops(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        with self.assertRaisesRegex(ConfigError, "terraform plan failed"):
+            install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=1), self.folder, yes=True, out=self.out)
+        errored = FakeTerraform(self.work, plan_json={**ONE_CHANGE, "errored": True})
+        with self.assertRaisesRegex(ConfigError, "the bootstrap's plan is not one to apply"):
+            install.step_bootstrap(FakeGitHub(), errored, self.folder, yes=True, out=self.out)
+        self.assertNotIn("apply", [call[0] for call in errored.calls])
 
     def test_it_says_whether_the_state_has_its_private_endpoint(self):
         (self.work).mkdir(parents=True)

@@ -697,10 +697,12 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
     plan = terraform.work / "bootstrap.tfplan"
     variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
                  "-var", f"names_file={names_file}", "-var", f"runners_file={runners_file}"]
-    status = terraform.run("plan", "-input=false", "-detailed-exitcode", f"-out={plan}", *variables).returncode
-    if status == 1:
+    # Whether anything is to apply is the plan's own JSON, read as the pipeline reads it (tools/ci/summary.py), never
+    # Terraform's exit code (D12): an import or a move alone changes nothing in Azure, but must be applied for the
+    # state to record it.
+    if terraform.run("plan", "-input=false", f"-out={plan}", *variables).returncode or not plan.is_file():
         raise ConfigError("terraform plan failed; see above.")
-    if status == 2:
+    if plan_changes(terraform, plan, out):
         if not yes and ask("Apply this plan? [y/N] ").strip().lower() != "y":
             raise ConfigError("not applied.")
         if terraform.run("apply", "-input=false", str(plan)).returncode:
@@ -708,6 +710,25 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
     if local:
         move_state(terraform, backend, pending, override, out, wait)
     check_subjects(github, json.loads(terraform.output("oidc_subjects")), repositories(bootstrap), out)
+
+
+def plan_changes(terraform, plan: Path, out: Callable[[str], None] = print) -> list[str]:
+    """The bootstrap plan's changes, as the pipeline lists a stack's (tools/ci/summary.py: resources, outputs, and the
+    imports, moves and forgets that change only the state), with its summary printed; a ConfigError when Terraform
+    cannot show the plan, or summary.py fails on it (an errored plan, or one whose applyable it does not agree with)."""
+    from ci import summary  # tools/ci, on the same path as tools/mlz: one rule for the pipeline and the bootstrap
+
+    shown = terraform.run("show", "-json", str(plan), capture=True)
+    if shown.returncode:
+        raise ConfigError(f"terraform show could not read the plan: {shown.stderr.strip()}")
+    as_json, summary_file, changes_file = (terraform.work / name for name in ("bootstrap.plan.json", "bootstrap-summary.md", "bootstrap-changes.txt"))
+    as_json.write_text(shown.stdout)
+    checked = summary.main(str(as_json), "bootstrap", str(summary_file), str(changes_file))
+    as_json.unlink()
+    if checked:
+        raise ConfigError("the bootstrap's plan is not one to apply; see above.")
+    out(summary_file.read_text().rstrip("\n"))
+    return changes_file.read_text().splitlines()
 
 
 def move_state(terraform, backend: Path, pending: Path, override: Path, out, wait) -> None:

@@ -238,7 +238,7 @@ def problems(key: str, lz: dict, plan: dict, governance: dict | None, platform: 
 def clean(complete: bool) -> str:
     """What the check says when it finds nothing: all of it, or what it could check before the contracts came."""
     return ("no problems in this landing zone" + ("" if complete else "; the checks that need the contracts wait for them")
-            + " (python3 -m mlz vending checks them all together)")
+            + " (./mlz check checks them all together)")
 
 
 def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str, str]]], found: list[str], complete: bool = True) -> str:
@@ -446,7 +446,7 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
         filled = [(stack, "no settings", f"{stack}/<region>.yaml takes none yet; {'its being there builds' if stack == 'identity' else 'management builds'} the network")]
     worked = module_inputs(root, config, places, worked_out=True).get("Worked out", []) if config else \
         [("everything else", "not known yet", WAITS if governance is None else "the platform's settings must check first (below)")]
-    checked = "no problems in the platform's settings (python3 -m mlz platform checks every hub together)" if governance is not None else \
+    checked = "no problems in the platform's settings (./mlz check checks every hub together)" if governance is not None else \
         "no problems in this file; the checks that need governance's contract wait for it"
     return render_parts(heading, {"Set in its file": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found, nothing=checked)
 

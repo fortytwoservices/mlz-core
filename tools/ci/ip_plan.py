@@ -84,7 +84,7 @@ def update(github: Pipeline, allocate: Callable[[Path], None] = allocate, change
     # and again.
     if github.commit_message(repo, head) == MESSAGE:
         say("::error::The IP plan or the names changed again after they were committed to this pull request. "
-            "Run python3 -m mlz allocate --repo . on the branch and commit the result.")
+            "Run ./mlz allocate --repo . on the branch and commit the result.")
         return 1
 
     # The plan written here includes what the base gave out since the branch was made. If the base changed the plan or
