@@ -10,7 +10,7 @@ with a reviewed change to customer.yaml (or a hub file's or bootstrap.yaml's nam
 from __future__ import annotations
 
 from .merge import ConfigError
-from .naming import Naming, check, platform_name
+from .naming import Naming, check, counts, platform_name
 
 # Governance's, in management's subscription. The data collection rules, by the key governance gives them.
 DATA_COLLECTION_RULES = {"change_tracking": "changetracking", "vm_insights": "vminsights", "defender_sql": "defendersql"}
@@ -33,6 +33,19 @@ HUB = {
 ROLES = {"governance": "gov", "platform": "plat", "vending": "vend"}
 # What bootstrap.yaml's names: may set: the bootstrap's own resources that stand alone.
 BOOTSTRAP_NAMED = {"resource_group": "resource_group", "storage_account": "storage_account", "key_vault": "key_vault"}
+# Each resource's number among mlz-core's own of its type in one place: the {nn} that tells them apart when the type's
+# template has no {purpose} (docs/naming.md, without {purpose}). A number is in a name, so the table is fixed and only ever
+# added to, and a member switched off keeps its number. A resource not listed is alone of its type where it is: 01.
+NUMBERS = {
+    "the hub's public IPs": {"firewall_public_ip": 1, "firewall_management_public_ip": 2, "bastion_public_ip": 3},
+    # Governance's group and management's network's, in the management subscription; identity's network's too.
+    "a part's resource groups": {"own": 1, "network": 2},
+    "data collection rules": {"change_tracking": 1, "vm_insights": 2, "defender_sql": 3},
+    "the bootstrap's identities": {"governance-plan": 1, "governance-apply": 2, "platform-plan": 3, "platform-apply": 4,
+                                   "vending-plan": 5, "vending-apply": 6, "runners": 7},
+    # Private endpoints, and their network interfaces.
+    "the bootstrap's endpoints": {"state": 1, "vault": 2},
+}
 
 
 def apart(what: str, named: dict[str, str]) -> dict[str, str]:
@@ -42,7 +55,8 @@ def apart(what: str, named: dict[str, str]) -> dict[str, str]:
     for item, name in named.items():
         if name.lower() in seen:
             raise ConfigError(f"{seen[name.lower()]} and {item} would both be {name}, and Azure needs {what} named apart; "
-                              "put {app} and {purpose} in the template, or name one explicitly.")
+                              "put {app} and {purpose} or {nn} in the template (naming.template, or naming.templates.<type>), "
+                              "or name one explicitly.")
         seen[name.lower()] = item
     return named
 
@@ -52,7 +66,7 @@ def management_groups(naming: Naming, primary: str, bootstrap_group: str | None 
     for two would merge what each manages, and the rights each pipeline has on its own. The bootstrap's only where it is
     known: bootstrap.yaml may name it, which governance never reads."""
     groups = {
-        "governance's management group": platform_name(naming, "management", "resource_group", primary),
+        "governance's management group": platform_name(naming, "management", "resource_group", primary, number=NUMBERS["a part's resource groups"]["own"]),
         "management's network group": network_resource_group(naming, "management", primary),
     }
     apart("resource groups in the management subscription", groups if bootstrap_group is None else {**groups, "the bootstrap's group": bootstrap_group})
@@ -65,11 +79,17 @@ def dns_resource_group(naming: Naming, primary: str) -> str:
 
 def network_resource_group(naming: Naming, network: str, primary: str) -> str:
     """Management's or identity's network's group, one for every region: the bootstrap makes it in the primary region."""
-    return platform_name(naming, network, "resource_group", primary, "net")
+    return platform_name(naming, network, "resource_group", primary, "net", NUMBERS["a part's resource groups"]["network"])
 
 
 def network(naming: Naming, network: str, region: str, subnets: list[str]) -> dict:
     """Management's or identity's network in one region. Subnets and peerings are named inside it, as before."""
+    if subnets and counts(naming, "network_security_group"):
+        # One NSG per subnet, and the platform keeps no record of names that would hold a number when a subnet is added
+        # or removed, as vending's _generated/names.yaml does for a landing zone's.
+        raise ConfigError(f"{network}'s network security groups are told apart by their subnets' names, which their template has no "
+                          "{purpose} for: give them a template with {purpose}, as naming.templates.network_security_group: "
+                          '"{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}" in customer.yaml.')
     return {
         "virtual_network": platform_name(naming, network, "virtual_network", region),
         "route_table": platform_name(naming, network, "route_table", region),
@@ -87,11 +107,12 @@ def governance(naming: Naming, primary: str) -> dict:
     management_groups(naming, primary)
     return {
         "management": {
-            "resource_group": platform_name(naming, "management", "resource_group", primary),
+            "resource_group": platform_name(naming, "management", "resource_group", primary, number=NUMBERS["a part's resource groups"]["own"]),
             "workspace": platform_name(naming, "management", "log_analytics_workspace", primary),
             "ama_identity": platform_name(naming, "management", "user_assigned_identity", primary, "ama"),
-            "data_collection_rules": apart("data collection rules", {key: platform_name(naming, "management", "data_collection_rule", primary, purpose)
-                                                                     for key, purpose in DATA_COLLECTION_RULES.items()}),
+            "data_collection_rules": apart("data collection rules", {
+                key: platform_name(naming, "management", "data_collection_rule", primary, purpose, NUMBERS["data collection rules"][key])
+                for key, purpose in DATA_COLLECTION_RULES.items()}),
         },
         "dns_resource_group": dns_resource_group(naming, primary),
     }
@@ -100,7 +121,7 @@ def governance(naming: Naming, primary: str) -> dict:
 def hub(naming: Naming, region: str, explicit: dict | None = None) -> dict:
     """One region's hub: every component the hub module makes, from the template or the hub file's names:."""
     explicit = explicit or {}
-    return {key: explicit[key] if key in explicit else platform_name(naming, "hub", kind, region, purpose)
+    return {key: explicit[key] if key in explicit else platform_name(naming, "hub", kind, region, purpose, NUMBERS["the hub's public IPs"].get(key, 1))
             for key, (kind, purpose) in HUB.items()}
 
 
@@ -138,16 +159,20 @@ def bootstrap(naming: Naming, primary: str, explicit: dict | None = None, self_h
     management_groups(naming, primary, own("resource_group", "resource_group", None))
     # Six, each with rights of its own: one name for two would give a pull request's plan an apply's rights. The
     # runners' identity is in the same group, and so are the state account's and the vault's endpoints.
-    identities = apart("the pipeline identities", {f"{role}-{kind}": platform_name(naming, "bootstrap", "user_assigned_identity", primary, f"{short}{kind}")
-                                                   for role, short in ROLES.items() for kind in ("plan", "apply")})
-    endpoints = {"the state account's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "state")}
-    nics = {"the state account's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "state")}
+    numbered, endpoint = NUMBERS["the bootstrap's identities"], NUMBERS["the bootstrap's endpoints"]
+    identities = apart("the pipeline identities", {
+        f"{role}-{kind}": platform_name(naming, "bootstrap", "user_assigned_identity", primary, f"{short}{kind}", numbered[f"{role}-{kind}"])
+        for role, short in ROLES.items() for kind in ("plan", "apply")})
+    endpoints = {"the state account's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "state", endpoint["state"])}
+    nics = {"the state account's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "state", endpoint["state"])}
     runners = dict.fromkeys(("key_vault", "vault_endpoint", "vault_endpoint_nic", "runners", "runners_identity", "runners_nsg"))
     if self_hosted:
-        runners_identity = platform_name(naming, "bootstrap", "user_assigned_identity", primary, "runners")
+        runners_identity = platform_name(naming, "bootstrap", "user_assigned_identity", primary, "runners", numbered["runners"])
         apart("the bootstrap's identities", {**identities, "the runners' identity": runners_identity})
-        endpoints = apart("the bootstrap's private endpoints", {**endpoints, "the vault's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "vault")})
-        nics = apart("the bootstrap's network interfaces", {**nics, "the vault's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "vault")})
+        endpoints = apart("the bootstrap's private endpoints", {
+            **endpoints, "the vault's endpoint": platform_name(naming, "bootstrap", "private_endpoint", primary, "vault", endpoint["vault"])})
+        nics = apart("the bootstrap's network interfaces", {
+            **nics, "the vault's endpoint": platform_name(naming, "bootstrap", "network_interface", primary, "vault", endpoint["vault"])})
         runners = {
             "key_vault": own("key_vault", "key_vault", None),
             "vault_endpoint": endpoints["the vault's endpoint"],

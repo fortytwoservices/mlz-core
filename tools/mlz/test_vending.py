@@ -519,27 +519,63 @@ class VendingTest(unittest.TestCase):
         (self.repo / "landing-zones/payments/dev.yaml").unlink()
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
         self.allocate()
-        # A template without {purpose} gives both resource groups, and both NSGs, one name.
-        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
-        renamed = lambda: give_names(self.repo, ip_plan(self.repo), flat, {"payments-prod"})
+        # A template without {purpose} and {nn} gives both resource groups, and both NSGs, one name.
+        bare = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}"}}
+        renamed = lambda: give_names(self.repo, ip_plan(self.repo), bare, {"payments-prod"})
         problems = self.problems(lambda _: renamed())
-        self.assertIn("landing-zones/payments/prod: network_resource_group and identity_resource_group would both be rg-demo-pay-pd-nwe-01, "
-                      "and Azure needs its resource groups named apart; put {purpose} in the template, or set one under names:.", problems)
-        self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe-01", problems)
+        self.assertIn("landing-zones/payments/prod: network_resource_group and identity_resource_group would both be rg-demo-pay-pd-nwe, "
+                      "and Azure needs its resource groups named apart; put {purpose} or {nn} in the template (naming.template, or "
+                      "naming.templates.<type>), or set one under names:.", problems)
+        self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
-                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe-01\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
+                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
                    "  network_security_groups:\n    web: nsg-pay-web\n")
         problems = self.problems(lambda _: renamed())  # Azure ignores case in a resource group's name
-        self.assertIn("would both be RG-demo-pay-pd-nwe-01", problems)
+        self.assertIn("would both be RG-demo-pay-pd-nwe", problems)
         self.assertNotIn("NSGs", problems)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
                    "names:\n  identity_resource_group: rg-pay-identity\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
                    "  network_security_groups:\n    web: nsg-pay-web\n")
-        self.allocate(governance=flat)
+        self.allocate(governance=bare)
         (self.repo / NAMES).unlink()
+        self.allocate(governance=bare)
+        names = build(self.repo, bare, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe", "rg-pay-identity"))
+
+    def test_without_purpose_mlz_core_numbers_its_own(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
         self.allocate(governance=flat)
         names = build(self.repo, flat, PLATFORM)["payments-prod"]["names"]
-        self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe-01", "rg-pay-identity"))
+        self.assertEqual([names[item] for item in ("network_resource_group", "identity_resource_group", "state_resource_group", "deploy_identity", "plan_identity")],
+                         ["rg-demo-pay-pd-nwe-01", "rg-demo-pay-pd-nwe-02", "rg-demo-pay-pd-nwe-03", "id-demo-pay-pd-nwe-01", "id-demo-pay-pd-nwe-02"])
+        # NSGs named in one allocation take their numbers in the order of their subnets' names.
+        self.assertEqual(names["network_security_groups"], {"app": "nsg-demo-pay-pd-nwe-01", "web": "nsg-demo-pay-pd-nwe-02"})
+        self.assertEqual(vending.NUMBERS, {"network_resource_group": 1, "identity_resource_group": 2, "state_resource_group": 3,
+                                           "deploy_identity": 1, "plan_identity": 2})  # only ever added to: a number is in a name
+
+    def test_an_nsg_s_number_never_moves(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        nsgs = lambda: build(self.repo, flat, PLATFORM)["payments-prod"]["names"]["network_security_groups"]
+        subnets = lambda *names: self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n" + "".join(f"    {n}: 27\n" for n in names))
+        subnets("web", "app")
+        self.allocate(governance=flat)
+        subnets("db", "web", "app")  # a new subnet takes the next number, wherever it is in the file and whatever its name
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs(), {"app": "nsg-demo-pay-pd-nwe-01", "web": "nsg-demo-pay-pd-nwe-02", "db": "nsg-demo-pay-pd-nwe-03"})
+        # web removed: its block, and so its NSG's name, stay held until released, so the next subnet takes 04, not 02.
+        subnets("db", "app", "api")
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs(), {"app": "nsg-demo-pay-pd-nwe-01", "db": "nsg-demo-pay-pd-nwe-03", "api": "nsg-demo-pay-pd-nwe-04"})
+        # Released once its NSG is gone: 02 is free again for the next new subnet.
+        plan, retired, _ = release(self.repo, "payments-prod")
+        self.write(IP_PLAN, render_plan(plan, retired))
+        subnets("db", "app", "api", "cache")
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs()["cache"], "nsg-demo-pay-pd-nwe-02")
+        self.assertEqual(self.allocate(governance=flat), [])  # allocating again moves nothing
 
     def test_the_short_name_is_set_once_for_the_workload(self):
         self.allocate()

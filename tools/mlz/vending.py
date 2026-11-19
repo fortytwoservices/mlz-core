@@ -61,6 +61,11 @@ NAMED = {
     # region could pass the 24 characters Azure allows (docs/naming.md). One recorded with it keeps its name.
     "state_account": ("storage_account", None),
 }
+# Each one's number among the landing zone's own of its type: the {nn} that tells them apart when the type's template
+# has no {purpose} (docs/naming.md, without {purpose}). Fixed, and only ever added to; one not listed is alone of its
+# type, 01. A subnet's NSG takes the lowest number no NSG of the landing zone holds in the record when it is first
+# named (network_security_group_number).
+NUMBERS = {"network_resource_group": 1, "identity_resource_group": 2, "state_resource_group": 3, "deploy_identity": 1, "plan_identity": 2}
 # Recorded beside them: the workload repo vending creates, named by customer.yaml's naming.repository.
 REPOSITORY = "repository"
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo", "create", "team"}}
@@ -746,7 +751,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
     template = settings is not None and fits
     entry: dict = {}
 
-    def one(item: str, kind: str, purpose: str | None, given: dict, held: dict) -> str | None:
+    def one(item: str, kind: str, purpose: str | None, given: dict, held: dict, number: int = 1) -> str | None:
         try:
             if item in given:
                 if not isinstance(given[item], str):
@@ -759,7 +764,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             elif template and kind == REPOSITORY:  # a GitHub repo: long names, from naming.repository
                 return naming.repository_name(settings, lz["workload"], env)
             elif template:
-                return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
+                return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose, number=number)
             elif settings is None and fits:
                 problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (./mlz allocate --repo .).")
             elif settings is not None:  # the template needs both; check() says the same, so the messages are one
@@ -771,7 +776,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
 
     names = {}
     for item, (kind, purpose) in NAMED.items():
-        names[item] = one(item, kind, purpose, explicit, kept)
+        names[item] = one(item, kind, purpose, explicit, kept, NUMBERS.get(item, 1))
         if item not in explicit and names[item] is not None:
             entry[item] = names[item]
     # The workload repo, when vending makes it (an existing one, github.repo, is the landing zone's own to name).
@@ -786,8 +791,17 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             entry[SUBSCRIPTION] = names[SUBSCRIPTION]
     held = kept.get("network_security_groups") or {}
     names["network_security_groups"] = {}
+    # Without {purpose}, a new subnet's NSG takes the lowest number whose name no NSG of the landing zone holds: the
+    # record keeps a removed subnet's while the IP plan holds its block, so a number is never given again while that
+    # NSG may still be there, and a number once recorded never moves.
+    taken = {name.lower() for name in held.values() if isinstance(name, str)} | {name.lower() for name in nsgs.values() if isinstance(name, str)}
     for subnet in subnets:
-        names["network_security_groups"][subnet] = one(subnet, "network_security_group", subnet, nsgs, held)
+        number = 1
+        if template and subnet not in nsgs and subnet not in held and naming.counts(settings, "network_security_group"):
+            number = next((n for n in range(1, 100) if nsg_name(settings, app, env, s["location"], n).lower() not in taken), 100)
+        names["network_security_groups"][subnet] = one(subnet, "network_security_group", subnet, nsgs, held, number)
+        if names["network_security_groups"][subnet] is not None:
+            taken.add(names["network_security_groups"][subnet].lower())
         if subnet not in nsgs and names["network_security_groups"][subnet] is not None:
             entry.setdefault("network_security_groups", {})[subnet] = names["network_security_groups"][subnet]
     # Two of one type side by side need names apart, which a template without {purpose} would not give: both
@@ -799,12 +813,21 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         for item, value in items:
             if value is not None and value.lower() in seen:
                 problems.append(f"{where}: {seen[value.lower()]} and {item} would both be {value}, and Azure needs its {what} named apart; "
-                                "put {purpose} in the template, or set one under names:.")
+                                "put {purpose} or {nn} in the template (naming.template, or naming.templates.<type>), or set one under names:.")
             elif value is not None:
                 seen[value.lower()] = item
     names["subnet"] = "snet-%s"
     names["peering_to_hub"], names["peering_from_hub"] = f"peer-{key}-to-hub", f"peer-hub-to-{key}"
     return names, entry
+
+
+def nsg_name(settings: naming.Naming, app: str, env: str, region: str, number: int) -> str:
+    """A landing zone's NSG name with this number, from a template without {purpose}; "" when the template cannot give
+    one (an unknown environment, say: the name itself then says why)."""
+    try:
+        return naming.render(settings, "network_security_group", app=app, env=env, region=region, number=number)
+    except ConfigError:
+        return ""
 
 
 def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
