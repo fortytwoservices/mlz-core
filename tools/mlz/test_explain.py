@@ -350,6 +350,8 @@ class PlatformExplainTest(unittest.TestCase):
         self.assertIn("no problems in this file; the checks that need governance's contract wait for it", out)
         self.write("connectivity/norwayeast.yaml", HUB.replace("Premium", "Gold"))  # the hub's own checks still run
         self.assertIn("connectivity/norwayeast: firewall 'Gold' must be one of Standard, Premium, Basic.", self.run_main("norwayeast")[1])
+        self.write("connectivity/swedencentral.yaml", "")  # an empty hub beside one with settings: the loader refuses it too
+        self.assertIn("connectivity/swedencentral: landing_zone_ranges is required", self.run_main("swedencentral")[1])
 
     def test_settings_that_do_not_check_are_reported(self):
         self.write("connectivity/norwayeast.yaml", HUB.replace("Premium", "Gold"))

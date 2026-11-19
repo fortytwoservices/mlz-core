@@ -384,7 +384,9 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
     layered, filled = [], []
     if stack == platform.CONNECTIVITY:
         settings = read_setting(repo / platform.CONNECTIVITY / places["region"]) or {}
-        if governance is None and settings:  # the hub's own checks need no contract; the rest waits for it
+        # The hub's own checks need no contract; the rest waits for it. Once any hub has a setting every hub file must be
+        # complete, an empty one too, as the loader has it (platform.unset).
+        if governance is None and not platform.unset(repo):
             platform.hub(places["region"], settings, found)
         layered = [(dotted(path), show(value), file_of(repo, where)) for path, value in leaves(settings).items()]
         properties = schema.connectivity()["properties"]
