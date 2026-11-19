@@ -583,7 +583,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(len(self.printed), 15)
         self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
         self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
-        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
                       "and a code owner's review is required on main", self.printed)
 
@@ -708,9 +708,10 @@ class InstallTest(unittest.TestCase):
         everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                           secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         install.step_check(FakeGitHub(main_bypass=False, **everywhere), self.folder, self.out)  # only noted: it passes
-        self.assertIn("acme/mlz-vending: acme/mlz-admins may not merge a pull request without a code owner's approval past ruleset main; "
-                      "mlz install repos gives a new repo's ruleset main that bypass (pull requests only), and an existing one can add it "
-                      "(Settings, Rules, Rulesets)", self.printed)
+        self.assertIn("acme/mlz-vending: acme/mlz-admins may not merge a pull request without a code owner's approval past ruleset main. "
+                      "mlz install repos gives a new repo's ruleset main that bypass. For an existing one: first run mlz install repos, so "
+                      "that main-checks, without bypass actors, requires the check on an up-to-date branch, and take the check out of main; "
+                      "then add the team to main as a bypass actor, pull requests only", "\n".join(self.printed))
         self.printed.clear()
         install.step_check(FakeGitHub(**everywhere), self.folder, self.out)
         self.assertFalse([line for line in self.printed if "may not merge a pull request" in line])
@@ -751,8 +752,8 @@ class InstallTest(unittest.TestCase):
         self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
         self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
         self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
-                      "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
-                      "Rulesets), with GitHub Actions as its source, and turn on 'Require branches to be up to date before merging'.", message)
+                      "refuses can still be merged; mlz install repos makes the ruleset main-checks, without bypass actors, which requires "
+                      "it from GitHub Actions on a branch up to date with main.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
                       "The platform team must be a visible team of acme that can write to acme/mlz-vending", message)
 
@@ -771,7 +772,7 @@ class InstallTest(unittest.TestCase):
                                                  "a branch up to date with it"):
             install.step_check(FakeGitHub(**ready, strict=False), self.folder, self.out)
         install.step_check(FakeGitHub(**ready), self.folder, self.out)
-        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
 
         # Another ruleset, such as the organization's, strict about a check of its own keeps the branch up to date too.
         class Layered(FakeGitHub):
@@ -780,7 +781,16 @@ class InstallTest(unittest.TestCase):
                     "strict_required_status_checks_policy": True, "required_status_checks": [{"context": "security / scan"}]}}]
         self.printed.clear()
         install.step_check(Layered(**ready, strict=False), self.folder, self.out)
-        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before a merge into main", self.printed)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
+
+        # Required only by a ruleset its bypass actors may skip, as an existing repo's own main-checks, or the old main, may be.
+        class Bypassable(FakeGitHub):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{**install.checks_ruleset("platform"), "id": 8,
+                                                  "bypass_actors": [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}]}]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check is required only by ruleset main-checks, whose bypass "
+                                                 "actors may merge without it; require it in a ruleset without bypass actors"):
+            install.step_check(Bypassable(**ready), self.folder, self.out)
 
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],

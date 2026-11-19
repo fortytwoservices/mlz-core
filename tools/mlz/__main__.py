@@ -433,8 +433,17 @@ def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[
     role = stacks.role(repo)
     # The code owners first, offline: exactly the installer's two rules (tools/mlz/owners.py, decision D8). The
     # governance repo has bootstrap.yaml, which names the platform team.
-    bootstrap = read_yaml(repo / "bootstrap.yaml").get("github") or {} if (repo / "bootstrap.yaml").is_file() else {}
-    found = owners.offline_problems(repo, bootstrap.get("organization"), bootstrap.get("platform_team"))
+    found, bootstrap = [], {}
+    if (repo / "bootstrap.yaml").is_file():
+        try:
+            settings = read_yaml(repo / "bootstrap.yaml")
+            bootstrap = settings.get("github") if isinstance(settings, dict) else None
+        except ConfigError as error:
+            found.append(f"bootstrap.yaml: {error}")
+        if not isinstance(bootstrap, dict):
+            found += [] if found else ["bootstrap.yaml: github is not a mapping of the organization's settings (docs/bootstrap.md)."]
+            bootstrap = {}
+    found += owners.offline_problems(repo, bootstrap.get("organization"), bootstrap.get("platform_team"))
     for problem in found:
         print(f"::error::{problem}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"mlz check: {problem}", file=sys.stderr)
     if found:

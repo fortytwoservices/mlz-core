@@ -208,8 +208,11 @@ the file, from `bootstrap.yaml`'s `platform_team`:
   alone may also change `.github/` ([below](#changes-to-github)). The check still binds it: it lives in the
   ruleset `main-checks`, which has no bypass, since a bypass covers its whole ruleset.
   - GitHub records each bypass under the repo's Insights, Rules.
-  - `mlz install repos` gives a new repo's ruleset `main` that bypass; for a repo made before, add it there
-    (`mlz install check` notes it).
+  - `mlz install repos` gives a new repo's ruleset `main` that bypass.
+  - For a repo made before, first run `mlz install repos`, so that `main-checks` requires the check, and take the
+    check out of the old `main`. Only then add the team to `main` as a bypass actor, pull requests only: a bypass
+    covers its whole ruleset. `mlz install check` notes the missing bypass, and fails while the check is required
+    only by a ruleset someone may bypass.
 - A code owner approves merges to `main`; the apply still waits for the role's environment's reviewer.
 
 ## Changes to `.github/`

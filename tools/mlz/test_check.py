@@ -99,6 +99,13 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("names @demo-org/network as the owner, but bootstrap.yaml's platform team is @demo-org/platform", err)
 
+    def test_a_bootstrap_yaml_mlz_cannot_read_fails_the_check_and_says_why(self):
+        repo = self.starter("governance")
+        (repo / "bootstrap.yaml").write_text("github: [not, a, mapping]\n")
+        code, out, err = self.check(repo, "--json")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("mlz check: bootstrap.yaml: github is not a mapping of the organization's settings", err)
+
     def test_a_failed_check_fails_and_prints_no_stacks(self):
         repo = self.starter("governance")
         (repo / "customer.yaml").write_text((repo / "customer.yaml").read_text() + "\nroot_id: NOT VALID\n")
