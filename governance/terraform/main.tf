@@ -7,6 +7,8 @@ locals {
   tags          = { ManagedBy = "mlz-core" }
   # From the customer's naming template, worked out by render_library.py (tools/mlz/names.py).
   names = local.config.names
+  # customer.yaml's advanced:, checked by render_library.py; absent when it sets nothing.
+  advanced = try(local.config.advanced, {})
 
   # Resource IDs built from names, so the policies know them at plan time, before management is applied.
   management_resource_group_id = "/subscriptions/${local.subscriptions.management}/resourceGroups/${local.names.management.resource_group}"
@@ -85,13 +87,27 @@ module "management" {
   name      = local.names.management.workspace
   parent_id = azapi_resource.management_resource_group.id
   location  = local.region
+  # customer.yaml's advanced.management (tools/mlz/advanced.py: only inputs the input map calls open, checked against
+  # the module's types): each given, or the module's default when it sets none, so governance without it is planned
+  # as it always was (null is the default of a nullable = false input, or the default itself). In the objects it goes
+  # in first and mlz-core's values over it.
   data_collection_rules = {
-    change_tracking = { name = local.names.management.data_collection_rules.change_tracking }
-    vm_insights     = { name = local.names.management.data_collection_rules.vm_insights }
-    defender_sql    = { name = local.names.management.data_collection_rules.defender_sql }
+    for rule, name in local.names.management.data_collection_rules : rule => merge(try(local.advanced.management.data_collection_rules[rule], {}), { name = name })
   }
-  user_assigned_identity = { name = local.names.management.ama_identity }
-  tags                   = local.tags
+  user_assigned_identity              = { name = local.names.management.ama_identity }
+  tags                                = local.tags
+  daily_quota_gb                      = try(local.advanced.management.daily_quota_gb, null)
+  retention_in_days                   = try(local.advanced.management.retention_in_days, null)
+  public_network_access_for_ingestion = try(local.advanced.management.public_network_access_for_ingestion, null)
+  public_network_access_for_query     = try(local.advanced.management.public_network_access_for_query, null)
+  resource_permissions_enabled        = try(local.advanced.management.resource_permissions_enabled, null)
+  permanently_delete_on_destroy       = try(local.advanced.management.permanently_delete_on_destroy, null)
+  sentinel_onboarding                 = try(local.advanced.management.sentinel_onboarding, null)
+  diagnostic_settings                 = try(local.advanced.management.diagnostic_settings, null)
+  lock                                = try(local.advanced.management.lock, null)
+  role_assignments                    = try(local.advanced.management.role_assignments, null)
+  retry                               = try(local.advanced.management.retry, {})
+  timeouts                            = try(local.advanced.management.timeouts, null)
 }
 
 module "alz" {
@@ -131,6 +147,18 @@ module "alz" {
   ]
 
   subscription_placement = local.placement
+
+  # customer.yaml's advanced.alz, as advanced.management above: each given, or the module's default.
+  management_group_role_assignments                                = try(local.advanced.alz.management_group_role_assignments, null)
+  management_group_hierarchy_settings                              = try(local.advanced.alz.management_group_hierarchy_settings, null)
+  role_assignment_definition_lookup_enabled                        = try(local.advanced.alz.role_assignment_definition_lookup_enabled, true)
+  policy_assignment_non_compliance_message_settings                = try(local.advanced.alz.policy_assignment_non_compliance_message_settings, null)
+  policy_assignments_to_modify                                     = try(local.advanced.alz.policy_assignments_to_modify, {})
+  subscription_placement_destroy_behavior                          = try(local.advanced.alz.subscription_placement_destroy_behavior, null)
+  subscription_placement_destroy_custom_target_management_group_id = try(local.advanced.alz.subscription_placement_destroy_custom_target_management_group_id, null)
+  delays                                                           = try(local.advanced.alz.delays, null)
+  retries                                                          = try(local.advanced.alz.retries, {})
+  timeouts                                                         = try(local.advanced.alz.timeouts, {})
 }
 
 # Deploy-Private-DNS-Zones' identity may manage every Private Link zone in the subscription it looks in, the

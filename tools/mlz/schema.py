@@ -195,6 +195,7 @@ def customer() -> dict:
             "exempt_resource_groups": or_empty({"description": "Resource groups Azure creates itself, where the required tags are not enforced. One * per pattern.", "type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 90, "pattern": "^[^*]*[*]?[^*]*$"}}),
             "in_sandboxes": {"description": "Whether sandboxes must tag their resource groups too.", "type": ["boolean", "null"]},
         }, "Tag policies. A key given here replaces the default's whole list.")),
+        "advanced": advanced.schema("customer"),
         "policy_assignments_to_remove": or_empty({"description": "ALZ policy assignments to leave out, by archetype.", "type": "object", "propertyNames": {"enum": list(rules.ALZ_ARCHETYPES)}, "additionalProperties": strings}),
         "naming": or_empty(mapping({
             "org": text("The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).", pattern="^[a-z0-9]{2,4}$"),
