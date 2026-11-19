@@ -690,6 +690,11 @@ class VendingTest(unittest.TestCase):
         declared = set(re.findall(r"^\s+([a-z_]+)\s+=", starter, re.M))
         self.assertEqual(set(workload) - declared, set())
         self.assertEqual(set(workload["network"]) - declared, set())
+        # And each subnet's attributes, in the subnets' own object type: the example reads subnet.name.
+        subnet_type = re.search(r"subnets = map\(object\(\{(.*?)\}\)\)", starter, re.S).group(1)
+        subnet_declared = set(re.findall(r"^\s+([a-z_]+)\s+=", subnet_type, re.M))
+        for subnet in workload["network"]["subnets"].values():
+            self.assertEqual(set(subnet) - subnet_declared, set())
         self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
         # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
         self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
