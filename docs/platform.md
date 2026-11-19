@@ -84,6 +84,12 @@ edited by hand could ask for that.
 `python3 -m mlz platform` reads `connectivity/`, `management/`, `identity/` and `_generated/governance.yaml`, checks them, and writes the
 root's config (JSON, for one run, never committed); the Terraform roots only read that file.
 
+## Hub module inputs mlz-core leaves alone
+
+A hub file's `advanced:` sets inputs of the hub module that mlz-core does not set, such as Bastion's SKU or the
+firewall's zones, for that hub only: `docs/advanced.md`. Anything mlz-core owns is refused with a message that names
+its owner; the inputs it takes are on `docs/reference/platform.md`.
+
 ## Where a value comes from
 
 `python3 -m mlz explain --repo . <region>` shows a hub's every value and where it comes from: what its

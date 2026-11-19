@@ -84,6 +84,130 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "advanced": {
+      "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/platform.md lists them). Anything else is refused with what owns it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "virtual_network_dns_servers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "firewall": {
+          "type": "object",
+          "properties": {
+            "zones": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "firewall_policy": {
+              "type": "object",
+              "properties": {
+                "base_policy_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "threat_intelligence_mode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dns_servers": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "bastion": {
+          "type": "object",
+          "properties": {
+            "sku": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "zones": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "scale_units": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "copy_paste_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "file_copy_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "ip_connect_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kerberos_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "shareable_link_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tunneling_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

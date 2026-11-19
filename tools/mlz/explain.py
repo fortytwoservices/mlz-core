@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import inputs, naming, platform, schema, vending
+from . import advanced, inputs, naming, platform, schema, vending
 from .files import SUFFIXES, read_setting, setting_names
 from .merge import ConfigError
 
@@ -231,6 +231,7 @@ def render_parts(heading: str, parts: dict[str, list[tuple[str, str, str]]], fou
 
 # --- Every other stack: its settings, and what its root is given, from the input maps (tools/mlz/inputs.py) ----------
 
+MISSING = object()
 LONG = 80  # a module default longer than this is cut: the reference page and the module have it whole
 WAITS = "waits for governance's contract (_generated/governance.yaml)"
 
@@ -311,11 +312,18 @@ def module_inputs(root: str, config: dict | None, places: dict[str, str], worked
     for key, call in calls.items():
         section = maps[root][key]
         entries = {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}
-        rows = []
+        rows, set_here = [], advanced.given(root, key, config, places)
         for path, info in call["inputs"].items():
             if path not in entries:
                 continue
             item, value = entries[path], input_value(entries[path], info, config, places)
+            if not worked_out and item["class"] == "open" and set_here.get(path, MISSING) is not MISSING:  # advanced: sets it
+                rows.append((path, show(set_here[path]), f"open: set under {plain(advanced.where(root, key, path))}"))
+                continue
+            if not worked_out and item["class"] == "open" and any(p.startswith(path + ".") for p in set_here):  # it sets part of it
+                given = {p.removeprefix(path + "."): v for p, v in set_here.items() if p.startswith(path + ".")}
+                rows.append((path, show(given), f"open: set in part under {plain(advanced.where(root, key, path))}"))
+                continue
             reason = next((why for (call, prefix), why in off.items() if call == key and (prefix == "" or path == prefix or path.startswith(prefix + "."))), None)
             value = reason if reason and value is not None else value
             if worked_out and (item["class"] != "derived" or value is None):

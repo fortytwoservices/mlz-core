@@ -11,7 +11,7 @@ Each input is in one class:
 | setting | from a key in the customer's YAML | yes, with that key |
 | derived | worked out by mlz-core: from the layout, the IP allocator, a contract or the naming | no; a name, under `names:` where the entry says so |
 | fixed | Fortytwo's decision for every customer | no |
-| open | mlz-core does not set it, so the module's default applies | not yet |
+| open | mlz-core does not set it, so the module's default applies | under `advanced:` where the entry says so (docs/advanced.md); not yet elsewhere |
 | closed | not supported yet | no |
 
 An entry covers its input and everything in it: `bastion` closed means every attribute of `bastion`. A map or list of
@@ -36,13 +36,13 @@ Settings from `connectivity/<region>.yaml`.
 | `hub_virtual_networks.resource_group_name` | string | derived | the naming template; set it with `names.resource_group` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.routing_supernet` | list(string) | derived | what the other hubs send to this hub's firewall: platform_address_space (unless a landing zone range holds it) and landing_zone_ranges |
 | `hub_virtual_networks.spoke_address_prefixes` | map(string) | closed | only for a gateway's route table, and the hubs have no gateway yet |
-| `hub_virtual_networks.virtual_network_dns_servers` | list(string) | open | the module's default: `null` |
+| `hub_virtual_networks.virtual_network_dns_servers` | list(string) | open | the module's default: `null`; set it with `advanced.virtual_network_dns_servers` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.gateway_subnet_address_prefix` | string | closed | the hubs have no VPN or ExpressRoute gateway yet; the layout keeps the hub's third /27 for GatewaySubnet |
 | `hub_virtual_networks.gateway_route_table_name` | string | closed | the hubs have no gateway yet |
 | `hub_virtual_networks.firewall` | object | | every hub has one |
 | `hub_virtual_networks.firewall.name` | string | derived | the naming template; set it with `names.firewall` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.firewall.sku_tier` | string | setting | `firewall` in `connectivity/<region>.yaml` |
-| `hub_virtual_networks.firewall.zones` | list(string) | open | the module's default: `null` |
+| `hub_virtual_networks.firewall.zones` | list(string) | open | the module's default: `null`; set it with `advanced.firewall.zones` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.firewall.subnet_address_prefix` | string | derived | the first /26 of the hub's /22 |
 | `hub_virtual_networks.firewall.management_subnet_address_prefix` | string | derived | the second /26 of the hub's /22, for a Basic firewall only |
 | `hub_virtual_networks.firewall.public_ip_name` | string | derived | the naming template; set it with `names.firewall_public_ip` in `connectivity/<region>.yaml` |
@@ -51,24 +51,24 @@ Settings from `connectivity/<region>.yaml`.
 | `hub_virtual_networks.firewall.default_route` | object | closed | anything but Internet is forced tunnelling, which needs the management subnet, and mlz-core gives one to a Basic firewall only |
 | `hub_virtual_networks.firewall.firewall_policy_id` | string | closed | the firewall-rules stack writes its rules into the policy the hub makes, found by its name |
 | `hub_virtual_networks.firewall.firewall_policy.name` | string | derived | the naming template; set it with `names.firewall_policy` in `connectivity/<region>.yaml` |
-| `hub_virtual_networks.firewall.firewall_policy.base_policy_id` | string | open | the module's default: `null` |
-| `hub_virtual_networks.firewall.firewall_policy.threat_intelligence_mode` | string | open | the module's default: `"Alert"` |
+| `hub_virtual_networks.firewall.firewall_policy.base_policy_id` | string | open | the module's default: `null`; set it with `advanced.firewall.firewall_policy.base_policy_id` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.firewall.firewall_policy.threat_intelligence_mode` | string | open | the module's default: `"Alert"`; set it with `advanced.firewall.firewall_policy.threat_intelligence_mode` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.firewall.firewall_policy.dns_proxy_enabled` | bool | fixed | the module's default (`null`): on except on Basic: management's, identity's and the landing zones' networks resolve through the firewall (tools/mlz/platform.py, spoke()) |
-| `hub_virtual_networks.firewall.firewall_policy.dns_servers` | list(string) | open | the module's default: `null` |
+| `hub_virtual_networks.firewall.firewall_policy.dns_servers` | list(string) | open | the module's default: `null`; set it with `advanced.firewall.firewall_policy.dns_servers` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.nat_gateway` | object | closed | mlz-core gives it no name yet (tools/mlz/names.py, HUB), and this root passes no naming template |
 | `hub_virtual_networks.bastion` | object | | built when the hub file says bastion true |
 | `hub_virtual_networks.bastion.name` | string | derived | the naming template; set it with `names.bastion` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.bastion.subnet_address_prefix` | string | derived | the first /26 of the hub's second /24 |
-| `hub_virtual_networks.bastion.sku` | string | open | the module's default: `"Standard"` |
-| `hub_virtual_networks.bastion.zones` | list(string) | open | the module's default: `null` |
+| `hub_virtual_networks.bastion.sku` | string | open | the module's default: `"Standard"`; set it with `advanced.bastion.sku` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.zones` | list(string) | open | the module's default: `null`; set it with `advanced.bastion.zones` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.bastion.public_ip_name` | string | derived | the naming template; set it with `names.bastion_public_ip` in `connectivity/<region>.yaml` |
-| `hub_virtual_networks.bastion.scale_units` | number | open | the module's default: `2` |
-| `hub_virtual_networks.bastion.copy_paste_enabled` | bool | open | the module's default: `true` |
-| `hub_virtual_networks.bastion.file_copy_enabled` | bool | open | the module's default: `false` |
-| `hub_virtual_networks.bastion.ip_connect_enabled` | bool | open | the module's default: `false` |
-| `hub_virtual_networks.bastion.kerberos_enabled` | bool | open | the module's default: `false` |
-| `hub_virtual_networks.bastion.shareable_link_enabled` | bool | open | the module's default: `false` |
-| `hub_virtual_networks.bastion.tunneling_enabled` | bool | open | the module's default: `false` |
+| `hub_virtual_networks.bastion.scale_units` | number | open | the module's default: `2`; set it with `advanced.bastion.scale_units` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.copy_paste_enabled` | bool | open | the module's default: `true`; set it with `advanced.bastion.copy_paste_enabled` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.file_copy_enabled` | bool | open | the module's default: `false`; set it with `advanced.bastion.file_copy_enabled` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.ip_connect_enabled` | bool | open | the module's default: `false`; set it with `advanced.bastion.ip_connect_enabled` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.kerberos_enabled` | bool | open | the module's default: `false`; set it with `advanced.bastion.kerberos_enabled` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.shareable_link_enabled` | bool | open | the module's default: `false`; set it with `advanced.bastion.shareable_link_enabled` in `connectivity/<region>.yaml` |
+| `hub_virtual_networks.bastion.tunneling_enabled` | bool | open | the module's default: `false`; set it with `advanced.bastion.tunneling_enabled` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.dns_resolver` | object | | built unless the hub file says dns_resolver false |
 | `hub_virtual_networks.dns_resolver.name` | string | derived | the naming template; set it with `names.dns_resolver` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.dns_resolver.inbound_subnet_address_prefix` | string | derived | the /28 after Bastion's subnet |

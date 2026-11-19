@@ -35,14 +35,14 @@ from __future__ import annotations
 import ipaddress
 from pathlib import Path
 
-from . import names, naming
+from . import advanced, names, naming
 from .files import preload, read_setting, setting_names, yaml_files
 from .merge import ConfigError
 from .naming import REGION_CODES
 
 FIREWALL_TIERS = ("Standard", "Premium", "Basic")
 CONNECTIVITY = "connectivity"  # the hubs' folder, after their stack
-HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion", "names"}
+HUB_KEYS = {"platform_address_space", "landing_zone_ranges", "reserved", "firewall", "dns_resolver", "bastion", "names", "advanced"}
 # The size of a region's platform_address_space, and the hub's share of it: its first /22.
 PLATFORM_PREFIX, HUB_PREFIX = 21, 22
 # Management's and identity's /24 in it, by offset, and each one's subnets, by offset and size.
@@ -120,6 +120,11 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
             problems.append(f"{where}: {flag} must be true or false, without quotes.")
     # The hub's own names, for a component to keep one the template would not give it (tools/mlz/names.py).
     explicit = names.hub_explicit(where, settings.get("names"), problems)
+    # Module inputs mlz-core leaves at their defaults, for this hub (tools/mlz/advanced.py); a component turned off has none.
+    extra = advanced.check(CONNECTIVITY, where, settings.get("advanced"), problems)  # SCOPES has a hub file's
+    written = settings.get("advanced") if isinstance(settings.get("advanced"), dict) else {}
+    off = [part for part in ("bastion", "dns_resolver") if part in written and settings.get(part, part == "dns_resolver") is False]
+    problems += [f"{where}: advanced.{part} sets inputs of a {part.replace('_', ' ')} this hub does not have; set {part}: true first." for part in off]
 
     value = settings.get("platform_address_space")
     if value in (None, "", []):
@@ -159,6 +164,7 @@ def hub(region: str, settings: dict, problems: list[str]) -> dict:
         "bastion": {"subnet_address_prefix": layout["bastion"]} if settings.get("bastion", False) else None,
         "gateway_subnet_address_prefix": layout["gateway"],
         "names": explicit,  # build() fills in the template's for the rest
+        **({"advanced": extra} if extra and not off else {}),  # only when given: without it the config is as before
     }
 
 

@@ -11,7 +11,7 @@ Each input is in one class:
 | setting | from a key in the customer's YAML | yes, with that key |
 | derived | worked out by mlz-core: from the layout, the IP allocator, a contract or the naming | no; a name, under `names:` where the entry says so |
 | fixed | Fortytwo's decision for every customer | no |
-| open | mlz-core does not set it, so the module's default applies | not yet |
+| open | mlz-core does not set it, so the module's default applies | under `advanced:` where the entry says so (docs/advanced.md); not yet elsewhere |
 | closed | not supported yet | no |
 
 An entry covers its input and everything in it: `bastion` closed means every attribute of `bastion`. A map or list of

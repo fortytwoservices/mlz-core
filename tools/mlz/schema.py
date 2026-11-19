@@ -20,7 +20,7 @@ import json
 import re
 from pathlib import Path
 
-from . import firewall, install, names, naming, platform, vending
+from . import advanced, firewall, install, names, naming, platform, vending
 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
@@ -135,6 +135,7 @@ def connectivity() -> dict:
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
         "names": {"description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.", "type": "object", "propertyNames": {"enum": list(names.HUB)}, "additionalProperties": {"type": "string"}},
+        "advanced": advanced.schema(platform.CONNECTIVITY),
     }
     return {
         "$schema": DRAFT,
