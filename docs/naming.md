@@ -63,7 +63,8 @@ landing zone's environment (its file name) and its region:
 | The virtual network, the route table, the deploy identity, the budget | none | `vnet-acme-pay-pd-nwe-01` |
 | Each subnet's NSG | the subnet's name | `nsg-acme-pay-default-pd-nwe-01` |
 | The workload repo's plan identity | `plan` | `id-acme-pay-plan-pd-nwe-01` |
-| Its state's resource group and storage account | `state` | `rg-acme-pay-state-pd-nwe-01`, `stacmepaystatepdnwe01` |
+| Its state's resource group | `state` | `rg-acme-pay-state-pd-nwe-01` |
+| Its state's storage account: the landing zone's only one, and Azure allows 24 characters, which a purpose could pass | none | `stacmepaypdnwe01` |
 | The workload repo itself, when vending makes it | `customer.yaml`'s `naming.repository` | `payments-prod` |
 | The subscription, when vending makes it: its display name (its alias is `<root>-<key>`, `docs/vending.md`) | none | `sub-acme-pay-pd-nwe-01` |
 
@@ -96,7 +97,8 @@ The IP allocator gives a landing zone its names along with its addresses, and re
 `_generated/names.yaml`; the pull request's run commits both (`docs/vending.md`). Vending's plan reads the names
 from there, not from the template, so **changing the template, a short name or an environment's code renames
 nothing already named**: only what is new takes the template as it is then, such as a new landing zone, or the NSG of
-a new subnet.
+a new subnet. So a landing zone whose state account was named with the purpose `state`, as mlz-core did before,
+keeps that name.
 
 ```yaml
 # _generated/names.yaml

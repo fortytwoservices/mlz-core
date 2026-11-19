@@ -16,7 +16,7 @@ from pathlib import Path
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, main, own_folder
-from mlz import files
+from mlz import files, naming, vending
 from mlz.contract import render
 from mlz.firewall import vending_contract
 from mlz.vending import IP_PLAN, NAMES, agreement, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
@@ -347,7 +347,7 @@ class VendingTest(unittest.TestCase):
             "virtual_network": "vnet-demo-pay-pd-nwe-01", "route_table": "rt-demo-pay-pd-nwe-01",
             "deploy_identity": "id-demo-pay-pd-nwe-01", "budget": "budget-demo-pay-pd-nwe-01",
             # The workload repo's identity and state; no repo here, as no github.organization is set.
-            "plan_identity": "id-demo-pay-plan-pd-nwe-01", "state_resource_group": "rg-demo-pay-state-pd-nwe-01", "state_account": "stdemopaystatepdnwe01",
+            "plan_identity": "id-demo-pay-plan-pd-nwe-01", "state_resource_group": "rg-demo-pay-state-pd-nwe-01", "state_account": "stdemopaypdnwe01",
             "subnet": "snet-%s", "peering_to_hub": "peer-payments-prod-to-hub", "peering_from_hub": "peer-hub-to-payments-prod",
         })
         self.assertEqual(names["network_security_groups"], {"default": "nsg-demo-pay-default-pd-nwe-01"})
@@ -355,6 +355,22 @@ class VendingTest(unittest.TestCase):
         self.assertTrue(text.startswith("# The names vending gave each landing zone"))
         self.assertIn("payments-prod:\n  network_resource_group: rg-demo-pay-net-pd-nwe-01\n", text)
         self.assertIn("  network_security_groups:\n    default: nsg-demo-pay-default-pd-nwe-01\n", text)
+
+    def test_the_state_account_has_no_purpose_and_a_recorded_one_keeps_its_name(self):
+        # At the longest codes customer.yaml allows, a purpose would take it past Azure's 24 characters.
+        longest = naming.Naming(org="abcd", template=naming.parse(naming.TEMPLATE, "t", []), environments={"prod": "prod"},
+                                regions={"norwayeast": "nweab"})
+        kind, purpose = vending.NAMED["state_account"]
+        self.assertEqual(naming.render(longest, kind, app="paymt", env="prod", region="norwayeast", purpose=purpose), "stabcdpaymtprodnweab01")
+        with self.assertRaisesRegex(ConfigError, "27 characters, 3 more than Azure allows"):
+            naming.render(longest, kind, app="paymt", env="prod", region="norwayeast", purpose="state")
+        # A landing zone named before keeps its account: the record wins, and allocating again changes nothing.
+        self.allocate()
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("stdemopaypdnwe01", "stdemopaystatepdnwe01"))
+        recorded = (self.repo / NAMES).read_text()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]["state_account"], "stdemopaystatepdnwe01")
+        self.assertEqual(self.allocate(), [])
+        self.assertEqual((self.repo / NAMES).read_text(), recorded)
 
     def test_a_name_once_given_stays_until_renewed(self):
         self.allocate()
