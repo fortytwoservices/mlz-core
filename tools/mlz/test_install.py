@@ -1383,9 +1383,9 @@ class GitHubTest(unittest.TestCase):
 class ModeGitHub(GitHub):
     """A branch whose top has mlz at the given mode, a README and a folder; writes recorded, each answered with a SHA."""
 
-    def __init__(self, mode):
+    def __init__(self, mode, kind="blob"):
         self.sent = []
-        top = [{"path": "mlz", "mode": mode, "type": "blob", "sha": "blob-mlz"},
+        top = [{"path": "mlz", "mode": mode, "type": kind, "sha": "blob-mlz"},
                {"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob-readme"},
                {"path": "tools", "mode": "040000", "type": "tree", "sha": "tree-tools"}]
         self.answers = {"repos/acme/mlz-vending/git/ref/heads/mlz/upgrade": {"object": {"sha": "head"}},
@@ -1418,10 +1418,12 @@ class ModeTest(unittest.TestCase):
             ("PATCH", "repos/acme/mlz-vending/git/refs/heads/mlz/upgrade", {"sha": "made-2", "force": False}),  # never over a newer push
         ])
 
-    def test_an_executable_file_makes_no_commit(self):
-        github = ModeGitHub("100755")
-        self.assertFalse(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"))
-        self.assertEqual(github.sent, [])
+    def test_an_executable_file_a_folder_or_a_link_makes_no_commit(self):
+        for mode, kind in (("100755", "blob"), ("040000", "tree"), ("120000", "blob")):  # a symbolic link is a blob at 120000
+            github = ModeGitHub(mode, kind)
+            self.assertEqual(github.not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [], mode)
+            self.assertFalse(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"), mode)
+            self.assertEqual(github.sent, [], mode)
 
 
 class AnsweringGitHub(GitHub):
