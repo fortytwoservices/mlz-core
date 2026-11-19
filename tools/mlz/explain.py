@@ -155,11 +155,14 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 source = f"names: in {file_of(repo, lz['where'])}"
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
-                # A counted NSG keeps the number it was first given, which a fresh count need not repeat: only a name
-                # the template no longer gives, with any number, is a change to report.
-                if fresh.get(item) not in (None, value) and not (item.startswith("network_security_groups.") and numbered_alike(value, lz, settings)):
+                # Whether the recorded name is the one the template gives now: a counted NSG keeps the number it was first
+                # given, which a fresh count need not repeat, so for it any number will do. Only a name the template no
+                # longer gives is a change to report, and only a current one has the template's number to explain.
+                current = numbered_alike(value, lz, settings) if item.startswith("network_security_groups.") else fresh.get(item) == value
+                if fresh.get(item) not in (None, value) and not (item.startswith("network_security_groups.") and current):
                     source += f"; the template now gives {fresh[item]} (./mlz names --repo . --renew {key})"
-                source += number_origin(item, settings)
+                if current:
+                    source += number_origin(item, settings)
             else:
                 source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request" + number_origin(item, settings)
             worked.append((label, value, source))

@@ -63,9 +63,16 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertIn("the template now gives nsg-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)", self.rows(flat)["name NSG of default"][1])
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
-        # With {purpose}, nothing is numbered and nothing is said.
-        self.assertEqual(self.rows()["name identity_resource_group"][1], "recorded in _generated/names.yaml; the template now gives rg-demo-pay-id-pd-nwe-01 "
+        # Named under another template, a recorded name keeps its name and has no number to explain: only the change.
+        (self.repo / vending.NAMES).unlink()
+        self.allocate()
+        rows = self.rows(flat)
+        self.assertEqual(rows["name identity_resource_group"][1], "recorded in _generated/names.yaml; the template now gives rg-demo-pay-pd-nwe-02 "
                          "(./mlz names --repo . --renew payments-prod)")
+        self.assertEqual(rows["name NSG of default"][1], "recorded in _generated/names.yaml; the template now gives nsg-demo-pay-pd-nwe-01 "
+                         "(./mlz names --repo . --renew payments-prod)")
+        # With {purpose}, nothing is numbered and nothing is said.
+        self.assertEqual(self.rows()["name identity_resource_group"][1], "recorded in _generated/names.yaml")
 
     def test_each_value_names_the_file_that_set_it_and_what_it_replaced(self):
         rows = self.rows()
