@@ -7,7 +7,7 @@ Each customer repo runs its role from mlz-core with one short workflow, `.github
 ```yaml
 jobs:
   governance:
-    uses: acme/mlz-core/.github/workflows/role.yml@v0.11.2 # x-release-please-version
+    uses: acme/mlz-core/.github/workflows/role.yml@v0.11.3 # x-release-please-version
     with:
       role: governance
     secrets:

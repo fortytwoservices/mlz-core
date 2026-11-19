@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.3](https://github.com/fortytwoservices/mlz-core/compare/v0.11.2...v0.11.3) (2026-11-19)
+
+
+### Features
+
+* **explain:** explain a hub, management, identity, the rules and governance; --inputs for any stack ([#104](https://github.com/fortytwoservices/mlz-core/issues/104)) ([1d1b888](https://github.com/fortytwoservices/mlz-core/commit/1d1b8883e02eb9037f5053570b0a12563d7ec82f))
+* **governance:** advanced: in customer.yaml sets governance module inputs mlz-core leaves alone ([#110](https://github.com/fortytwoservices/mlz-core/issues/110)) ([86fee51](https://github.com/fortytwoservices/mlz-core/commit/86fee513f1b4a038c6a5a092fa182c7ec13c2a67))
+* **pipeline:** a plan comment starts with what changed in the stack's settings ([#106](https://github.com/fortytwoservices/mlz-core/issues/106)) ([f16a888](https://github.com/fortytwoservices/mlz-core/commit/f16a888dfc8a2d7cb4aa2bcb88c2b5cb13371539))
+* **platform:** advanced: in a hub file sets hub module inputs mlz-core leaves alone ([#108](https://github.com/fortytwoservices/mlz-core/issues/108)) ([5a09bf6](https://github.com/fortytwoservices/mlz-core/commit/5a09bf6ba6f5fde4c06fc18c177c04fa732df649))
+* **vending:** advanced: in a landing zone sets sub-vending inputs mlz-core leaves alone ([#109](https://github.com/fortytwoservices/mlz-core/issues/109)) ([3711605](https://github.com/fortytwoservices/mlz-core/commit/371160599fa796df3cd22872d452726d2d434a70))
+
+
+### Bug Fixes
+
+* **pipeline:** the first hub's plan comment says its stack is new ([#107](https://github.com/fortytwoservices/mlz-core/issues/107)) ([2113653](https://github.com/fortytwoservices/mlz-core/commit/211365321e5b3e289ce941dc79fd7e4910bfa880))
+* **reference:** refuse an empty module section in an input map ([#103](https://github.com/fortytwoservices/mlz-core/issues/103)) ([f9d657e](https://github.com/fortytwoservices/mlz-core/commit/f9d657e2d5af5b09f88114eea2cb766cabf0f4e8))
+
 ## [0.11.2](https://github.com/fortytwoservices/mlz-core/compare/v0.11.1...v0.11.2) (2026-11-19)
 
 
