@@ -86,6 +86,10 @@ class AdvancedTest(unittest.TestCase):
         self.assertEqual(self.problems("  - bastion\n"), [
             "connectivity/norwayeast: advanced maps module inputs to their values (docs/reference/platform.md lists them)."])
 
+    def test_a_dotted_key_is_refused_not_passed_as_one_attribute(self):
+        self.assertEqual(self.problems("  bastion.sku: Premium\n"), [
+            "connectivity/norwayeast: advanced.bastion.sku: write it nested, as the module's objects are (bastion: then the rest under it), not as one dotted key."])
+
     def test_a_component_the_hub_does_not_have_takes_no_inputs(self):
         self.hub(HUB.replace("bastion: true", "dns_resolver: false") + "advanced:\n  bastion:\n    sku: Premium\n  dns_resolver:\n    inbound_subnet_name: snet-in\n")
         with self.assertRaises(ConfigError) as caught:
@@ -102,8 +106,10 @@ class AdvancedTest(unittest.TestCase):
 
     def test_the_schema_offers_the_open_inputs_and_nothing_else(self):
         block = schema.connectivity()["properties"]["advanced"]
-        self.assertEqual(block["properties"]["bastion"]["properties"]["sku"], {"type": "string"})
-        self.assertEqual(block["properties"]["bastion"]["properties"]["zones"], {"type": "array", "items": {"type": "string"}})
+        self.assertEqual(block["properties"]["bastion"]["properties"]["sku"], {"type": ["string", "null"]})  # null: the default
+        self.assertEqual(block["properties"]["bastion"]["properties"]["zones"], {"type": ["array", "null"], "items": {"type": "string"}})
+        self.assertEqual(block["type"], ["object", "null"])  # advanced: left empty is none
+        self.assertEqual(block["properties"]["bastion"]["type"], "object")  # a group is not optional: give its attributes
         self.assertNotIn("name", block["properties"]["bastion"]["properties"])
         self.assertEqual(set(block["properties"]["firewall"]["properties"]), {"zones", "firewall_policy"})
         self.assertEqual(set(block["properties"]), {"virtual_network_dns_servers", "firewall", "bastion"})
@@ -117,6 +123,8 @@ class AdvancedTest(unittest.TestCase):
         self.assertEqual(rows["hub_virtual_networks.bastion.sku"][1:], ("Premium", "open: set under advanced.bastion.sku in connectivity/<region>.yaml"))
         self.assertEqual(rows["hub_virtual_networks.bastion.scale_units"][1], "2")  # not set: the module's default
         self.assertEqual(advanced.given("platform/terraform", "connectivity", config, {"region": "norwayeast"}), {})
+        worked = explain.module_inputs("platform/terraform", config, {"region": "swedencentral"}, worked_out=True)["Worked out"]
+        self.assertNotIn("hub_virtual_networks.bastion.sku", [row[0] for row in worked])  # the customer's, not worked out
 
 
 if __name__ == "__main__":

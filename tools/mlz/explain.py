@@ -317,10 +317,10 @@ def module_inputs(root: str, config: dict | None, places: dict[str, str], worked
             if path not in entries:
                 continue
             item, value = entries[path], input_value(entries[path], info, config, places)
-            if item["class"] == "open" and set_here.get(path, MISSING) is not MISSING:  # advanced: sets it
+            if not worked_out and item["class"] == "open" and set_here.get(path, MISSING) is not MISSING:  # advanced: sets it
                 rows.append((path, show(set_here[path]), f"open: set under {plain(advanced.where(root, key, path))}"))
                 continue
-            if item["class"] == "open" and any(p.startswith(path + ".") for p in set_here):  # it sets part of it
+            if not worked_out and item["class"] == "open" and any(p.startswith(path + ".") for p in set_here):  # it sets part of it
                 given = {p.removeprefix(path + "."): v for p, v in set_here.items() if p.startswith(path + ".")}
                 rows.append((path, show(given), f"open: set in part under {plain(advanced.where(root, key, path))}"))
                 continue

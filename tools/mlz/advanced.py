@@ -60,6 +60,9 @@ def walk(scope: Scope, call: dict, section: dict, entries: dict, given: dict, re
     for key, value in given.items():
         here = f"{rel}.{key}" if rel else str(key)
         path, at = scope.prefix + here, f"{where}: advanced.{here}"
+        if "." in str(key):  # Terraform would take bastion.sku as one attribute's name, and drop it
+            found.append(f"{at}: write it nested, as the module's objects are ({str(key).split('.')[0]}: then the rest under it), not as one dotted key.")
+            continue
         if path not in paths:
             whole_call = not rel and str(key) in paths
             found.append(f"{at} is an input of the whole module call, not of what this file builds; advanced: here does not reach it."
@@ -167,13 +170,23 @@ def schema(kind: str) -> dict:
             for part in path.removeprefix(scope.prefix).split(".")[:-1]:
                 node = node.setdefault(part, {})
             node[path.split(".")[-1]] = path
+    block = node_schema(tree, paths)
     return {"description": f"Module inputs mlz-core leaves at the module's default, as the module names them ({reference(scope)}). "
-                           "Anything else is refused with what owns it.", **node_schema(tree, paths)}
+                           "Anything else is refused with what owns it.", **block, "type": ["object", "null"]}  # empty is none
 
 
 def node_schema(tree: dict, paths: dict) -> dict:
-    properties = {key: json_type(paths, value) if isinstance(value, str) else node_schema(value, paths) for key, value in tree.items()}
+    properties = {key: nullable(paths, value) if isinstance(value, str) else node_schema(value, paths) for key, value in tree.items()}
     return {"type": "object", "properties": properties, "additionalProperties": False}
+
+
+def nullable(paths: dict, path: str) -> dict:
+    """An input's schema, taking null too where the module's input is optional: null leaves it at its default."""
+    found = json_type(paths, path)
+    if paths[path]["required"] or "type" not in found:
+        return found
+    kind = found["type"]
+    return {**found, "type": [*kind, "null"] if isinstance(kind, list) else [kind, "null"]}
 
 
 def json_type(paths: dict, path: str, kind: str | None = None) -> dict:
