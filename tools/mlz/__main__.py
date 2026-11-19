@@ -17,6 +17,7 @@
     python3 -m mlz inputs   --refresh | --check                      the modules' inputs at their pins (tools/mlz/inputs.py)
     python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.sh
     python3 -m mlz batches  --stacks <json> [--daily]               the plan jobs for a run, as JSON (role.yml)
+    python3 -m mlz diff     --role <role> --stack <stack>            a stack's settings against the base branch's (comment.sh)
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
 
@@ -130,6 +131,10 @@ def main() -> int:
     bt = roles.add_parser("batches", help="the plan jobs for a run: one stack each, or groups of stacks (tools/mlz/stacks.py)")
     bt.add_argument("--stacks", required=True, help="the stacks the run plans, as JSON")
     bt.add_argument("--daily", action="store_true", help="the daily check, which plans in groups")
+    df = roles.add_parser("diff", help="a stack's settings that differ from the base branch's, for its plan comment (tools/ci/comment.sh)")
+    df.add_argument("--role", dest="stack_role", required=True, choices=["governance", "platform", "vending"])
+    df.add_argument("--stack", required=True, help="the stack, as the pipeline names it")
+    df.add_argument("--repo", type=Path, default=Path("."), help="the repo, after check.sh (default: here)")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -153,6 +158,10 @@ def main() -> int:
 
     if args.role == "map":
         print(stacks.render(args.repo), end="")
+        return 0
+
+    if args.role == "diff":
+        print(stacks.difference(args.stack_role, args.stack, args.repo), end="")
         return 0
 
     if args.role == "batches":

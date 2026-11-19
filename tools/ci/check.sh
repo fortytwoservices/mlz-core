@@ -59,6 +59,8 @@ every_stack() {
 }
 
 stacks=$(every_stack) # its own assignment, so that a failed check fails the script
+# The base's configs, below, are this run's or none: never an earlier run's on the same runner.
+rm -rf "$WORK/base"
 
 # Plan only what this change touches: the stacks whose rendered config differs from the base commit's, rendered
 # here with the same mlz-core. The base is the commit before: on a pull request, its merge commit's first parent,
@@ -88,3 +90,11 @@ if ! (cd "$copy" && GITHUB_EVENT_NAME='' "$CORE/tools/ci/check.sh" "$role" > "$W
   every "the base ${base:0:7} does not check with this release ($WORK/base-check.log)"
 fi
 python3 -m mlz stacks --role "$role" --stacks "$stacks" --base "$copy"
+# The base's configs, which the plan comments compare each stack's settings with (comment.sh, mlz diff). In .mlz/,
+# so the run's artifact takes them to the plan jobs.
+for path in platform.json firewall.json vending rendered/config.json; do
+  if [[ -e $copy/.mlz/$path ]]; then
+    mkdir -p "$(dirname "$WORK/base/$path")"
+    cp -R "$copy/.mlz/$path" "$WORK/base/$path"
+  fi
+done

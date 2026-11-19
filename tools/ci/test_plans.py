@@ -20,7 +20,7 @@ echo "planned $2" >> .fake/calls
 exit "$code"
 """
 FAKE_COMMENT = """#!/usr/bin/env bash
-echo "comment $1 $2" >> .fake/calls
+echo "comment $1 $2 $3" >> .fake/calls
 grep -qx "$1" .fake/comment-fails 2>/dev/null && exit 1
 exit 0
 """
@@ -80,8 +80,8 @@ class PlansTest(unittest.TestCase):
         (self.dir / ".fake" / "comment-fails").write_text("a-prod\n")  # one comment fails: the next stack is still planned
         code, out, record = self.run_plans({"a-prod": 2, "b-prod": 0}, "pull_request")
         self.assertEqual(code, 0)
-        self.assertIn("comment a-prod 2", record)
-        self.assertIn("comment b-prod 0", record)
+        self.assertIn("comment a-prod 2 vending", record)  # the role, for the settings' difference (mlz diff)
+        self.assertIn("comment b-prod 0 vending", record)
         self.assertIn("::warning::a-prod: its plan could not be put on the pull request", out)
         self.assertIsNone(self.status("a-prod"))  # statuses are the daily check's only
         self.assertIn("Planned 2 stack(s).", out)

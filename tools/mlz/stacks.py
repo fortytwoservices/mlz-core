@@ -9,6 +9,7 @@ of the same name. The modules are read from the roots, so they are always the on
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -150,6 +151,56 @@ def inputs(role: str, stack: str) -> list[str]:
     if role == "vending":
         return [f".mlz/vending/{stack}.json"]
     raise ValueError(f"no role {role}")
+
+
+# Where check.sh keeps the base commit's configs, for a pull request's plan comments (difference, below).
+BASE = ".mlz/base"
+ROWS = 50  # a plan comment lists at most this many changed settings
+MISSING = object()
+
+
+def settings_file(role: str, stack: str) -> str:
+    """The JSON a stack's root reads its settings from, relative to the repo: governance's is its rendered config.json,
+    every other stack's the config check.sh writes for it (inputs, above)."""
+    return ".mlz/rendered/config.json" if role == "governance" else inputs(role, stack)[0]
+
+
+def flat(value, path: str = "") -> dict[str, object]:
+    """Every value at the end of a path, dotted: a mapping's one by one (an empty one has none), a list whole."""
+    if isinstance(value, dict):
+        return {k: v for key, item in value.items() for k, v in flat(item, f"{path}.{key}" if path else str(key)).items()}
+    return {path: value}
+
+
+def shown(value) -> str:
+    """A value in a table cell: JSON in code, cut when long; (none) where the other side has it and this one not."""
+    if value is MISSING:
+        return "(none)"
+    text = json.dumps(value, separators=(", ", ": ")).replace("`", "'")
+    text = text if len(text) <= 100 else text[:97] + "..."
+    return "`" + text.replace("|", "\\|") + "`"
+
+
+def difference(role: str, stack: str, repo: Path) -> str:
+    """The first part of a stack's plan comment on a pull request: each setting of its config that differs from the
+    base branch's, so a reviewer sees what a YAML change turned into before reading the plan. Empty without a base
+    copy, when check.sh planned every stack without comparing (a pipeline change, a base that does not check)."""
+    name = settings_file(role, stack)
+    head, base = repo / name, repo / BASE / Path(name).relative_to(".mlz")
+    if not (repo / BASE).is_dir() or not head.is_file():
+        return ""
+    if not base.is_file():
+        return f"**{stack}** is new: the base branch has no such stack.\n"
+    now, was = flat(json.loads(head.read_text())), flat(json.loads(base.read_text()))
+    changed = [path for path in sorted(set(now) | set(was)) if now.get(path, MISSING) != was.get(path, MISSING)]
+    if not changed:
+        return f"**{stack}**: its settings are as on the base branch; another input it reads changed.\n"
+    lines = [f"**{stack}**: {len(changed)} setting{'s' if len(changed) > 1 else ''} changed (`{name}` against the base branch)", "",
+             "| Setting | Base branch | This pull request |", "|---|---|---|"]
+    lines += [f"| `{path}` | {shown(was.get(path, MISSING))} | {shown(now.get(path, MISSING))} |" for path in changed[:ROWS]]
+    if len(changed) > ROWS:
+        lines.append(f"| and {len(changed) - ROWS} more | | |")
+    return "\n".join(lines) + "\n"
 
 
 def content(path: Path) -> dict[str, bytes]:
