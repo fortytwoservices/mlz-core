@@ -442,6 +442,8 @@ class InstallTest(unittest.TestCase):
         # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
         self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
         self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
+        # main lets the bypass team merge without the approval, pull requests only (decision D8).
+        self.assertEqual(github.ruleset_bodies["acme/mlz-vending"]["bypass_actors"], [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}])
         # The push ruleset first, after the starter's first commit; then main.
         self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "main")])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
@@ -555,8 +557,8 @@ class InstallTest(unittest.TestCase):
             # handover merged is checked again against the new owners.
             self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
             self.assertTrue(required["strict_required_status_checks_policy"])
-        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed "
-                      "on a branch up to date with main, no force push or deletion)", self.printed)
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, vending / check passed on a branch "
+                      "up to date with main, no force push or deletion; acme/mlz-admins may merge a pull request without the approval)", self.printed)
         # The starter workflow's job gives the check its name.
         for role in REPOS:
             workflow = (install.CORE / "starter" / f"mlz-{role}" / WORKFLOW).read_text()
@@ -732,7 +734,7 @@ class InstallTest(unittest.TestCase):
                       "refuses can still be merged; add it under 'Require status checks to pass' in its ruleset main (Settings, Rules, "
                       "Rulesets), with GitHub Actions as its source, and turn on 'Require branches to be up to date before merging'.", message)
         self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
-                      "The run on main gives write access to a visible team of acme that CODEOWNERS names there", message)
+                      "The platform team must be a visible team of acme that can write to acme/mlz-vending", message)
 
     def test_check_counts_only_a_required_check_from_github_actions(self):
         # Another app's check never comes; one from any source can be passed by any token that may write statuses.

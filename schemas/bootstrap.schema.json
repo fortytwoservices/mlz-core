@@ -44,7 +44,7 @@
         },
         "bypass_team": {
           "type": "string",
-          "description": "The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. Its members can therefore reach the MLZ App's key. Visible, and not the platform team.",
+          "description": "The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. It may also merge a pull request without a code owner's approval (pull requests only). Its members can therefore reach the MLZ App's key. Visible, and not the platform team.",
           "pattern": "^[a-z0-9][a-z0-9-]*$"
         },
         "reviewers": {
