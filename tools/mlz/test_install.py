@@ -201,13 +201,15 @@ NO_CHANGE = {"applyable": False, "complete": True, "errored": False, "output_cha
 
 class FakeTerraform:
     """Answers like terraform would. plan_status: 1 for a plan that fails, 2 for one with a change, 0 for one without;
-    plan_json, a plan of its own. migrate_failures: how many state moves fail before one succeeds."""
+    plan_json, a plan of its own; show_fails, a saved plan that show cannot read. migrate_failures: how many state moves
+    fail before one succeeds."""
 
-    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False, contract_identities=None, plan_json=None):
+    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False, contract_identities=None, plan_json=None,
+                 show_fails=False):
         self.work, self.root = work, work / "bootstrap" / "terraform"
         self.contract_identities = contract_identities or {}
         self.plan_json = plan_json if plan_json is not None else ONE_CHANGE if plan_status == 2 else NO_CHANGE
-        self.plan_status, self.migrate_failures = plan_status, migrate_failures
+        self.plan_status, self.migrate_failures, self.show_fails = plan_status, migrate_failures, show_fails
         self.state_endpoint = state_endpoint
         self.subjects = subjects or {f"{role}-plan": f"repo:acme@1/mlz-{role}@2:pull_request" for role in install.ROLES}
         self.calls: list[tuple] = []
@@ -217,17 +219,20 @@ class FakeTerraform:
 
     def run(self, *arguments, capture=False):
         self.calls.append(arguments)
-        status, shown = 0, ""
+        status, shown, error = 0, "", ""
         if arguments[0] == "plan":  # exits 0 or 1 only: no -detailed-exitcode
             status = 1 if self.plan_status == 1 else 0
             if not status:
                 Path(next(a for a in arguments if a.startswith("-out="))[len("-out="):]).write_text("plan")
         elif arguments[:2] == ("show", "-json"):
-            shown = json.dumps(self.plan_json)
+            if self.show_fails:
+                status, error = 1, "Error: Failed to read the given file as a state or plan file\n"
+            else:
+                shown = json.dumps(self.plan_json)
         elif "-migrate-state" in arguments:
             status = 1 if self.migrate_failures > 0 else 0
             self.migrate_failures -= 1
-        return subprocess.CompletedProcess(arguments, status, shown, "")
+        return subprocess.CompletedProcess(arguments, status, shown, error)
 
     def output(self, name):
         return json.dumps({
@@ -915,11 +920,17 @@ class InstallTest(unittest.TestCase):
         self.assertIn("- imports `azapi_resource.vault`", summary)
         self.assertIn("- moves `azapi_resource.rg` to `azapi_resource.group`", summary)
 
-    def test_a_plan_terraform_cannot_show_or_that_errored_stops(self):
+    def test_a_plan_that_failed_that_terraform_cannot_show_or_that_errored_stops(self):
         (self.work).mkdir(parents=True)
         (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        failed = FakeTerraform(self.work, plan_status=1)
         with self.assertRaisesRegex(ConfigError, "terraform plan failed"):
-            install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=1), self.folder, yes=True, out=self.out)
+            install.step_bootstrap(FakeGitHub(), failed, self.folder, yes=True, out=self.out)
+        self.assertEqual([call[0] for call in failed.calls], ["init", "plan"])
+        unreadable = FakeTerraform(self.work, show_fails=True)
+        with self.assertRaisesRegex(ConfigError, "terraform show could not read the plan: Error: Failed to read"):
+            install.step_bootstrap(FakeGitHub(), unreadable, self.folder, yes=True, out=self.out)
+        self.assertEqual([call[0] for call in unreadable.calls], ["init", "plan", "show"])
         errored = FakeTerraform(self.work, plan_json={**ONE_CHANGE, "errored": True})
         with self.assertRaisesRegex(ConfigError, "the bootstrap's plan is not one to apply"):
             install.step_bootstrap(FakeGitHub(), errored, self.folder, yes=True, out=self.out)
