@@ -220,6 +220,19 @@ class ExplainTest(unittest.TestCase):
         self.assertRegex(out, r"enable_telemetry +false +<- fixed by Fortytwo")
         self.assertNotIn("none: not built here", out)
 
+    def test_inputs_gives_no_values_where_the_root_gives_none(self):
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("landing-zones/payments/prod.yaml", PROD.replace("budget:\n  monthly: 2000\n", ""))
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS.replace("  monthly: 500\n", ""))
+        out = self.run_main("explain", "--repo", str(self.repo), "payments-prod", "--inputs")[1]
+        self.assertRegex(out, r"budgets.name +none: no budget \(budget.monthly\)")
+        self.assertRegex(out, r"virtual_networks.name +vnet-")
+        self.write("landing-zones/payments/prod.yaml", PROD + "decommission: true\n")
+        out = self.run_main("explain", "--repo", str(self.repo), "payments-prod", "--inputs")[1]
+        self.assertRegex(out, r"virtual_networks.name +none: decommissioned")
+        self.assertRegex(out, r"enable_telemetry +false")  # what the map fixes is the root's either way
+
     def test_inputs_needs_both_contracts(self):
         status, _, err = self.run_main("explain", "--repo", str(self.repo), "payments-prod", "--inputs")
         self.assertEqual(status, 1)
@@ -319,6 +332,15 @@ class PlatformExplainTest(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertIn("connectivity/norwayeast: firewall 'Gold' must be one of Standard, Premium, Basic.", out)
         self.assertIn("the platform's settings must check first", out)
+        status, _, err = self.run_main("norwayeast", "--inputs")  # with no values to show, it fails and says why
+        self.assertEqual(status, 1)
+        self.assertIn("firewall 'Gold' must be one of Standard, Premium, Basic.", err)
+
+    def test_inputs_needs_governance_s_contract(self):
+        (self.repo / "_generated" / "governance.yaml").unlink()
+        status, _, err = self.run_main("norwayeast", "--inputs")
+        self.assertEqual(status, 1)
+        self.assertIn("needs governance's contract", err)
 
     def test_the_platform_starter_says_it_waits(self):
         self.write("connectivity/norwayeast.yaml", (explain.inputs.CORE / "starter/mlz-platform/connectivity/norwayeast.yaml").read_text())
@@ -371,6 +393,8 @@ class GovernanceExplainTest(unittest.TestCase):
         out = self.explain("root_id: Demo\n")
         self.assertIn("root_id 'Demo'", out)
         self.assertIn("customer.yaml must check first", out)
+        with self.assertRaisesRegex(explain.ConfigError, "root_id 'Demo'"):  # --inputs: no values to show, so it fails
+            self.explain("root_id: Demo\n", show_inputs=True)
 
     def test_inputs_shows_both_module_calls(self):
         out = self.explain((explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text(), show_inputs=True)

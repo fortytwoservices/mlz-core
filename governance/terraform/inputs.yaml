@@ -16,7 +16,7 @@ alz:
     policy_assignments_dependencies: {class: derived, by: "management's workspace, identity and data collection rules, which the policies point at"}
     override_policy_definition_parameter_assign_permissions_unset: {class: fixed, from: governance/terraform/private-dns-zone-parameters.json, why: "no role on each Private Link zone, which fails before the zones exist; Deploy-Private-DNS-Zones' identity gets Private DNS Zone Contributor on the zones' subscription instead"}
     override_policy_definition_parameter_assign_permissions_set: {class: fixed, why: "ALZ's own list"}
-    subscription_placement.subscription_id: {class: setting, key: subscriptions, config: subscriptions}
+    subscription_placement.subscription_id: {class: setting, key: subscriptions, by: "security's only when management_groups.security is true"}
     subscription_placement.management_group_name: {class: derived, by: "<root_id>-<role>, the group of the subscription's role"}
     management_group_role_assignments: open
     management_group_hierarchy_settings: open

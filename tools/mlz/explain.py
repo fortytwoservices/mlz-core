@@ -285,11 +285,24 @@ def input_source(item: dict, file: str | None) -> str:
     return f"closed: {item['why']}"
 
 
+def inactive(root: str, config: dict | None) -> dict[tuple[str, str], str]:
+    """What the root gives nothing for this stack, though its config holds values: by (module call, input path; "" for
+    every input of the call), what explain says instead. vending/terraform's own conditions (main.tf): a decommissioned
+    landing zone has no route table, and sub-vending, which still places its subscription, gets empty maps; without
+    budget.monthly the budget map is empty."""
+    if root != "vending/terraform" or not config:
+        return {}
+    gone = "none: decommissioned, its plan destroys what vending made"
+    if config.get("decommission"):
+        return {("route_table", ""): gone, **{("vending", m): gone for m in ("network_security_groups", "user_managed_identities", "virtual_networks", "budgets")}}
+    return {("vending", "budgets"): "none: no budget (budget.monthly)"} if (config.get("budget") or {}).get("monthly") is None else {}
+
+
 def module_inputs(root: str, config: dict | None, places: dict[str, str], worked_out: bool = False) -> dict[str, list[tuple[str, str, str]]]:
     """Each module call of a root, with a row per entry of its map: (input, value, source). worked_out: one part, of the
     derived inputs whose value the config holds, named by their call where the root makes several."""
     snapshot, maps = inputs.load_snapshot(), inputs.load_maps()
-    calls, parts = snapshot[root], {}
+    calls, parts, off = snapshot[root], {}, inactive(root, config)
     for key, call in calls.items():
         section = maps[root][key]
         entries = {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}
@@ -298,6 +311,8 @@ def module_inputs(root: str, config: dict | None, places: dict[str, str], worked
             if path not in entries:
                 continue
             item, value = entries[path], input_value(entries[path], info, config, places)
+            reason = next((why for (call, prefix), why in off.items() if call == key and (prefix == "" or path == prefix or path.startswith(prefix + "."))), None)
+            value = reason if reason and value is not None else value
             if worked_out and (item["class"] != "derived" or value is None):
                 continue
             label = f"{key}.{path}" if worked_out and len(calls) > 1 else path
@@ -342,7 +357,11 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
         try:
             config = platform.build(repo, governance, vending_contract)
         except ConfigError as error:
+            if show_inputs and stack != "firewall-rules":  # the values would be missing: say why, and fail
+                raise
             found = problems_of(error)
+    if show_inputs and stack != "firewall-rules" and config is None:
+        raise ConfigError(found[0] if found else "explain --inputs needs governance's contract in _generated/: the config it shows is made from it.")
     where = f"{stack}/{places['region']}" if "region" in places else stack
     heading = f"{stack} ({stack}/)" if stack == "firewall-rules" else f"{where} ({file_of(repo, where)})" if file_of(repo, where) != where else where
     if show_inputs:
@@ -377,6 +396,8 @@ def governance_explain(repo: Path, show_inputs: bool) -> str:
         rules.validate(merged)
         config = rules.normalize(merged)
     except (rules.RenderError, ConfigError) as error:
+        if show_inputs:  # the values would be missing: say why, and fail
+            raise ConfigError(str(error)) from None
         found = problems_of(ConfigError(str(error)))
     heading = "governance (customer.yaml)"
     if show_inputs:

@@ -44,7 +44,7 @@ Settings from `customer.yaml`.
 | `retries` | object | open | the module's default: `{}` |
 | `schema_validation_enabled` | object | fixed | the module's default (`{}`): Azure's schema checks every body before it is sent |
 | `subscription_placement` | map(object) | | one per platform subscription in customer.yaml; security only when management_groups.security is true |
-| `subscription_placement.subscription_id` | string | setting | `subscriptions` in `customer.yaml` |
+| `subscription_placement.subscription_id` | string | setting | `subscriptions` in `customer.yaml`: security's only when management_groups.security is true |
 | `subscription_placement.management_group_name` | string | derived | &lt;root_id&gt;-&lt;role&gt;, the group of the subscription's role |
 | `subscription_placement_destroy_behavior` | string | open | the module's default: `"default"` |
 | `subscription_placement_destroy_custom_target_management_group_id` | string | open | the module's default: `null` |
