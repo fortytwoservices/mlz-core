@@ -86,17 +86,23 @@ def fingerprint(change: dict, resource: str | None = None) -> str:
     return hashlib.sha256(json.dumps(what, sort_keys=True).encode()).hexdigest()[:16]
 
 
+MISSING = object()  # a key a map does not have, which is not the same as one whose value is null
+
+
 def known_difference(before, after, unknown) -> bool:
-    """Whether a value differs from before to after anywhere its after is known (after_unknown marks the rest)."""
+    """Whether a value differs from before to after anywhere its after is known (after_unknown marks the rest). A key
+    added or removed is a difference, even next to a null; so is a boolean becoming a number, though Python's True == 1."""
     if unknown is True:
         return False
     if isinstance(before, dict) and isinstance(after, dict):
         unknown = unknown if isinstance(unknown, dict) else {}
-        return any(known_difference(before.get(key), after.get(key), unknown.get(key)) for key in set(before) | set(after))
+        return any(known_difference(before.get(key, MISSING), after.get(key, MISSING), unknown.get(key)) for key in set(before) | set(after))
     if isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
         unknown = unknown if isinstance(unknown, list) else [None] * len(after)
         return any(known_difference(b, a, u) for b, a, u in zip(before, after, unknown))
-    return before != after
+    if isinstance(before, bool) or isinstance(after, bool):
+        return type(before) is not type(after) or before != after
+    return before is MISSING or after is MISSING or before != after
 
 
 def unknown_only(change: dict) -> bool:
@@ -210,7 +216,9 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> in
     if state:
         lines += ["", "**In the state only, nothing in Azure changes** (applied, so that the state records it):", ""]
         lines += [f"- imports `{label}`" if kind == "import" else f"- moves `{moves.get(label, '?')}` to `{label}`" if kind == "move"
-                  else f"- forgets `{label}`: it stays in Azure and leaves the state" for kind, label in state]
+                  else f"- forgets `{label}`: it stays in Azure and leaves the state" for kind, label in state[:LISTED]]
+        if len(state) > LISTED:
+            lines.append(f"- and {len(state) - LISTED} more; the full plan is attached to the run.")
     if outputs:
         lines += ["", "**Outputs that change:** " + ", ".join(f"`{name[len('output.'):]}`" for _, name, _ in outputs)]
     if plan.get("complete") is False:

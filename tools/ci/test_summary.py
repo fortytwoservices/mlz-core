@@ -202,6 +202,19 @@ class SummaryTest(unittest.TestCase):
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"a": 1, "b": 2}, "after": {"a": 1, "b": 3}, "after_unknown": {"c": True}}))
         self.assertTrue(unknown_only({"actions": ["update"], "before": {"a": 1, "c": [1]}, "after": {"a": 1}, "after_unknown": {"c": True}}))
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"a": 1}, "after": {"a": 1}, "after_unknown": {}}))
+        # A map's key removed is a known difference, even where its value was null; so is a boolean becoming a number.
+        self.assertFalse(unknown_only({"actions": ["update"], "before": {"tags": {"k": None}, "c": 1}, "after": {"tags": {}}, "after_unknown": {"c": True}}))
+        self.assertFalse(unknown_only({"actions": ["update"], "before": {"f": True, "c": 1}, "after": {"f": 1}, "after_unknown": {"c": True}}))
+        self.assertTrue(unknown_only({"actions": ["update"], "before": {"n": 1, "c": 1}, "after": {"n": 1.0}, "after_unknown": {"c": True}}))
+
+    def test_a_long_list_of_state_only_changes_is_cut_short(self):
+        # A module moved wholesale: the summary stays short enough for a pull request comment, as the rest of it does.
+        moved = [{"address": f"azapi_resource.x[{n}]", "previous_address": f"azapi_resource.old[{n}]",
+                  "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}} for n in range(250)]
+        summary, changes = self.summarise(moved)
+        self.assertEqual(len(changes.splitlines()), 250)  # the list the apply compares keeps every one
+        self.assertEqual(summary.count("\n- moves "), 200)
+        self.assertIn("- and 50 more; the full plan is attached to the run.", summary)
 
     def test_a_plan_terraform_disagrees_with_fails(self):
         # applyable, with nothing on the list: a kind of change this file does not know. Never skipped, never guessed.
