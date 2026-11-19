@@ -35,6 +35,13 @@ BUILD_BRANCH = "mlz/upgrade-next"  # where the next upgrade commit is made, so t
 PIN = re.compile(r"^[ \t]*uses:[ \t]*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/workload\.yml@(?P<ref>[^\s#]+)", re.M)
 NAMING = re.compile(r"mlz-core\.git//modules/naming\?ref=(?P<ref>[^\"'\s&]+)")
 KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
+MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
+
+
+def mlz_keys(variables: str) -> set[str]:
+    """The keys variable "mlz" declares in a variables.tf, not another variable's."""
+    block = MLZ_VARIABLE.search(variables)
+    return set(KEY.findall(block["body"])) if block else set()
 
 
 def starter() -> dict[str, str]:
@@ -118,7 +125,10 @@ def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[st
         return None
     title = f"chore: mlz-core {target}"
     latest = github.latest_pull(repo, UPGRADE_BRANCH)
-    if latest and latest["title"] == title:
+    # The release a pull request offers, from the pipeline at its own commit (which GitHub keeps after its branch goes),
+    # not from its title, which anyone may edit.
+    offered = PIN.search(github.file(repo, WORKFLOW, latest["head"]["sha"])[0] or "") if latest else None
+    if offered and offered["ref"] == target:
         if latest["state"] == "open":
             out(f"::notice::{repo} calls mlz-core {current}; the pull request to {target} waits for its team since "
                 f"{latest['created_at'][:10]}: {latest['html_url']}")
@@ -199,7 +209,7 @@ def upgrade_body(current: str, target: str, releases: dict[str, str], changes: d
     if kept or naming:
         lines += ["", "**Left as they are**, since they are this repo's own now:"]
     for name, text in sorted(kept.items()):
-        gained = sorted(set(KEY.findall(starter()[name])) - set(KEY.findall(text))) if name == "variables.tf" else []
+        gained = sorted(mlz_keys(starter()[name]) - mlz_keys(text)) if name == "variables.tf" else []
         if gained:
             lines += [f"- `{name}`: `{target}`'s `variable \"mlz\"` also declares {', '.join(f'`{key}`' for key in gained)}. Terraform "
                       f"drops the values a type does not declare, so nothing breaks; take the block from mlz-core's "

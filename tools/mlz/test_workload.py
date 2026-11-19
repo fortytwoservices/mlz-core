@@ -34,6 +34,7 @@ class FakeGitHub:
         self.refs: dict[tuple[str, str], str] = {}  # each other branch's commit
         self.resets: list[tuple] = []  # (repo, branch, commit) each time a branch is made or moved
         self.updated: list[tuple] = []
+        self.at: dict[tuple[str, str], dict[str, str]] = {}  # a repo's files at a commit other than main's head
 
     def releases(self, core):
         if isinstance(self._releases, Exception):
@@ -57,7 +58,8 @@ class FakeGitHub:
         number = len(self.pulls.get(repo, [])) + 1
         url = f"https://github.com/{repo}/pull/{number}"
         self.pulls.setdefault(repo, []).append({"branch": branch, "number": number, "title": title, "body": body, "state": "open",
-                                                "merged_at": None, "created_at": "2026-11-20T06:00:00Z", "html_url": url})
+                                                "merged_at": None, "created_at": "2026-11-20T06:00:00Z", "html_url": url,
+                                                "head": {"sha": self.refs[(repo, branch)]}})
         return url
 
     def update_pull(self, repo, number, title, body):
@@ -75,6 +77,9 @@ class FakeGitHub:
         if repo == workload.mirror.UPSTREAM:
             text = self.core.get((path, ref))
             return (text, "sha") if text is not None else (None, None)
+        if (repo, ref) in self.at:
+            text = self.at[(repo, ref)].get(path)
+            return (text, "sha") if text is not None else (None, None)
         text = self.repos[repo].get(path)
         if path == self.push_on:
             self.repos[repo][path], self.heads[repo], self.push_on = "# the team's, pushed meanwhile\n", self.heads[repo] + 1, None
@@ -89,6 +94,7 @@ class FakeGitHub:
                 raise RuntimeError("expectedHeadOid is not the branch's head")
             self.branches.append((repo, branch, dict(files), message))
             self.refs[(repo, branch)] = f"commit-{len(self.branches)}"
+            self.at[(repo, self.refs[(repo, branch)])] = {**self.repos[repo], **files}
             return
         if head != f"head-{self.heads[repo]}":
             raise RuntimeError("expectedHeadOid is not the branch's head")
@@ -202,6 +208,17 @@ class UpgradeTest(SyncTest):
 
     REPO = "acme-org/payments-prod"
 
+    def pull(self, github, number: int, offers: str, state: str = "open", merged: bool = False, title: str | None = None) -> dict:
+        """A pull request on mlz/upgrade from an earlier run, at a commit whose pipeline calls the release it offers."""
+        sha = f"pull-{number}"
+        workflow = workload.starter()[".github/workflows/mlz.yml"].replace(f"workload.yml@{TARGET}", f"workload.yml@{offers}")
+        github.at[(self.REPO, sha)] = {".github/workflows/mlz.yml": workflow}
+        pull = {"branch": "mlz/upgrade", "number": number, "title": title or f"chore: mlz-core {offers}", "body": "", "state": state,
+                "merged_at": "2026-11-18T07:00:00Z" if merged else None, "created_at": "2026-11-18T06:00:00Z",
+                "html_url": f"https://github.com/{self.REPO}/pull/{number}", "head": {"sha": sha}}
+        github.pulls.setdefault(self.REPO, []).append(pull)
+        return pull
+
     def made_at(self, tag: str = OLD, **changed) -> dict[str, str]:
         """The repo as vending made it at tag, with its values up to date, and what the team changed since."""
         files = {name: workload.RELEASE_PLEASE_MARKER.sub("", text) for name, text in old_starter(tag).items()}
@@ -240,7 +257,8 @@ class UpgradeTest(SyncTest):
 
     def test_the_team_s_changed_files_stay_and_the_pull_request_names_them(self):
         own_main = 'module "group_name" {\n  source = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=v0.10.1"\n}\n'
-        own_variables = old_starter()["variables.tf"].replace("# payments-prod", "# our landing zone")
+        own_variables = old_starter()["variables.tf"].replace("# payments-prod", "# our landing zone") + (
+            '\nvariable "extra" {\n  type = object({\n    network = string\n  })\n}\n')
         github = self.github(self.made_at(**{"main.tf": own_main, "variables.tf": own_variables, "app.tf": '#   source = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=v0.9.0"\n'}))
         self.sync(github)
         [(_, _, files, _)] = github.branches
@@ -286,9 +304,8 @@ class UpgradeTest(SyncTest):
                                f"2026-11-20: https://github.com/{self.REPO}/pull/1"])
 
     def test_a_newer_release_moves_the_open_pull_request_on(self):
-        older = {"branch": "mlz/upgrade", "number": 3, "title": "chore: mlz-core v0.11.0", "body": "", "state": "open", "merged_at": None,
-                 "created_at": "2026-11-18T06:00:00Z", "html_url": f"https://github.com/{self.REPO}/pull/3"}
-        github = self.github(self.made_at(), pulls={self.REPO: [older]})
+        github = self.github(self.made_at())
+        self.pull(github, 3, "v0.11.0")
         self.sync(github)
         self.assertEqual(github.updated, [(self.REPO, 3, f"chore: mlz-core {TARGET}")])
         self.assertEqual(len(github.pulls[self.REPO]), 1)
@@ -297,17 +314,24 @@ class UpgradeTest(SyncTest):
         self.assertEqual(github.refs, {(self.REPO, "mlz/upgrade"): "commit-1"})
 
     def test_a_pull_request_the_team_closed_is_not_opened_again_for_that_release(self):
-        closed = {"branch": "mlz/upgrade", "number": 2, "title": f"chore: mlz-core {TARGET}", "body": "", "state": "closed",
-                  "merged_at": None, "created_at": "2026-11-20T06:00:00Z", "html_url": f"https://github.com/{self.REPO}/pull/2"}
-        github = self.github(self.made_at(), pulls={self.REPO: [closed]})
+        # Renamed before it was closed: the release it offered is read from its own pipeline, not its title.
+        github = self.github(self.made_at())
+        self.pull(github, 2, TARGET, state="closed", title="not now")
         out = self.sync(github)
         self.assertEqual(github.branches, [])
         self.assertIn("closed the pull request", out[0])
         # One merged earlier, to an older release, is no reason to wait.
-        merged = {**closed, "title": "chore: mlz-core v0.11.0", "merged_at": "2026-11-18T07:00:00Z"}
-        github = self.github(self.made_at(), pulls={self.REPO: [merged]})
+        github = self.github(self.made_at())
+        self.pull(github, 2, "v0.11.0", state="closed", merged=True)
         self.sync(github)
         self.assertEqual(len(github.pulls[self.REPO]), 2)
+
+    def test_an_open_pull_request_renamed_by_its_team_is_left_as_it_is(self):
+        github = self.github(self.made_at())
+        self.pull(github, 4, TARGET, title="chore: mlz-core upgrade, reviewed by Kari")
+        out = self.sync(github)
+        self.assertEqual((github.branches, github.updated), ([], []))
+        self.assertIn("waits for its team", out[0])
 
     def test_on_vending_s_release_ahead_of_it_or_on_a_branch_nothing_is_offered(self):
         for pin in (TARGET, "v99.0.0", "main"):
