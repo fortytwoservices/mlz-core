@@ -1,5 +1,5 @@
 """Tests for the plan side's steps that bash or role.yml held without tests: comment.py, stale_comments.py, changed.py,
-statuses.py, code_owners.py, and apply_guard.py, which holds apply.sh's refusals (one test each)."""
+code_owners.py, and apply_guard.py, which holds apply.sh's refusals (one test each)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ci import apply_guard, changed, code_owners, comment, stale_comments, statuses
+from ci import apply_guard, changed, code_owners, comment, stale_comments
 
 RUN = "https://github.com/acme/mlz-vending/actions/runs/7"
 
@@ -82,6 +82,8 @@ class CommentTest(Case):
         with mock.patch.object(comment.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="| a |\n\n")) as run:
             self.assertEqual(comment.settings("vending", "pay-prod"), "| a |")  # as bash's $(...) kept it
         self.assertEqual(run.call_args.args[0][1:], ["-m", "mlz", "diff", "--role", "vending", "--stack", "pay-prod"])
+        self.assertNotIn("capture_output", run.call_args.kwargs)  # its message about a failure stays in the log
+        self.assertNotIn("stderr", run.call_args.kwargs)
 
 
 class StaleCommentsTest(Case):
@@ -128,14 +130,6 @@ class ChangedTest(Case):
         out, summary = self.run_changed("platform", ["a-prod"], [])
         self.assertTrue(out.startswith("stacks=[]\n"))
         self.assertEqual(summary, "To apply: nothing. No changes, so no approval: a-prod.\n")
-
-
-class StatusesTest(Case):
-    def test_a_stack_the_job_never_planned_is_none_and_one_it_planned_keeps_its_status(self):
-        Path(".mlz/status-a-prod.txt").write_text("2\n")
-        with mock.patch.dict(os.environ, {"STACKS": "a-prod b-prod"}):
-            statuses.main()
-        self.assertEqual((Path(".mlz/status-a-prod.txt").read_text(), Path(".mlz/status-b-prod.txt").read_text()), ("2\n", "none\n"))
 
 
 class CodeOwnersTest(Case):

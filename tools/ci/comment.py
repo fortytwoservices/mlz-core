@@ -26,7 +26,8 @@ def marker(stack: str) -> str:
 def settings(role: str, stack: str) -> str:
     """The stack's settings difference against the base branch, or a line saying why there is none; its own failure
     leaves the plan to be posted without it."""
-    found = subprocess.run([sys.executable, "-m", "mlz", "diff", "--role", role, "--stack", stack], capture_output=True, text=True,
+    # Only stdout is read: mlz diff's own message about a failure stays in the log, which the line below points to.
+    found = subprocess.run([sys.executable, "-m", "mlz", "diff", "--role", role, "--stack", stack], stdout=subprocess.PIPE, text=True,
                            env={**os.environ, "PYTHONPATH": TOOLS})
     return found.stdout.rstrip("\n") if found.returncode == 0 else "(The settings' difference could not be worked out; the run's log says why.)"
 

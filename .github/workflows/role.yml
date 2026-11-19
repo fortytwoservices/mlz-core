@@ -316,7 +316,13 @@ jobs:
         if: always() && github.event_name == 'schedule'
         env:
           STACKS: ${{ matrix.batch.stacks }}
-        run: python3 .mlz-core/tools/ci/statuses.py
+        # Inline, not a script: it must run when the job stopped before mlz-core was checked out, or a re-run would
+        # leave an earlier attempt's statuses in place for the drift job.
+        run: |
+          mkdir -p .mlz
+          for stack in $STACKS; do
+            [[ -f .mlz/status-$stack.txt ]] || echo none > ".mlz/status-$stack.txt"
+          done
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && github.event_name == 'schedule'
