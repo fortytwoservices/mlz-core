@@ -9,6 +9,17 @@ role=$1 stack=$2
 root=$(root_of "$role" "$stack")
 reviewed=$WORK/reviewed/changes-$stack.txt
 [[ -f $reviewed ]] || { echo "::error::No reviewed plan for $stack in this run; nothing is applied."; exit 1; }
+# Vending's runs on main do not queue (docs/pipelines.md). When main has moved on and its latest commit renders this
+# landing zone otherwise than this run did, a newer change, or one taken back, supersedes this one: that commit's run
+# plans it, and applies it if anything is left to change. So this one stands down rather than apply what main no longer
+# says. MLZ_MAIN is a checkout of main's latest commit (role.yml).
+if [[ $role == vending && -n ${MLZ_MAIN:-} && -d ${MLZ_MAIN:-} && $(git -C "$MLZ_MAIN" rev-parse HEAD) != "${GITHUB_SHA:-}" ]]; then
+  latest=$WORK/main-vending
+  if ! python3 -m mlz vending --repo "$MLZ_MAIN" --out "$latest" > "$WORK/main-vending.log" 2>&1 || ! cmp -s "$latest/$stack.json" "$WORK/vending/$stack.json"; then
+    echo "::notice::main has moved on, and its latest commit changes $stack (or no longer checks with this release): that commit's run plans it and applies what is left to change. Nothing is applied here."
+    exit 0
+  fi
+fi
 terraform -chdir="$root" init -reconfigure -input=false -no-color \
   -backend-config="storage_account_name=$TFSTATE_STORAGE_ACCOUNT" \
   -backend-config="container_name=$TFSTATE_CONTAINER" \

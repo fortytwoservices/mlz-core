@@ -30,11 +30,13 @@ wait for which:
 - **Vending's runs on `main` do not queue** (decision D3): a landing zone's change never waits behind another
   landing zone's. Each run plans only the landing zones it touches ([below](#what-a-run-plans)), and a landing zone
   applies one run at a time (the apply job's concurrency group, per landing zone). What makes that safe:
+  - **An apply stands down when a newer commit changed its landing zone**: it renders the landing zone's config at
+    `main`'s latest commit, and when that differs from what this run planned (a newer change, or the change taken
+    back), it applies nothing and says so; that commit's run plans it and applies what is left to change.
   - **An apply refuses a state another run changed after its plan**: the plan records the state's version (its
-    lineage and serial, `tools/ci/state_version.py`), and the apply compares it before planning again, so an older
-    run never applies its older values over a newer run's. This holds for every role. Two changes to one landing
-    zone merged close together are the one case to know: the later run planned before the earlier one applied, so
-    its apply stops, applying nothing; start a manual run, whose plan has both.
+    lineage and serial, `tools/ci/state_version.py`), and the apply compares it after planning again, while
+    Terraform refuses a saved plan whose state changed after it. So an older run never applies its older values over
+    a newer run's. This holds for every role. When it stops an apply, start a manual run, whose plan has both.
   - **Only a pull request's run writes the IP plan and the names**, and a pull request merges only up to date with
     `main` (the ruleset `main`), so two landing zones never get the same addresses.
   - **Only the run of `main`'s latest commit offers vending's contract** and the decommission pull requests, and

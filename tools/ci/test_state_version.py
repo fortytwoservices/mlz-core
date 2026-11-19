@@ -22,6 +22,11 @@ class StateVersionTest(unittest.TestCase):
         self.assertEqual(version(json.dumps({"version": 4, "lineage": "new", "serial": 1, "resources": []})), "none")
         self.assertEqual(version(json.dumps({"version": 4, "lineage": "new", "serial": 1, "resources": [], "outputs": {}})), "none")
 
+    def test_an_emptied_state_keeps_its_version(self):
+        # Its last resource destroyed: an older plan made before anything existed must not pass for it.
+        emptied = {"version": 4, "lineage": "w-1", "serial": 9, "resources": [], "outputs": {}}
+        self.assertEqual(version(json.dumps(emptied)), "w-1 9")
+
     def test_a_state_with_outputs_alone_is_a_real_one(self):
         # A workload root may hold only outputs: a newer apply's output must not pass for the older plan's state.
         state = {"version": 4, "lineage": "w-1", "serial": 7, "resources": [], "outputs": {"url": {"value": "a"}}}

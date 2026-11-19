@@ -64,11 +64,15 @@ def rules_in_azure(azure, platform: dict, key: str, cidr: str) -> str | None:
 
 def torn_down(state: dict | None) -> bool:
     """Whether the landing zone's state says its decommission is applied: vending's landing_zone output carries
-    decommissioned: true once nothing it made is left. No state, or one that cannot be read, is not torn down."""
+    decommissioned: true, and no resource of its network is left in it. The output follows the configuration, which
+    an apply that destroys nothing (-refresh-only) would record too. No state, or one that cannot be read, is not torn
+    down."""
     try:
-        return state["outputs"]["landing_zone"]["value"]["decommissioned"] is True
+        if state["outputs"]["landing_zone"]["value"]["decommissioned"] is not True:
+            return False
     except (TypeError, KeyError):
         return False
+    return not any("virtualnetwork" in str(resource.get("module", "")) for resource in state.get("resources") or [])
 
 
 def blob_state(key: str) -> dict | None:

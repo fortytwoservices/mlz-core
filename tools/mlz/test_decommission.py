@@ -114,7 +114,9 @@ class DecommissionTest(unittest.TestCase):
         # reviewer, its network still there. Not even the rules file goes, and the range stays held.
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
         github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml"})
-        for state in (None, {"outputs": {"landing_zone": {"value": {"decommissioned": False}}}}, {"outputs": {}}):
+        network = {"module": 'module.vending.module.virtualnetwork[0].module.virtual_networks["spoke"]', "type": "azapi_resource", "name": "vnet"}
+        for state in (None, {"outputs": {"landing_zone": {"value": {"decommissioned": False}}}}, {"outputs": {}},
+                      {**TORN_DOWN, "resources": [network]}):  # the output alone, its network still there (-refresh-only)
             self.cleanup(github, state=lambda key: state)
             self.assertEqual((github.commits, github.pulls), ([], []))
         self.assertIn("payments-dev's decommission is not applied yet", self.printed[0])
