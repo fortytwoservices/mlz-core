@@ -14,7 +14,7 @@ github:
     platform: mlz-platform
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
-  bypass_team: platform-admins    # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
+  bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
   runners:                         # where the pipelines' Azure jobs run (mlz install runners)
     kind: self-hosted              # self-hosted (the default) or github-hosted
