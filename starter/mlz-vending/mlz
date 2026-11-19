@@ -45,4 +45,6 @@ if [ ! -f "$cache/tools/mlz/__main__.py" ]; then
 fi
 
 cd "$here"
-PYTHONPATH=$cache/tools exec python3 -m mlz "$@"
+# Isolated (-I): Python takes nothing from this repo or the environment, so a file here named mlz.py, or a
+# PYTHONPATH, cannot stand in for the release; only the release's tools are added to its path.
+exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("mlz", run_name="__main__", alter_sys=True)' "$cache/tools" "$@"

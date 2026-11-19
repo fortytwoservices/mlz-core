@@ -115,8 +115,12 @@ class WrapperTest(unittest.TestCase):
             # That release, as the wrapper leaves it once fetched: this checkout's tools.
             (cache / "mlz-core" / "acme" / "mlz-core").mkdir(parents=True)
             (cache / "mlz-core" / "acme" / "mlz-core" / "v9.8.7").symlink_to(inputs.CORE)
-            run = subprocess.run([str(repo / upgrade.WRAPPER), "check", "--json"], cwd=tmp, capture_output=True, text=True,
-                                 env={**os.environ, "XDG_CACHE_HOME": str(cache)})
+            # Neither a file in the repo nor the environment can stand in for the release.
+            (repo / "mlz.py").write_text("raise SystemExit('the repo\\'s own mlz.py ran')\n")
+            (Path(tmp) / "elsewhere" / "mlz").mkdir(parents=True)
+            (Path(tmp) / "elsewhere" / "mlz" / "__main__.py").write_text("raise SystemExit('PYTHONPATH\\'s mlz ran')\n")
+            run = subprocess.run([str(repo / upgrade.WRAPPER), "check", "--json"], cwd=repo, capture_output=True, text=True,
+                                 env={**os.environ, "XDG_CACHE_HOME": str(cache), "PYTHONPATH": str(Path(tmp) / "elsewhere")})
             self.assertEqual((run.returncode, run.stdout), (0, '["governance"]\n'), run.stderr)
 
     def test_without_the_workflow_it_says_where_to_run_it(self):
