@@ -74,7 +74,40 @@ def check(kind: str, where: str, given: object, problems: list[str], keys: dict[
     found: list[str] = []
     walk(scope, call, section, entries, given, "", scope.label, where, found, keys or {})
     problems += found
-    return {} if found else prune(given)
+    return {} if found else pruned(scope, entries, given, "")
+
+
+def clean(kind: str, given: object) -> dict:
+    """A block check() has passed, as the config carries it: pruned, by call where the file reaches several."""
+    if not isinstance(given, dict):
+        return {}
+    if kind in CALLS:
+        parts = {name: clean(f"{kind}.{name}", value) for name, value in given.items() if name in CALLS[kind]}
+        return {name: part for name, part in parts.items() if part}
+    scope = SCOPES[kind]
+    section = inputs.load_maps()[scope.root][scope.call]
+    return pruned(scope, {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}, given, "")
+
+
+def pruned(scope: Scope, entries: dict, block: dict, rel: str) -> dict:
+    """A checked block without its nulls, and without a group of inputs (or an entry of a map mlz-core keys) left empty
+    by them, so a block that sets nothing is no block. An input's own value keeps an empty object: {} may be what it
+    sets (sentinel_onboarding: {})."""
+    found = {}
+    for key, value in block.items():
+        here = f"{rel}.{key}" if rel else str(key)
+        if value is None:
+            continue
+        if inputs.covering(scope.prefix + here, entries):  # an input's value, whole
+            found[key] = prune(value)
+        elif scope.prefix + here in scope.maps:
+            kept = {name: pruned(scope, entries, item, here) for name, item in value.items()}
+            kept = {name: item for name, item in kept.items() if item}
+            if kept:
+                found[key] = kept
+        elif pruned(scope, entries, value, here):
+            found[key] = pruned(scope, entries, value, here)
+    return found
 
 
 def prune(value):

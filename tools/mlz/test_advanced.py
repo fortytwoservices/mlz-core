@@ -205,6 +205,10 @@ class LandingZoneTest(unittest.TestCase):
         self.assertIn("role_assignments", self.build()["advanced"])
         self.assertNotIn("advanced", self.build("  role_assignments: null\n"))  # nothing left: no block at all
 
+    def test_a_group_or_map_entry_left_empty_by_nulls_is_no_block(self):
+        self.assertNotIn("advanced", self.build("  virtual_networks:\n    spoke:\n      subnets:\n        app:\n"
+                                                "          service_endpoints: null\n"))
+
     def test_a_decommissioned_landing_zone_s_advanced_is_shown_as_not_given(self):
         self.prod += "decommission: true\n"
         config = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n"
@@ -265,6 +269,10 @@ class GovernanceTest(unittest.TestCase):
     def test_without_advanced_config_json_has_no_trace_of_it(self):
         self.assertNotIn("advanced", self.render(""))
         self.assertNotIn("advanced", self.render("advanced:\n  management:\n    retention_in_days: null\n"))
+        self.assertNotIn("advanced", self.render("advanced:\n  management:\n    data_collection_rules:\n      vm_insights:\n"
+                                                 "        processes_and_dependencies_enabled: null\n"))  # no group left empty
+        self.assertEqual(self.render("advanced:\n  management:\n    sentinel_onboarding: {}\n")["advanced"],
+                         {"management": {"sentinel_onboarding": {}}})  # an input's own {} is what it sets
 
     def test_what_governance_owns_and_calls_it_does_not_reach_are_refused(self):
         self.assertEqual(sorted(self.problems("advanced:\n  management:\n    name: log-mine\n    local_authentication_enabled: true\n"

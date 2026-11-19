@@ -243,7 +243,7 @@ def normalize(config: dict) -> dict:
 def blocks(config: dict) -> dict:
     """advanced:, checked by validate() and without its nulls, only when it sets something: without it, config.json
     is as before. A key of its own here, so config.json never carries the block as given."""
-    checked = advanced.check("customer", "customer.yaml", config.get("advanced"), [])
+    checked = advanced.clean("customer", config.get("advanced"))
     return {"advanced": checked} if checked else {}
 
 
