@@ -147,15 +147,9 @@ class CommandTest(unittest.TestCase):
             with mock.patch.object(cli, "GitHub", lambda: Head("newer")), redirect_stdout(out):
                 self.assertEqual(cli.main(), 0)
             sync.assert_not_called()
-            self.assertIn("main has moved on from older, which these configs are from", out.getvalue())
+            self.assertIn("main has moved on from this run's older", out.getvalue())
             with mock.patch.object(cli, "GitHub", lambda: Head("older")):
                 self.assertEqual(cli.main(), 0)
-            sync.assert_called_once()
-        # The job renders the configs at main's current commit and says so: an older run then writes them too.
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(sys, "argv", ["mlz", "workload-repos", "--configs", tmp]), \
-                mock.patch.dict(os.environ, {"GITHUB_SHA": "older", "MLZ_CONFIGS_AT": "newer", "GITHUB_REPOSITORY": "acme-org/mlz-vending"}), \
-                mock.patch.object(workload, "sync") as sync, mock.patch.object(cli, "GitHub", lambda: Head("newer")):
-            self.assertEqual(cli.main(), 0)
             sync.assert_called_once()
 
 

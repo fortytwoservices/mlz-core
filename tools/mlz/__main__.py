@@ -13,6 +13,8 @@
                             [--billing-scope <scope>] [--app-key <file>] [--yes]
     python3 -m mlz schema   --out schemas
     python3 -m mlz map      --repo <a customer repo>                 each settings file's stack, root and modules
+    python3 -m mlz reference --out docs/reference                    who owns each module input, a page per root
+    python3 -m mlz inputs   --refresh | --check                      the modules' inputs at their pins (tools/mlz/inputs.py)
     python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.sh
     python3 -m mlz batches  --stacks <json> [--daily]               the plan jobs for a run, as JSON (role.yml)
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
@@ -35,6 +37,7 @@ import sys
 from pathlib import Path
 
 from . import contract, decommission, explain, firewall, install, new, owners, platform, schema, stacks, upgrade, vending, workload
+from . import inputs as input_maps  # main() has a local of the module's name
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
@@ -111,6 +114,12 @@ def main() -> int:
     sc.add_argument("--out", type=Path, required=True, help="the folder to write them to: schemas/ in mlz-core")
     mp = roles.add_parser("map", help="each settings file's stack, that stack's Terraform root and its modules (see tools/mlz/stacks.py)")
     mp.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
+    rf = roles.add_parser("reference", help="who owns each input of every module call, a page per root, from the input maps (see tools/mlz/inputs.py)")
+    rf.add_argument("--out", type=Path, required=True, help="the folder to write them to: docs/reference in mlz-core")
+    ip = roles.add_parser("inputs", help="the snapshot of every pinned module's inputs, tools/mlz/module-variables.json (see tools/mlz/inputs.py)")
+    mode = ip.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--refresh", action="store_true", help="download each root's modules (terraform get) and write the snapshot")
+    mode.add_argument("--check", action="store_true", help="fail when the snapshot is not what --refresh would write (CI)")
     st = roles.add_parser("stacks", help="of the stacks given, those whose rendered config differs from the base's (tools/ci/check.sh)")
     st.add_argument("--role", dest="stack_role", required=True, choices=["governance", "platform", "vending"])
     st.add_argument("--stacks", required=True, help="every stack, as JSON, as check.sh found them")
@@ -132,6 +141,13 @@ def main() -> int:
     if args.role == "schema":
         print(f"mlz schema: wrote {', '.join(schema.write(args.out))} to {args.out}")
         return 0
+
+    if args.role == "reference":
+        print(f"mlz reference: wrote {', '.join(input_maps.write(args.out))} to {args.out}")
+        return 0
+
+    if args.role == "inputs":
+        return input_maps.main(check=args.check)
 
     if args.role == "map":
         print(stacks.render(args.repo), end="")
@@ -213,11 +229,10 @@ def main() -> int:
     if args.role == "workload-repos":
         try:
             github = GitHub()
-            # Only configs rendered at main's current commit are written: older ones have older values. MLZ_CONFIGS_AT is
-            # the commit they were rendered at (main's, which the workload-repos job checks out), or this run's.
-            sha, vending_repo = os.environ.get("MLZ_CONFIGS_AT") or os.environ.get("GITHUB_SHA"), os.environ.get("GITHUB_REPOSITORY")
+            # Only the run of main's current commit writes: an older one, a daily run among them, has older values.
+            sha, vending_repo = os.environ.get("GITHUB_SHA"), os.environ.get("GITHUB_REPOSITORY")
             if sha and vending_repo and github.head(vending_repo, "main") != sha:
-                print(f"mlz workload-repos: main has moved on from {sha}, which these configs are from: the newer run does it.")
+                print(f"mlz workload-repos: main has moved on from this run's {sha}: the newer run does it.")
                 return 0
             workload.sync(github, args.configs)
         except ConfigError as error:
