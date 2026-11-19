@@ -122,6 +122,9 @@ class GitHub:
             self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
         return sha
 
+    def delete_branch(self, repo: str, branch: str) -> None:
+        self._api(f"repos/{repo}/git/refs/heads/{branch}", "DELETE", missing_ok=True)
+
     def commit_files(self, repo: str, branch: str, head: str, files: dict[str, str | None], message: str) -> None:
         """One commit with the files (None deletes one), made only if the branch is still at head."""
         mutation = "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }"

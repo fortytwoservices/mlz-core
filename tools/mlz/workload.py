@@ -30,7 +30,9 @@ VALUES = "mlz.auto.tfvars.json"
 BRANCH = "main"
 WORKFLOW = ".github/workflows/mlz.yml"
 UPGRADE_BRANCH = "mlz/upgrade"  # one per repo: a newer release moves the same pull request on
-PIN = re.compile(r"uses:\s*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/workload\.yml@(?P<ref>[^\s#]+)")
+BUILD_BRANCH = "mlz/upgrade-next"  # where the next upgrade commit is made, so the pull request's branch never stands on main
+# The call itself: a line that starts with uses:, so a commented-out one never decides the release.
+PIN = re.compile(r"^[ \t]*uses:[ \t]*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/workload\.yml@(?P<ref>[^\s#]+)", re.M)
 NAMING = re.compile(r"mlz-core\.git//modules/naming\?ref=(?P<ref>[^\"'\s&]+)")
 KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
 
@@ -104,7 +106,9 @@ def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[st
     """The pull request that moves the repo's pipeline to vending's release, opened or moved on; its URL, or None when
     the repo is on that release or ahead of it, calls something other than mlz-core's workload.yml, or its team
     closed the pull request to this release. releases: mlz-core's release notes, read once per run (filled here)."""
-    workflow, _ = github.file(repo, WORKFLOW, BRANCH)
+    # Everything from one commit of main: a push after it is never folded in, and the upgrade is made on top of it.
+    head = github.head(repo, BRANCH)
+    workflow, _ = github.file(repo, WORKFLOW, head)
     pinned = PIN.search(workflow or "")
     if not pinned:
         return None  # no mlz-core pipeline any more: the team's to say
@@ -124,10 +128,13 @@ def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[st
             return None
     if not releases:
         releases.update({tag: notes for tag, notes in github.releases(mirror.UPSTREAM).items() if version(tag)})
-    head = github.head(repo, BRANCH)
     changes, kept = upgrade_files(github, repo, head, called, current)
     body = upgrade_body(current, target, releases, changes, kept, naming_pins(github, repo, head, changes, target))
-    github.commit_files(repo, UPGRADE_BRANCH, github.reset_branch(repo, UPGRADE_BRANCH, BRANCH), changes, title)
+    # The commit is made on a branch of its own at that commit, then the pull request's branch moves straight onto it:
+    # a pull request whose branch stood on main for a moment would be closed by GitHub.
+    github.commit_files(repo, BUILD_BRANCH, github.reset_branch(repo, BUILD_BRANCH, BRANCH, at=head), changes, title)
+    github.reset_branch(repo, UPGRADE_BRANCH, BRANCH, at=github.head(repo, BUILD_BRANCH))
+    github.delete_branch(repo, BUILD_BRANCH)
     if latest and latest["state"] == "open":
         # The pull request to an older release, still open: the same one moves on to this release.
         github.update_pull(repo, latest["number"], title, body)

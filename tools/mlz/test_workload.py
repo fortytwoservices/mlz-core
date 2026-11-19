@@ -31,6 +31,8 @@ class FakeGitHub:
         # mlz-core's files at its releases, {(path, ref): text}; each repo's pull requests, newest last; release notes.
         self.core, self.pulls, self._releases = core or {}, pulls or {}, releases
         self.branches: list[tuple] = []  # commits on a branch other than main: (repo, branch, files, message)
+        self.refs: dict[tuple[str, str], str] = {}  # each other branch's commit
+        self.resets: list[tuple] = []  # (repo, branch, commit) each time a branch is made or moved
         self.updated: list[tuple] = []
 
     def releases(self, core):
@@ -42,8 +44,14 @@ class FakeGitHub:
         mine = [pull for pull in self.pulls.get(repo, []) if pull["branch"] == branch]
         return mine[-1] if mine else None
 
-    def reset_branch(self, repo, branch, base):
-        return f"branch-at-head-{self.heads[repo]}"
+    def reset_branch(self, repo, branch, base, at=None):
+        sha = at or self.head(repo, base)
+        self.refs[(repo, branch)] = sha
+        self.resets.append((repo, branch, sha))
+        return sha
+
+    def delete_branch(self, repo, branch):
+        self.refs.pop((repo, branch), None)
 
     def create_pull(self, repo, branch, base, title, body):
         number = len(self.pulls.get(repo, [])) + 1
@@ -73,11 +81,14 @@ class FakeGitHub:
         return (text, "sha") if text is not None else (None, None)
 
     def head(self, repo, branch):
-        return f"head-{self.heads[repo]}"
+        return f"head-{self.heads[repo]}" if branch == "main" else self.refs[(repo, branch)]
 
     def commit_files(self, repo, branch, head, files, message):
         if branch != "main":
+            if self.refs.get((repo, branch)) != head:
+                raise RuntimeError("expectedHeadOid is not the branch's head")
             self.branches.append((repo, branch, dict(files), message))
+            self.refs[(repo, branch)] = f"commit-{len(self.branches)}"
             return
         if head != f"head-{self.heads[repo]}":
             raise RuntimeError("expectedHeadOid is not the branch's head")
@@ -207,7 +218,10 @@ class UpgradeTest(SyncTest):
         out = self.sync(github)
         self.assertEqual(github.commits, [])  # main is not touched: its values were up to date
         [(repo, branch, files, message)] = github.branches
-        self.assertEqual((repo, branch, message), (self.REPO, "mlz/upgrade", f"chore: mlz-core {TARGET}"))
+        self.assertEqual((repo, branch, message), (self.REPO, "mlz/upgrade-next", f"chore: mlz-core {TARGET}"))
+        # Made on main's commit as read, then the pull request's branch put onto it; the build branch goes again.
+        self.assertEqual(github.resets, [(self.REPO, "mlz/upgrade-next", "head-0"), (self.REPO, "mlz/upgrade", "commit-1")])
+        self.assertEqual(github.refs, {(self.REPO, "mlz/upgrade"): "commit-1"})
         self.assertEqual(set(files), {".github/workflows/mlz.yml", "main.tf", "variables.tf"})
         self.assertIn(f"workload.yml@{TARGET}\n", files[".github/workflows/mlz.yml"])
         self.assertNotIn("x-release-please", "".join(files.values()))
@@ -247,6 +261,22 @@ class UpgradeTest(SyncTest):
         self.assertIn("README.md", files)  # not in the release the repo was made with
         self.assertNotIn("terraform.tf", files)
 
+    def test_a_push_while_it_reads_is_never_folded_in(self):
+        # main.tf is read as the starter wrote it, and the team pushes its own right after: the upgrade is made on the
+        # commit read, so the pull request conflicts with the team's main.tf rather than overwriting it.
+        github = self.github(self.made_at(), push_on="main.tf")
+        self.sync(github)
+        self.assertEqual(github.resets[0], (self.REPO, "mlz/upgrade-next", "head-0"))
+        self.assertEqual(github.heads[self.REPO], 1)  # main moved on meanwhile
+
+    def test_a_commented_out_call_does_not_decide_the_release(self):
+        workflow = workload.starter()[".github/workflows/mlz.yml"].replace(
+            f"    uses: fortytwoservices/mlz-core/.github/workflows/workload.yml@{TARGET}",
+            f"    # uses: fortytwoservices/mlz-core/.github/workflows/workload.yml@{OLD}\n    uses: fortytwoservices/mlz-core/.github/workflows/workload.yml@v99.0.0")
+        github = self.github(self.made_at(**{".github/workflows/mlz.yml": workflow}))
+        self.assertEqual(self.sync(github), [])
+        self.assertEqual(github.branches, [])
+
     def test_while_it_waits_nothing_is_opened_again(self):
         github = self.github(self.made_at())
         self.sync(github)
@@ -262,7 +292,9 @@ class UpgradeTest(SyncTest):
         self.sync(github)
         self.assertEqual(github.updated, [(self.REPO, 3, f"chore: mlz-core {TARGET}")])
         self.assertEqual(len(github.pulls[self.REPO]), 1)
-        self.assertEqual(len(github.branches), 1)  # the branch made again from main, with this release's files
+        # Its branch goes straight from the old commit to the new one, never onto main, where GitHub would close it.
+        self.assertNotIn((self.REPO, "mlz/upgrade", "head-0"), github.resets)
+        self.assertEqual(github.refs, {(self.REPO, "mlz/upgrade"): "commit-1"})
 
     def test_a_pull_request_the_team_closed_is_not_opened_again_for_that_release(self):
         closed = {"branch": "mlz/upgrade", "number": 2, "title": f"chore: mlz-core {TARGET}", "body": "", "state": "closed",
