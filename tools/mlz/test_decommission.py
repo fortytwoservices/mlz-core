@@ -110,8 +110,8 @@ class DecommissionTest(unittest.TestCase):
         decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append, sha="run-sha", state=state)
 
     def test_nothing_is_offered_until_the_decommission_is_applied(self):
-        # Vending's runs on main do not queue: a later run may get here while the decommission still waits for its
-        # reviewer, its network still there. Not even the rules file goes, and the range stays held.
+        # The daily check runs outside main's queue: it may get here while a decommission still waits for its reviewer,
+        # its network still there. Not even the rules file goes, and the range stays held.
         self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
         github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml"})
         network = {"module": 'module.vending.module.virtualnetwork[0].module.virtual_networks["spoke"]', "type": "azapi_resource", "name": "vnet"}

@@ -116,8 +116,8 @@ def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: st
             state: Callable[[str], dict | None] = blob_state) -> None:
     """sha: the vending commit the checkout is at. Vending's pull request starts from it, so a main that moved on
     meanwhile shows as a conflict, never as its newer files overwritten. state: a landing zone's Terraform state by
-    key: nothing is offered for one whose decommission is not applied yet. Runs on main do not queue for vending, so
-    a later run may get here while an earlier one's decommission still waits for its reviewer."""
+    key: nothing is offered for one whose decommission is not applied yet. The daily check runs outside main's queue,
+    so it may get here while a run's decommission still waits for its reviewer."""
     zones, plan = landing_zones(repo), ip_plan(repo)
     platform = read_yaml(repo / "_generated" / "platform.yaml")
     retired = sorted(set(plan) - set(zones))
