@@ -57,6 +57,7 @@ def state(stack: str, now: str, say=print) -> int:
     recorded = work() / "reviewed" / f"version-{stack}.txt"
     reviewed = recorded.read_text().strip() if recorded.is_file() else "not recorded"
     if now.strip() == reviewed:
+        say(f"The state is the one the reviewed plan started from: {reviewed}.")
         return GO
     say(f"::error::{stack}'s state changed after this plan was reviewed (it was at {reviewed}, it is at {now.strip()}): another run applied it. "
         "Nothing is applied. Start a new run on main for a fresh plan (gh workflow run mlz.yml --ref main).")

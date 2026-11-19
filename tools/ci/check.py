@@ -95,6 +95,7 @@ def check(role: str) -> int:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         sys.exit(check(sys.argv[1]))
     except subprocess.CalledProcessError as error:

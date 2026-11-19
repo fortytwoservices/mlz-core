@@ -56,6 +56,7 @@ def plan(role: str, stack: str, run=subprocess.run) -> int:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         sys.exit(plan(sys.argv[1], sys.argv[2]))
     except subprocess.CalledProcessError as error:

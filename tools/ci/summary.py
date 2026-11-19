@@ -142,4 +142,5 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> in
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     sys.exit(main(*sys.argv[1:]))

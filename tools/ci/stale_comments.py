@@ -35,6 +35,7 @@ def mark(github: Pipeline, say=print) -> None:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         mark(Pipeline())
     except ConfigError as error:

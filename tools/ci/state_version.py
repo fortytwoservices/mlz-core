@@ -25,4 +25,5 @@ def version(text: str) -> str:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     print(version(open(sys.argv[1]).read() if len(sys.argv) > 1 else sys.stdin.read()))
