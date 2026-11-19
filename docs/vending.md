@@ -177,7 +177,9 @@ owner: payments@demo.example
 - **Its range stays held:** the IP allocator gives it to no one, and vending's contract lists the landing zone
   as held. The platform drops its firewall rules from Azure on its next run, before the range can go to
   another landing zone, and its rules file only warns that it can be deleted (`docs/platform.md`).
-- **Then the files go, in pull requests a person merges.** Once the destroy is applied, vending's pipeline
+- **Then the files go, in pull requests a person merges.** Once the destroy is applied (the job reads the landing
+  zone's state, whose `landing_zone` output says `decommissioned: true` from then on: a run that gets there while
+  the decommission still waits for its reviewer offers nothing), vending's pipeline
   (its `decommission` job, `python3 -m mlz decommission`) opens one in the platform repo that deletes
   `firewall-rules/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
   taken the landing zone's rules out of Azure (the job reads every rule collection group of every hub's

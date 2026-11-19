@@ -23,10 +23,24 @@ the one the workflow takes.
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
 wait for which:
 
-- **Runs on `main` go one at a time**, first in first out (a concurrency group with `queue: max` on the job
-  that calls `role.yml`). A run starts only when the one before it has finished, review included, so it
-  plans against what that run applied and the plan its reviewer approves is the plan that applies. Two
-  runs therefore never apply at once, not even different stacks of one role.
+- **Governance's and the platform's runs on `main` go one at a time**, first in first out (a concurrency group
+  with `queue: max` on the job that calls `role.yml`). A run starts only when the one before it has finished,
+  review included, so it plans against what that run applied and the plan its reviewer approves is the plan that
+  applies.
+- **Vending's runs on `main` do not queue** (decision D3): a landing zone's change never waits behind another
+  landing zone's. Each run plans only the landing zones it touches ([below](#what-a-run-plans)), and a landing zone
+  applies one run at a time (the apply job's concurrency group, per landing zone). What makes that safe:
+  - **An apply refuses a state another run changed after its plan**: the plan records the state's version (its
+    lineage and serial, `tools/ci/state_version.py`), and the apply compares it before planning again, so an older
+    run never applies its older values over a newer run's. This holds for every role. Two changes to one landing
+    zone merged close together are the one case to know: the later run planned before the earlier one applied, so
+    its apply stops, applying nothing; start a manual run, whose plan has both.
+  - **Only a pull request's run writes the IP plan and the names**, and a pull request merges only up to date with
+    `main` (the ruleset `main`), so two landing zones never get the same addresses.
+  - **Only the run of `main`'s latest commit offers vending's contract** and the decommission pull requests, and
+    the decommission pull requests wait until the landing zone's own state says its decommission is applied.
+  - **The workload repos get their files from `main`'s current commit**, whichever run gets there, so an older run
+    never writes older values, and a repo an older run's apply made still gets its files.
 - **A pull request's newer push cancels its older run**, so an older plan never replaces the newer one's
   comment.
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact

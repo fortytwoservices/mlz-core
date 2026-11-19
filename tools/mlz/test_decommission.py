@@ -41,6 +41,9 @@ class FakeAzure:
         return self.page(groups, base, int(query.rsplit("$skiptoken=", 1)[1]))
 
 
+TORN_DOWN = {"outputs": {"landing_zone": {"value": {"decommissioned": True}}}}  # vending's state once the decommission applied
+
+
 def group(name, *collections, state="Succeeded"):
     return {"name": name, "properties": {"provisioningState": state, "ruleCollections": list(collections)}}
 
@@ -103,8 +106,18 @@ class DecommissionTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def cleanup(self, github):
-        decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append, sha="run-sha")
+    def cleanup(self, github, state=lambda key: TORN_DOWN):
+        decommission.cleanup(github, self.azure, self.repo, REPOS, "https://example/run/1", self.printed.append, sha="run-sha", state=state)
+
+    def test_nothing_is_offered_until_the_decommission_is_applied(self):
+        # Vending's runs on main do not queue: a later run may get here while the decommission still waits for its
+        # reviewer, its network still there. Not even the rules file goes, and the range stays held.
+        self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
+        github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml"})
+        for state in (None, {"outputs": {"landing_zone": {"value": {"decommissioned": False}}}}, {"outputs": {}}):
+            self.cleanup(github, state=lambda key: state)
+            self.assertEqual((github.commits, github.pulls), ([], []))
+        self.assertIn("payments-dev's decommission is not applied yet", self.printed[0])
 
     def test_nothing_is_offered_while_no_landing_zone_is_decommissioned(self):
         github = FakeGitHub(platform_files={"firewall-rules/landing-zones/payments-dev.yaml"})

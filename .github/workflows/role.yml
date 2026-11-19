@@ -315,6 +315,7 @@ jobs:
             .mlz/plan-*.txt
             .mlz/summary-*.md
             .mlz/changes-*.txt
+            .mlz/version-*.txt
           if-no-files-found: ignore
           include-hidden-files: true
           overwrite: true # a re-run of a group whose plans partly failed replaces what the failed attempt uploaded
@@ -701,6 +702,15 @@ jobs:
     permissions:
       contents: read
     steps:
+      # main's current commit, not this run's: vending's runs on main do not queue, so an older run can get here after
+      # a newer one, and must not write its older values; and a repo an older run's apply made still gets its files.
+      # First, since checking out into the workspace's root would clean .mlz-core away.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0 # this run's commit too, to compare the pipeline files
+          persist-credentials: false
+
       # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
       # which a repo set up before the copy calls, is public and needs no token.
       - id: core-reader
@@ -721,11 +731,11 @@ jobs:
           token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
-      # The landing zones' configs, as the check worked them out.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # The mlz tools read YAML through terraform console (tools/mlz/files.py).
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          name: mlz-${{ inputs.role }}
-          path: .mlz/
+          terraform_version: 1.17.0
+          terraform_wrapper: false
 
       # Writing a workflow file needs Workflows as well as Contents.
       - id: writer
@@ -741,7 +751,15 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           PYTHONPATH: .mlz-core/tools
-        run: python3 -m mlz workload-repos --configs .mlz/vending
+        run: |
+          # main on another pipeline (an upgrade merged since this run started): main's own run writes the files, with its
+          # release's code, which this run's may not read.
+          if ! git diff --quiet "$GITHUB_SHA" HEAD -- .github/workflows/; then
+            echo "main runs another pipeline now: its own run gives the workload repos their files."
+            exit 0
+          fi
+          python3 -m mlz vending --repo . --out .mlz/vending
+          python3 -m mlz workload-repos --configs .mlz/vending
 
   # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's
