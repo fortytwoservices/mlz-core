@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.13.0](https://github.com/fortytwoservices/mlz-core/compare/v0.12.0...v0.13.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **install:** mlz install check fails for a role repo made before this release until its ruleset main dismisses stale approvals. Tick "Dismiss stale pull request approvals when new commits are pushed" in each role repo's ruleset main (Settings, Rules, Rulesets).
+* **vending:** a workload team can no longer push to main. A change needs a pull request that another member of the landing zone's github.team approves, with workload / plan passed on a branch up to date with main; a team of one needs a second member, or the bypass team. Tell each workload team before the upgrade, and update any open pull request ("Update branch") after it.
+
+### Features
+
+* **install:** the role repos' main dismisses stale approvals, as the workload repos' does ([#133](https://github.com/fortytwoservices/mlz-core/issues/133)) ([4564b00](https://github.com/fortytwoservices/mlz-core/commit/4564b00e2844ed78e39840274eb8da32cef95451))
+* JetBrains IDEs read the customer YAML's schemas too ([#127](https://github.com/fortytwoservices/mlz-core/issues/127)) ([c0d4cc2](https://github.com/fortytwoservices/mlz-core/commit/c0d4cc2f5381368eeb597b828a262fa005187b25))
+* **pipeline:** a run that waits for approval says why, on its page and on the person's merged pull request ([#126](https://github.com/fortytwoservices/mlz-core/issues/126)) ([eafd6fb](https://github.com/fortytwoservices/mlz-core/commit/eafd6fbb1ac08bff18ee5748bf71e17f80909a65))
+* **vending:** each workload repo's main takes the role repos' rule ([#132](https://github.com/fortytwoservices/mlz-core/issues/132)) ([0f891b8](https://github.com/fortytwoservices/mlz-core/commit/0f891b809b42ae915d307dd5bace9f6f65f44ef3))
+* **vending:** workload repos are offered a pull request to vending's release ([#131](https://github.com/fortytwoservices/mlz-core/issues/131)) ([b27fef5](https://github.com/fortytwoservices/mlz-core/commit/b27fef591866301bcb75b4559bba3e59727aaa12))
+
+
+### Bug Fixes
+
+* **pipeline:** changes from the plan's JSON alone, never Terraform's exit code; imports, moves and forgets applied ([#130](https://github.com/fortytwoservices/mlz-core/issues/130)) ([e87f8e8](https://github.com/fortytwoservices/mlz-core/commit/e87f8e81950e9a4a58eafa66283539145c7f9526))
+* **pipeline:** each script's lines reach the log before its subprocesses' output ([#129](https://github.com/fortytwoservices/mlz-core/issues/129)) ([e8d75f6](https://github.com/fortytwoservices/mlz-core/commit/e8d75f6b9121261cd1dc83b060f2764c9579ef3b))
+* the bootstrap's plan read from its JSON, as the pipelines', and stale commands in the docs and messages ([#134](https://github.com/fortytwoservices/mlz-core/issues/134)) ([923cf16](https://github.com/fortytwoservices/mlz-core/commit/923cf16f6d77ccdeb398ec1cf2ce77da3c4ac34a))
+
 ## [0.12.0](https://github.com/fortytwoservices/mlz-core/compare/v0.11.5...v0.12.0) (2026-11-19)
 
 

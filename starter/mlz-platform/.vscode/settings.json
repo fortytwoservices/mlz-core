@@ -4,8 +4,8 @@
 // user settings.
 {
   "yaml.schemas": {
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/connectivity.schema.json": ["connectivity/**/*.yaml", "connectivity/**/*.yml"], // x-release-please-version
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/network.schema.json": ["management/**/*.yaml", "management/**/*.yml", "identity/**/*.yaml", "identity/**/*.yml"], // x-release-please-version
-    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/firewall-rules.schema.json": ["firewall-rules/**/*.yaml", "firewall-rules/**/*.yml"] // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.13.0/schemas/connectivity.schema.json": ["connectivity/**/*.yaml", "connectivity/**/*.yml"], // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.13.0/schemas/network.schema.json": ["management/**/*.yaml", "management/**/*.yml", "identity/**/*.yaml", "identity/**/*.yml"], // x-release-please-version
+    "https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.13.0/schemas/firewall-rules.schema.json": ["firewall-rules/**/*.yaml", "firewall-rules/**/*.yml"] // x-release-please-version
   }
 }

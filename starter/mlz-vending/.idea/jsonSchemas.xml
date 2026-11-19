@@ -10,7 +10,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core landing-zone" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/landing-zone.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.13.0/schemas/landing-zone.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
