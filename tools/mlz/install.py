@@ -62,7 +62,7 @@ APP_VARIABLE, APP_SECRET = "MLZ_RELEASE_APP_CLIENT_ID", "MLZ_RELEASE_APP_PRIVATE
 # fail for reasons of its own. And strict (decided by the user on 2026-11-15): a pull request merges only once it is
 # up to date with main and checked there, so one checked before a code owner handover merged is checked again against
 # the new owners (tools/mlz/owners.py). A contract another merge left behind is brought up to date by its run, and
-# the run of that merge merges it (tools/ci/merge.sh).
+# the run of that merge merges it (tools/ci/merge.py).
 GITHUB_ACTIONS_APP = 15368  # the app that reports workflow jobs' checks, so no other app or token can pass one
 
 
@@ -1007,7 +1007,7 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
     if github.file(repo, CONTRACT_PATH, base)[0] == text:
         out(f"publish: {repo} already has this {CONTRACT_PATH}")
         # A pull request left open by an earlier publish offers a contract that is no longer the deployed one:
-        # merged, it would bring back old identities. Closed, as tools/ci/publish.sh does for the other contracts.
+        # merged, it would bring back old identities. Closed, as tools/ci/publish.py does for the other contracts.
         for url in github.close_pulls(repo, CONTRACT_BRANCH, f"Closed by mlz install publish: {CONTRACT_PATH} on {base} already matches the bootstrap's state."):
             out(f"publish: closed {url}, which no longer matches the bootstrap")
         return None
