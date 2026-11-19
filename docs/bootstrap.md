@@ -305,8 +305,9 @@ it to that wait at most:
 | 81 to 120 | 3 | 20 minutes |
 | more | one per 40 | 20 minutes |
 
-Not measured: the plan times on the self-hosted runners themselves, and how much a group saves by initialising
-Terraform once per job; both would only shorten these.
+Not measured: the plan times on the self-hosted runners themselves, which may be longer or shorter. Each stack in a
+group still initialises Terraform (it is inside the 30 seconds above); only the job's own setup, about 20 seconds,
+is shared by the group.
 
 **Fortytwo's own tests:** `runners.image: dev` runs the dev plan of Fortytwo's Azure DevOps runner offer
 (`self_hosted_runner_ado`, `ubuntu-latest-dev-gen2`) instead, which carries no image fee, so a test tenant such as
