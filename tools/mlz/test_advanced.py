@@ -185,6 +185,32 @@ class LandingZoneTest(unittest.TestCase):
         self.assertEqual(self.problems("  role_assignment_enabled: true\n"), [
             f"{where}: advanced.role_assignment_enabled is worked out by mlz-core (on when advanced: sets role_assignments); it cannot be set."])
 
+    def test_what_the_module_requires_of_an_object_advanced_adds_is_required(self):
+        where = "landing-zones/payments/prod"
+        self.assertEqual(sorted(self.problems("  role_assignments:\n    readers: {definition: Reader}\n"
+                                              "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          delegations: [{name: web}]\n")), [
+            f"{where}: advanced.role_assignments.readers needs principal_id, which the module requires.",
+            f"{where}: advanced.virtual_networks.spoke.subnets.app.delegations[0] needs service_delegation, which the module requires."])
+        assignments = schema.landing_zone()["properties"]["advanced"]["properties"]["role_assignments"]
+        self.assertEqual(assignments["additionalProperties"]["required"], ["definition", "principal_id"])
+
+    def test_a_null_is_the_module_s_default_and_takes_an_upper_layer_s_value_away(self):
+        self.write("defaults/landing-zone-defaults.yaml", self.read("defaults/landing-zone-defaults.yaml") +
+                   "advanced:\n  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n")
+        self.assertIn("role_assignments", self.build()["advanced"])
+        self.assertNotIn("advanced", self.build("  role_assignments: null\n"))  # nothing left: no block at all
+
+    def test_a_decommissioned_landing_zone_s_advanced_is_shown_as_not_given(self):
+        self.prod += "decommission: true\n"
+        config = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n"
+                            "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          service_endpoints: [Microsoft.Storage]\n")
+        rows = {row[0]: row for part in explain.module_inputs("vending/terraform", config, {}).values() for row in part}
+        self.assertTrue(rows["role_assignments"][1].startswith("none: decommissioned"))
+        self.assertTrue(rows["virtual_networks.subnets.service_endpoints"][1].startswith("none: decommissioned"))
+
+    def read(self, relative: str) -> str:
+        return (self.repo / relative).read_text()
+
     def test_no_budget_no_budget_inputs(self):
         self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\n")
         self.prod = self.prod.replace("budget:\n  monthly: 2000\n", "")

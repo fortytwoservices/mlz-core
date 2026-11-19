@@ -272,28 +272,46 @@
                       "type": "string"
                     },
                     "description": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "destination_address_prefix": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "destination_address_prefixes": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
                     },
                     "destination_application_security_group_ids": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
                     },
                     "destination_port_range": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "destination_port_ranges": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
@@ -311,31 +329,53 @@
                       "type": "string"
                     },
                     "source_address_prefix": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "source_address_prefixes": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
                     },
                     "source_application_security_group_ids": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
                     },
                     "source_port_range": {
-                      "type": "string"
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     },
                     "source_port_ranges": {
-                      "type": "array",
+                      "type": [
+                        "array",
+                        "null"
+                      ],
                       "items": {
                         "type": "string"
                       }
                     }
                   },
-                  "additionalProperties": false
+                  "additionalProperties": false,
+                  "required": [
+                    "access",
+                    "direction",
+                    "name",
+                    "priority",
+                    "protocol"
+                  ]
                 }
               }
             },
@@ -369,28 +409,53 @@
                 "type": "string"
               },
               "relative_scope": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "resource_group_scope_key": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "condition": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "condition_version": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "principal_type": {
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "definition_lookup_enabled": {
-                "type": "boolean"
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               },
               "use_random_uuid": {
-                "type": "boolean"
+                "type": [
+                  "boolean",
+                  "null"
+                ]
               }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "required": [
+              "definition",
+              "principal_id"
+            ]
           }
         },
         "wait_for_subscription_before_subscription_operations": {
@@ -400,10 +465,16 @@
           ],
           "properties": {
             "create": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "destroy": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "additionalProperties": false
@@ -471,7 +542,10 @@
                             "type": "string"
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": false,
+                        "required": [
+                          "id"
+                        ]
                       }
                     },
                     "delegations": {
@@ -492,10 +566,17 @@
                                 "type": "string"
                               }
                             },
-                            "additionalProperties": false
+                            "additionalProperties": false,
+                            "required": [
+                              "name"
+                            ]
                           }
                         },
-                        "additionalProperties": false
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "service_delegation"
+                        ]
                       }
                     }
                   },

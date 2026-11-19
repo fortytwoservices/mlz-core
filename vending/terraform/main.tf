@@ -350,13 +350,15 @@ resource "time_static" "budget_start" {}
 # What sub-vending is given beside its own inputs, as locals so tests/ can check it. The landing zone's advanced: goes
 # in first in each object and mlz-core's values over it, so it only adds (tools/mlz/advanced.py).
 locals {
-  network_security_groups = local.decommission ? {} : {
+  # A filter, not a conditional: with advanced: on one subnet's NSG only, the entries differ in shape, which a
+  # conditional's {} cannot be unified with.
+  network_security_groups = {
     for name, _ in local.lz.network.subnets : name => merge(try(local.lz.advanced.network_security_groups[name], {}), {
       name                         = local.names.network_security_groups[name]
       resource_group_name_existing = azapi_resource.resource_group["network"].name
       location                     = local.lz.location
       tags                         = local.lz.tags
-    })
+    }) if !local.decommission
   }
   virtual_networks = local.decommission ? {} : {
     spoke = merge(try(local.lz.advanced.virtual_networks.spoke, {}), {
@@ -434,8 +436,9 @@ module "vending" {
   # advanced: is planned as it always was (two are nullable = false at 0.3.4: null is their default).
   subscription_register_resource_providers_and_features = try(local.lz.advanced.subscription_register_resource_providers_and_features, null)
   wait_for_subscription_before_subscription_operations  = try(local.lz.advanced.wait_for_subscription_before_subscription_operations, {})
-  role_assignment_enabled                               = length(try(local.lz.advanced.role_assignments, {})) > 0
-  role_assignments                                      = try(local.lz.advanced.role_assignments, null)
+  # A decommission takes them away with the rest.
+  role_assignment_enabled = !local.decommission && length(try(local.lz.advanced.role_assignments, {})) > 0
+  role_assignments        = local.decommission ? null : try(local.lz.advanced.role_assignments, null)
 
   network_security_group_enabled = !local.decommission
   network_security_groups        = local.network_security_groups

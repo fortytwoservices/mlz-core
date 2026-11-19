@@ -61,7 +61,15 @@ def check(kind: str, where: str, given: object, problems: list[str], keys: dict[
     found: list[str] = []
     walk(scope, call, section, entries, given, "", "", where, found, keys or {})
     problems += found
-    return {} if found else given
+    return {} if found else prune(given)
+
+
+def prune(value):
+    """A block without its nulls: null is the module's default, as leaving the input out is (a later layer's null takes
+    an earlier one's value away). The roots then never see one: try() does not turn a null into the fallback."""
+    if isinstance(value, dict):
+        return {key: prune(item) for key, item in value.items() if item is not None}
+    return [prune(item) for item in value] if isinstance(value, list) else value
 
 
 def walk(scope: Scope, call: dict, section: dict, entries: dict, given: dict, rel: str, label: str, where: str,
@@ -142,6 +150,9 @@ def of_type(paths: dict, path: str, kind: str, value: object, at: str) -> list[s
         for key, item in value.items():
             child = f"{path}.{key}"
             found += typed(paths, child, item, f"{at}.{key}") if child in paths else [f"{at}.{key} is not an attribute of it."]
+        # What the module requires of each such object, since nothing of mlz-core's is merged into it.
+        found += [f"{at} needs {child.removeprefix(path + '.')}, which the module requires." for child in children(paths, path)
+                  if paths[child]["required"] and child.removeprefix(path + ".") not in value]
         return found
     if kind in PRIMITIVES:
         ok = isinstance(value, PRIMITIVES[kind]) and not (kind == "number" and isinstance(value, bool))
@@ -253,9 +264,16 @@ def json_type(paths: dict, path: str, kind: str | None = None) -> dict:
         element = json_type(paths, path, inner)
         return {"type": "object", "additionalProperties": element} if outer == "map" else {"type": "array", "items": element}
     if kind == "object":
-        children = {p.removeprefix(path + "."): p for p in paths if p.startswith(path + ".") and "." not in p.removeprefix(path + ".")}
-        return {"type": "object", "properties": {k: json_type(paths, p) for k, p in children.items()}, "additionalProperties": False}
+        named = {p.removeprefix(path + "."): p for p in children(paths, path)}
+        required = sorted(name for name, p in named.items() if paths[p]["required"])
+        return {"type": "object", "properties": {k: nullable(paths, p) for k, p in named.items()}, "additionalProperties": False,
+                **({"required": required} if required else {})}
     return {"type": {"string": "string", "number": "number", "bool": "boolean"}[kind]} if kind in ("string", "number", "bool") else {}
+
+
+def children(paths: dict, path: str) -> list[str]:
+    """An object input's attributes' paths."""
+    return [p for p in paths if p.startswith(path + ".") and "." not in p.removeprefix(path + ".")]
 
 
 def reference(scope: Scope) -> str:

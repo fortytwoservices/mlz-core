@@ -300,7 +300,7 @@ def inactive(root: str, config: dict | None, places: dict[str, str]) -> dict[tup
         return {}
     gone = "none: decommissioned, its plan destroys what vending made"
     if config.get("decommission"):
-        return {("route_table", ""): gone, **{("vending", m): gone for m in ("network_security_groups", "user_managed_identities", "virtual_networks", "budgets")}}
+        return {("route_table", ""): gone, **{("vending", m): gone for m in ("network_security_groups", "user_managed_identities", "virtual_networks", "budgets", "role_assignments")}}
     return {("vending", "budgets"): "none: no budget (budget.monthly)"} if (config.get("budget") or {}).get("monthly") is None else {}
 
 
@@ -317,12 +317,12 @@ def module_inputs(root: str, config: dict | None, places: dict[str, str], worked
             if path not in entries:
                 continue
             item, value = entries[path], input_value(entries[path], info, config, places)
+            reason = next((why for (call, prefix), why in off.items() if call == key and (prefix == "" or path == prefix or path.startswith(prefix + "."))), None)
             mine = [(written, v) for at, written, v in set_here if at == path or at.startswith(path + ".")]
-            if not worked_out and item["class"] == "open" and mine:  # advanced: sets it, or part of it
+            if not worked_out and item["class"] == "open" and mine and not reason:  # advanced: sets it, or part of it
                 whole = len(mine) == 1 and mine[0][0] == advanced.written_path(advanced.scope_of(root, key), path)
                 rows.append((path, show(mine[0][1] if whole else dict(mine)), f"open: set under {plain(advanced.where(root, key, path))}"))
                 continue
-            reason = next((why for (call, prefix), why in off.items() if call == key and (prefix == "" or path == prefix or path.startswith(prefix + "."))), None)
             value = reason if reason and value is not None else value
             if worked_out and (item["class"] != "derived" or value is None):
                 continue

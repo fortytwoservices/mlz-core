@@ -21,7 +21,8 @@
   "network": {
     "address_space": "10.100.8.0/24",
     "subnets": {
-      "default": "10.100.8.0/26"
+      "default": "10.100.8.0/26",
+      "data": "10.100.8.64/27"
     },
     "hub_virtual_network_id": "/subscriptions/00000000-0000-0000-0000-000000000002/resourceGroups/rg-mlz-hub-nwe/providers/Microsoft.Network/virtualNetworks/vnet-mlz-hub-nwe",
     "dns_servers": [
@@ -45,7 +46,8 @@
     "deploy_identity": "id-acme-pay-pd-nwe-01",
     "budget": "budget-acme-pay-pd-nwe-01",
     "network_security_groups": {
-      "default": "nsg-acme-pay-default-pd-nwe-01"
+      "default": "nsg-acme-pay-default-pd-nwe-01",
+      "data": "nsg-acme-pay-data-pd-nwe-01"
     },
     "subnet": "snet-%s",
     "peering_to_hub": "peer-payments-prod-to-hub",

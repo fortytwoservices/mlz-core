@@ -624,7 +624,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
             "workload": {**workloads[key], **workload_facts(names[key], plan[key], region, tags)} if key in workloads else None,
             # Sub-vending inputs mlz-core leaves alone, checked; only when given, so a landing zone without them is as before.
-            **({"advanced": s["advanced"]} if isinstance(s.get("advanced"), dict) and s["advanced"] else {}),
+            **({"advanced": advanced.prune(s["advanced"])} if isinstance(s.get("advanced"), dict) and advanced.prune(s["advanced"]) else {}),
         }
     return configs
 
