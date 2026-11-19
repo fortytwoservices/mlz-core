@@ -285,11 +285,16 @@ def input_source(item: dict, file: str | None) -> str:
     return f"closed: {item['why']}"
 
 
-def inactive(root: str, config: dict | None) -> dict[tuple[str, str], str]:
-    """What the root gives nothing for this stack, though its config holds values: by (module call, input path; "" for
-    every input of the call), what explain says instead. vending/terraform's own conditions (main.tf): a decommissioned
-    landing zone has no route table, and sub-vending, which still places its subscription, gets empty maps; without
-    budget.monthly the budget map is empty."""
+def inactive(root: str, config: dict | None, places: dict[str, str]) -> dict[tuple[str, str], str]:
+    """What the root gives nothing for this stack, though its config or the module's defaults hold values: by (module
+    call, input path; "" for every input of the call), what explain says instead. The roots' own conditions: a hub's
+    Bastion or resolver turned off is null, so nothing in it is given (platform/terraform); a decommissioned landing
+    zone has no route table, and sub-vending, which still places its subscription, gets empty maps; without
+    budget.monthly the budget map is empty (vending/terraform)."""
+    if root == "platform/terraform" and config:
+        hub = config["hubs"].get(places.get("region"), {})
+        return {("connectivity", f"hub_virtual_networks.{part}"): f"none: not built ({setting} is false)"
+                for part, setting in (("bastion", "bastion"), ("dns_resolver", "dns_resolver")) if hub.get(part) is None}
     if root != "vending/terraform" or not config:
         return {}
     gone = "none: decommissioned, its plan destroys what vending made"
@@ -302,7 +307,7 @@ def module_inputs(root: str, config: dict | None, places: dict[str, str], worked
     """Each module call of a root, with a row per entry of its map: (input, value, source). worked_out: one part, of the
     derived inputs whose value the config holds, named by their call where the root makes several."""
     snapshot, maps = inputs.load_snapshot(), inputs.load_maps()
-    calls, parts, off = snapshot[root], {}, inactive(root, config)
+    calls, parts, off = snapshot[root], {}, inactive(root, config, places)
     for key, call in calls.items():
         section = maps[root][key]
         entries = {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}
@@ -371,6 +376,8 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
     layered, filled = [], []
     if stack == platform.CONNECTIVITY:
         settings = read_setting(repo / platform.CONNECTIVITY / places["region"]) or {}
+        if governance is None and settings:  # the hub's own checks need no contract; the rest waits for it
+            platform.hub(places["region"], settings, found)
         layered = [(dotted(path), show(value), file_of(repo, where)) for path, value in leaves(settings).items()]
         properties = schema.connectivity()["properties"]
         filled = [(key, show(spec["default"]), "mlz-core's default") for key, spec in properties.items() if "default" in spec and key not in settings]
@@ -380,8 +387,9 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
         filled = [(stack, "no settings", f"{stack}/<region>.yaml takes none yet; {'its being there builds' if stack == 'identity' else 'management builds'} the network")]
     worked = module_inputs(root, config, places, worked_out=True).get("Worked out", []) if config else \
         [("everything else", "not known yet", WAITS if governance is None else "the platform's settings must check first (below)")]
-    return render_parts(heading, {"Set in its file": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found,
-                        nothing="no problems in the platform's settings (python3 -m mlz platform checks every hub together)")
+    checked = "no problems in the platform's settings (python3 -m mlz platform checks every hub together)" if governance is not None else \
+        "no problems in this file; the checks that need governance's contract wait for it"
+    return render_parts(heading, {"Set in its file": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found, nothing=checked)
 
 
 def governance_explain(repo: Path, show_inputs: bool) -> str:

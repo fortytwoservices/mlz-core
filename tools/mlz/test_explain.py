@@ -307,8 +307,12 @@ class PlatformExplainTest(unittest.TestCase):
         self.assertEqual(self.run_main("connectivity/norwayeast")[1], out)
 
     def test_a_component_turned_off_is_said_not_to_be_built(self):
-        self.write("connectivity/norwayeast.yaml", HUB + "dns_resolver: false\n")
-        self.assertRegex(self.run_main("norwayeast")[1], r"hub_virtual_networks.dns_resolver.name +none: not built here")
+        self.write("connectivity/norwayeast.yaml", HUB.replace("bastion: true", "bastion: false") + "dns_resolver: false\n")
+        self.assertRegex(self.run_main("norwayeast")[1], r"hub_virtual_networks.dns_resolver.name +none: not built")
+        out = self.run_main("norwayeast", "--inputs")[1]  # its module defaults too: the root passes no Bastion at all
+        self.assertRegex(out, r"hub_virtual_networks.bastion.sku +none: not built \(bastion is false\)")
+        self.assertRegex(out, r"hub_virtual_networks.dns_resolver.inbound_subnet_name +none: not built \(dns_resolver is false\)")
+        self.assertRegex(out, r"hub_virtual_networks.firewall.zones +null")
 
     def test_management_identity_and_the_rules(self):
         status, out, _ = self.run_main("management")
@@ -324,7 +328,11 @@ class PlatformExplainTest(unittest.TestCase):
 
     def test_without_governance_s_contract_what_is_worked_out_waits(self):
         (self.repo / "_generated" / "governance.yaml").unlink()
-        self.assertRegex(self.run_main("norwayeast")[1], r"everything else +not known yet +<- waits for governance's contract")
+        out = self.run_main("norwayeast")[1]
+        self.assertRegex(out, r"everything else +not known yet +<- waits for governance's contract")
+        self.assertIn("no problems in this file; the checks that need governance's contract wait for it", out)
+        self.write("connectivity/norwayeast.yaml", HUB.replace("Premium", "Gold"))  # the hub's own checks still run
+        self.assertIn("connectivity/norwayeast: firewall 'Gold' must be one of Standard, Premium, Basic.", self.run_main("norwayeast")[1])
 
     def test_settings_that_do_not_check_are_reported(self):
         self.write("connectivity/norwayeast.yaml", HUB.replace("Premium", "Gold"))
