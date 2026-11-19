@@ -38,6 +38,12 @@ class OwnersTest(unittest.TestCase):
         self.owned("# Who must approve a change. A line below hands one path to another team.\n*             @acme/platform\n\n/_generated/\n")
         self.assertEqual(owners.offline_problems(self.repo), [])
 
+    def test_a_rule_s_own_comment_is_no_owner(self):
+        # GitHub reads a # after a space as a comment, on a rule's line too.
+        self.owned("* @acme/platform # the platform team\n/_generated/   # the contracts\n")
+        self.assertEqual(owners.offline_problems(self.repo, "acme", "platform"), [])
+        self.assertEqual(owners.rules("/a#b @acme/x\n"), [["/a#b", "@acme/x"]])  # a # inside a pattern stays
+
     def test_a_handover_line_fails_and_says_what_to_remove(self):
         self.owned("*                   @acme/platform\n/firewall-rules/    @acme/network\n/_generated/\n")
         found = owners.offline_problems(self.repo)

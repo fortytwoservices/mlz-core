@@ -83,7 +83,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 
 | Job | When | What it does |
 |---|---|---|
-| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
+| `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main-checks` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
 | `plan` | pull requests, `main`, and daily | One plan per stack the run plans ([below](#what-a-run-plans)) (the role's stacks, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. |
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
@@ -172,7 +172,7 @@ merge would add no control: the contract says what the other role has already de
 changes. A contract that fails this repo's check or plan stays on its pull request, not on `main`. On
 vending, a contract that gives landing zones their addresses or names gets the IP plan and the names committed
 to the pull request first, and the run of that commit merges it. A contract that another merge left behind
-`main` is first brought up to date with it, since the ruleset `main` merges only such a branch, and the run of
+`main` is first brought up to date with it, since the ruleset `main-checks` merges only such a branch, and the run of
 that merge merges it. Until vending has both governance's and platform's contracts,
 it waits: its check plans nothing, and it publishes nothing.
 
@@ -205,7 +205,8 @@ the file, from `bootstrap.yaml`'s `platform_team`:
   - A team can take its members from an Entra ID group: the organization's owner connects the two in the team's
     settings (team synchronization, on GitHub Enterprise Cloud), and GitHub refreshes it at least hourly.
 - **The bypass team may merge without the approval,** pull requests only: `bootstrap.yaml`'s `bypass_team`, which
-  alone may also change `.github/` ([below](#changes-to-github)).
+  alone may also change `.github/` ([below](#changes-to-github)). The check still binds it: it lives in the
+  ruleset `main-checks`, which has no bypass, since a bypass covers its whole ruleset.
   - GitHub records each bypass under the repo's Insights, Rules.
   - `mlz install repos` gives a new repo's ruleset `main` that bypass; for a repo made before, add it there
     (`mlz install check` notes it).
@@ -262,7 +263,7 @@ identity, from its own pull request (proved on a test customer on 19 November). 
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
-| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
+| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main`, `main-checks` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions

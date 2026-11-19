@@ -88,10 +88,14 @@ def push_ruleset(team_id: int) -> dict:
     }
 
 
+CHECKS_RULESET = "main-checks"
+
+
 def main_ruleset(role: str, team_id: int | None = None) -> dict:
-    """The ruleset main: pull requests only, a code owner's approval, the check passed, no force push or deletion. The
-    bypass team (team_id) may merge a pull request without the approval, and only a pull request (decision D8): GitHub
-    records each bypass under the repo's Insights, Rules."""
+    """The ruleset main: pull requests only, a code owner's approval, no force push or deletion. The bypass team
+    (team_id) may merge a pull request without the approval, and only a pull request (decision D8): GitHub records each
+    bypass under the repo's Insights, Rules. A bypass covers its whole ruleset, so the check lives in a ruleset of its
+    own (checks_ruleset), which nobody bypasses."""
     return {
         "name": "main",
         "target": "branch",
@@ -108,6 +112,19 @@ def main_ruleset(role: str, team_id: int | None = None) -> dict:
                 "require_last_push_approval": False,
                 "required_review_thread_resolution": False,
             }},
+        ],
+    }
+
+
+def checks_ruleset(role: str) -> dict:
+    """The ruleset main-checks: the role's check passed, on a branch up to date with main, before any merge into main,
+    the bypass team's included. No bypass actor."""
+    return {
+        "name": CHECKS_RULESET,
+        "target": "branch",
+        "enforcement": "active",
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [
             {"type": "required_status_checks", "parameters": {
                 "strict_required_status_checks_policy": True,
                 "required_status_checks": [{"context": required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
@@ -405,11 +422,16 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
                 "under .github/")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
         if github.add_ruleset(repo, main_ruleset(role, admins["id"])):
-            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, {required_check(role)} passed on a branch up to date with main, "
-                f"no force push or deletion; {org}/{admins['slug']} may merge a pull request without the approval)")
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, no force push or deletion; {org}/{admins['slug']} may "
+                "merge a pull request without the approval)")
         else:
             out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
-                f"and requires a code owner's review and {required_check(role)} (mlz install check says)")
+                "and requires a code owner's review (mlz install check says)")
+        if github.add_ruleset(repo, checks_ruleset(role)):
+            out(f"{repo}: ruleset {CHECKS_RULESET} ({required_check(role)} passed on a branch up to date with main, before any merge; nobody bypasses it)")
+        else:
+            out(f"{repo}: has a ruleset named {CHECKS_RULESET} already, left as it is; mlz install check says whether {required_check(role)} "
+                "is required on main")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
@@ -515,12 +537,17 @@ def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str
     if not found:
         out(f"{repo}: changes under .github/ are refused on every branch, but from {org}/{team} "
             f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
-    # Only noted: without it, every merge waits for a second code owner (decision D8 gives the team that bypass).
-    reviews = [r for r in github.rulesets(repo) if r.get("target") == "branch" and r.get("enforcement") == "active"
-               and any(rule.get("type") == "pull_request" for rule in r.get("rules") or [])]
-    if reviews and not any(a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"] for r in reviews for a in r.get("bypass_actors") or []):
-        out(f"{repo}: {org}/{team} may not merge a pull request without a code owner's approval; mlz install repos gives a new repo's "
-            "ruleset main that bypass (pull requests only), and an existing one can add it (Settings, Rules, Rulesets)")
+    # Only noted: without it, every merge waits for a second code owner (decision D8 gives the team that bypass). The
+    # rulesets that require a code owner's review on the default branch, each by its ID, as GitHub applies them there.
+    branch = github.default_branch(repo)
+    review_ids = {rule.get("ruleset_id") for rule in github.branch_rules(repo, branch)
+                  if rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")}
+    by_id = {r.get("id"): r for r in github.rulesets(repo)}
+    blocking = [by_id.get(i, {"name": f"ID {i}"}) for i in sorted(review_ids, key=str)
+                if not any(a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"] for a in by_id.get(i, {}).get("bypass_actors") or [])]
+    for ruleset in blocking:
+        out(f"{repo}: {org}/{team} may not merge a pull request without a code owner's approval past ruleset {ruleset['name']}; mlz install "
+            "repos gives a new repo's ruleset main that bypass (pull requests only), and an existing one can add it (Settings, Rules, Rulesets)")
     return found
 
 

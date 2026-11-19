@@ -36,8 +36,10 @@ def render(org: str, team: str) -> str:
 
 
 def rules(text: str) -> list[list[str]]:
-    """A CODEOWNERS file's rules, each split into its pattern and owners; comments and blank lines left out."""
-    return [line.split() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    """A CODEOWNERS file's rules, each split into its pattern and owners; comments, a line's own included (from a # after
+    a space, as GitHub reads it), and blank lines left out."""
+    found = (re.sub(r"(^|\s)#.*$", "", line).split() for line in text.splitlines())
+    return [rule for rule in found if rule]
 
 
 def offline_problems(folder: Path, org: str | None = None, team: str | None = None) -> list[str]:
