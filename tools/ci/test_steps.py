@@ -121,9 +121,9 @@ class Pulls:
         self.comments.append((repo, number, body))
 
 
-def pull(number, ref="feature", kind="User", sha="sha1", title="feat: a hub"):
-    return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind}, "head": {"ref": ref},
-            "title": title}
+def pull(number, ref="feature", kind="User", sha="sha1", title="feat: a hub", repo="acme/mlz-platform"):
+    return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind},
+            "head": {"ref": ref, "repo": {"full_name": repo}}, "title": title}
 
 
 class ChangedTest(Case):
@@ -171,11 +171,11 @@ class ChangedTest(Case):
         self.changes()
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(6, sha="other"), pull(7)]))
         self.assertIn("### Waiting for approval\n\nThis run applies connectivity once it is approved in the `platform` environment, by one of its "
-                      "required reviewers. It was started by #7, merged: feat: a hub. Every later run on main queues behind this one until "
+                      "required reviewers. It was started by #7, merged: feat: a hub. Every later push or manual run on main queues behind this one until "
                       "it finishes: applied, or rejected.", summary)
         self.assertEqual(self.github.calls, [("commit_pulls", "acme/mlz-platform", "sha1")])
         self.assertEqual(self.github.comments, [("acme/mlz-platform", 7, "This merge's run waits for approval in the `platform` environment before it "
-                                                 "applies connectivity: https://example/run/9\n\nEvery later run on main queues behind this one "
+                                                 "applies connectivity: https://example/run/9\n\nEvery later push or manual run on main queues behind this one "
                                                  "until it finishes: applied, or rejected.")])
         self.assertEqual(self.github.timeouts, [changed.DEADLINE, changed.DEADLINE])  # never the job's whole five minutes
 
@@ -199,6 +199,11 @@ class ChangedTest(Case):
                                       github=Pulls([pull(3, ref="mlz/bootstrap-contract", title="chore: bootstrap contract")]))
         self.assertIn("It was started by bootstrap's contract, merged (#3).", summary)
         self.assertEqual(self.github.comments, [])
+        # A fork's branch of a contract's name is a person's pull request: a contract comes from the repo itself.
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push",
+                                      github=Pulls([pull(9, ref="mlz/vending-contract", repo="someone/mlz-platform", title="fix: a rule")]))
+        self.assertIn("It was started by #9, merged: fix: a rule.", summary)
+        self.assertEqual([number for _, number, _ in self.github.comments], [9])
         # A person's pull request is told by its branch, whatever its title says.
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(8, title="chore: vending contract update")]))
         self.assertIn("It was started by #8, merged: chore: vending contract update.", summary)
@@ -208,6 +213,10 @@ class ChangedTest(Case):
         self.changes()
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([]), message="fix: by hand\n\n" + "x" * 200_000)
         self.assertIn("It was started by a push to main: fix: by hand.", summary)  # a long message is read from the event, never passed along
+        # A subject long enough to take the summary past GitHub's 1 MiB is cut, and says so.
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([]), message="y" * 2_000_000)
+        self.assertIn("It was started by a push to main: " + "y" * changed.TITLE + "….", summary)
+        self.assertLess(len(summary), 10_000)
         self.assertEqual(self.github.comments, [])
         # Without a pull request it is a push, whatever its title says.
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([]),

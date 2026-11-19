@@ -31,7 +31,9 @@ from ci.gh import Pipeline  # noqa: E402
 CONTRACT_BRANCH = re.compile(r"^mlz/(bootstrap|governance|platform|vending)-contract$")
 # Each call to GitHub, well inside the job's five minutes: a stalled one is a notice, never a skipped apply.
 DEADLINE = 30
-QUEUE = "Every later run on main queues behind this one until it finishes: applied, or rejected."
+# The caller's queue holds main's pushes and manual runs for the whole run; the daily check has a group of its own.
+QUEUE = "Every later push or manual run on main queues behind this one until it finishes: applied, or rejected."
+TITLE = 200  # characters of a title shown at most: a step summary over GitHub's 1 MiB is dropped whole
 
 
 def changes(stack: str) -> bool:
@@ -54,13 +56,21 @@ def head_title() -> str:
             message = (json.load(event).get("head_commit") or {}).get("message") or ""
     except (KeyError, OSError, ValueError):
         return ""
-    return next(iter(message.splitlines()), "")
+    return shown(next(iter(message.splitlines()), ""))
+
+
+def shown(title: str) -> str:
+    """A title as the note shows it: TITLE characters at most, marked where it was cut."""
+    return title if len(title) <= TITLE else title[:TITLE] + "…"
 
 
 def contract_of(pull: dict | None) -> str | None:
-    """The role whose contract a pull request carries, by its branch; None for any other."""
-    found = CONTRACT_BRANCH.match(((pull or {}).get("head") or {}).get("ref") or "")
-    return found.group(1) if found else None
+    """The role whose contract a pull request carries: by its branch, in this repo itself, as the merge job asks; a fork's
+    branch of the same name is a person's. None for any other."""
+    head = (pull or {}).get("head") or {}
+    found = CONTRACT_BRANCH.match(head.get("ref") or "")
+    own = (head.get("repo") or {}).get("full_name") == os.environ.get("GITHUB_REPOSITORY")
+    return found.group(1) if found and own else None
 
 
 def started_by(event: str, title: str, actor: str, pull: dict | None) -> str:
@@ -71,7 +81,7 @@ def started_by(event: str, title: str, actor: str, pull: dict | None) -> str:
     if pull and contract_of(pull):
         return f"{contract_of(pull)}'s contract, merged (#{pull['number']})"
     if pull:
-        return f"#{pull['number']}, merged: {pull.get('title') or title}"
+        return f"#{pull['number']}, merged: {shown(pull.get('title') or title)}"
     return f"a push to main: {title}" if title else "a push to main"
 
 
