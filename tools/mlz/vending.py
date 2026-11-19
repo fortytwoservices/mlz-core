@@ -583,6 +583,14 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         s = lz["settings"]
         region = platform["regions"][s["location"]]
         budget, github = s.get("budget") or {}, s.get("github") or {}
+        tags = {
+            **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
+            "Owner": s["owner"],
+            "CostCenter": str(s["cost_center"]),
+            "Environment": lz["environment"],
+            "Workload": lz["workload"],
+            "ManagedBy": "mlz-core",
+        }
         configs[key] = {
             "key": key,
             "root_id": governance["root"],
@@ -593,14 +601,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
             "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
             "location": s["location"],
-            "tags": {
-                **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
-                "Owner": s["owner"],
-                "CostCenter": str(s["cost_center"]),
-                "Environment": lz["environment"],
-                "Workload": lz["workload"],
-                "ManagedBy": "mlz-core",
-            },
+            "tags": tags,
             # Budget alerts go to the owner unless contacts are given.
             "budget": {"monthly": budget.get("monthly"), "contacts": budget.get("contacts") or [s["owner"]]},
             "network": {
@@ -614,9 +615,34 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "decommission": decommissioned(lz),
             "names": names[key],
             # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
-            "workload": workloads.get(key),
+            "workload": {**workloads[key], **workload_facts(names[key], plan[key], region, tags)} if key in workloads else None,
         }
     return configs
+
+
+# The resource groups vending makes in a landing zone's subscription, by what they hold.
+LANDING_ZONE_GROUPS = {"network": "network_resource_group", "identity": "identity_resource_group", "state": "state_resource_group"}
+
+
+def workload_facts(names: dict, plan: dict, region: dict, tags: dict) -> dict:
+    """What the landing zone's own repo needs to know of it, beside the naming values: its network, by names (a
+    subscription vending makes is never read back, so the repo builds the IDs from the subscription its pipeline
+    signs in to), the tags vending gives what it makes, and the resource groups vending makes, which it owns: anything
+    changed in them, its next apply changes back."""
+    groups = {role: names[key] for role, key in LANDING_ZONE_GROUPS.items()}
+    return {
+        "network": {
+            "resource_group": groups["network"],
+            "virtual_network": names["virtual_network"],
+            "address_space": str(plan["range"]),
+            "subnets": {name: {"name": names["subnet"] % name, "address_prefix": str(block)}
+                        for name, block in plan["subnets"].items()},
+            "dns_servers": region["dns_servers"],
+        },
+        "tags": tags,
+        "resource_groups": groups,
+        "platform_owns": sorted(groups.values()),
+    }
 
 
 def short_name_problems(lz: dict) -> list[str]:
