@@ -142,7 +142,7 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: .mlz-core/tools/ci/ip-plan.sh
+        run: python3 .mlz-core/tools/ci/ip_plan.py
 
       # A line of CODEOWNERS that GitHub cannot use leaves its paths with no owner at all, so any error in it stops
       # the run (docs/pipelines.md, Code owners). At github.sha, the commit checked out: on a pull request, the merge
@@ -558,7 +558,7 @@ jobs:
     needs: [check, plan, changed, apply]
     runs-on: ${{ vars.MLZ_RUNS_ON || 'ubuntu-latest' }} # the private runner once mlz install runners sets it
     timeout-minutes: 10
-    # One publication at a time; publish.sh skips a run that main has moved past.
+    # One publication at a time; publish.py skips a run that main has moved past.
     concurrency:
       group: mlz-publish-${{ inputs.role }}
       cancel-in-progress: false
@@ -617,7 +617,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
-        run: .mlz-core/tools/ci/publish.sh "$ROLE"
+        run: python3 .mlz-core/tools/ci/publish.py "$ROLE"
 
   # After a landing zone's decommission is applied, its files go in pull requests a person merges
   # (tools/mlz/decommission.py): the platform's rules file for it first, then its own file with its range
@@ -754,7 +754,7 @@ jobs:
           PYTHONPATH: .mlz-core/tools
         run: python3 -m mlz workload-repos --configs .mlz/vending
 
-  # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
+  # A contract pull request (tools/ci/publish.py, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's
   # merge would add no control. One that fails here stays open, and main never gets it.
   merge:
@@ -805,4 +805,4 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_REF: ${{ github.base_ref }}
-        run: .mlz-core/tools/ci/merge.sh
+        run: python3 .mlz-core/tools/ci/merge.py
