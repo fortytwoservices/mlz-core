@@ -44,6 +44,22 @@ class ExplainTest(unittest.TestCase):
         parts = explain.explain(self.repo, "payments-prod", lz, vending.ip_plan(self.repo), governance, platform)
         return {setting: (value, source) for part in parts.values() for setting, value, source in part}
 
+    def test_a_numbered_name_says_where_its_number_comes_from(self):
+        # A template without {purpose}: mlz-core numbers its own (docs/naming.md, without {purpose}).
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        (self.repo / vending.NAMES).unlink()
+        self.allocate(flat)
+        rows = self.rows(flat)
+        self.assertEqual(rows["name identity_resource_group"], ("rg-demo-pay-pd-nwe-02", "recorded in _generated/names.yaml; number 02 of the landing "
+                         "zone's resource groups (network_resource_group, identity_resource_group, state_resource_group)"))
+        self.assertEqual(rows["name plan_identity"][1], "recorded in _generated/names.yaml; number 02 of the landing zone's identities "
+                         "(deploy_identity, plan_identity)")
+        self.assertTrue(rows["name NSG of default"][1].endswith("; NSGs are numbered: the lowest number no NSG of the landing zone held when it was first named"))
+        self.assertEqual(rows["name virtual_network"][1], "recorded in _generated/names.yaml")  # alone of its type: nothing to say
+        # With {purpose}, nothing is numbered and nothing is said.
+        self.assertEqual(self.rows()["name identity_resource_group"][1], "recorded in _generated/names.yaml; the template now gives rg-demo-pay-id-pd-nwe-01 "
+                         "(./mlz names --repo . --renew payments-prod)")
+
     def test_each_value_names_the_file_that_set_it_and_what_it_replaced(self):
         rows = self.rows()
         self.assertEqual(rows["owner"], ("payments@demo.example", "landing-zones/payments/workload-defaults.yaml"))

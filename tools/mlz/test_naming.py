@@ -21,6 +21,18 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(naming.render(n, "network_security_group", app="pay", env="dev", region="norwayeast", purpose="default"), "nsg-acme-pay-default-dv-nwe-01")
         self.assertEqual(naming.render(n, "user_assigned_identity", app="pay", env="prod", region="swedencentral", nn=2), "id-acme-pay-pd-sdc-02")
 
+    def test_a_number_tells_mlz_core_s_own_apart_only_without_purpose(self):
+        flat = acme(template="{type}-{org}-{app}-{env}-{region}-{nn}")
+        self.assertEqual(naming.render(flat, "resource_group", app="pay", env="prod", region="norwayeast", purpose="id", number=2), "rg-acme-pay-pd-nwe-02")
+        self.assertTrue(naming.counts(flat, "resource_group"))
+        # With {purpose}, {nn} stays what it always was: names do not change.
+        self.assertEqual(naming.render(acme(), "resource_group", app="pay", env="prod", region="norwayeast", purpose="id", number=2), "rg-acme-pay-id-pd-nwe-01")
+        self.assertFalse(naming.counts(acme(), "resource_group"))
+        # Without {nn} there is nowhere to put a number; a type's own template decides for that type.
+        self.assertFalse(naming.counts(acme(template="{type}-{org}-{app}-{env}-{region}"), "resource_group"))
+        own = acme(templates={"public_ip_address": "{type}-{org}-{app}-{env}-{region}-{nn}"})
+        self.assertEqual((naming.counts(own, "public_ip_address"), naming.counts(own, "resource_group")), (True, False))
+
     def test_types_without_dashes_or_upper_case(self):
         n = acme()
         self.assertEqual(naming.render(n, "storage_account", app="pay", env="prod", region="norwayeast"), "stacmepaypdnwe01")

@@ -188,9 +188,26 @@ def short(where: str, token: str, value: object, problems: list[str]) -> bool:
     return False
 
 
-def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpose: str | None = None, nn: int = 1) -> str:
+def template_of(naming: Naming, kind: str) -> list[tuple[str, str]]:
+    """The template a type's names come from: its own under naming.templates, else the customer's."""
+    return naming.templates.get(kind) or naming.template
+
+
+def counts(naming: Naming, kind: str) -> bool:
+    """Whether a type's names tell mlz-core's own resources of the type apart by number: its template has {nn} and no
+    {purpose} (docs/naming.md, without {purpose})."""
+    parts = template_of(naming, kind)
+    return ("token", "purpose") not in parts and ("token", "nn") in parts
+
+
+def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpose: str | None = None, nn: int = 1,
+           number: int = 1) -> str:
     """The name of one resource of type `kind`, or a ConfigError saying which rule it breaks and how to fix it.
-    env is the environment's long name (prod), region Azure's (norwayeast); both are turned into short codes."""
+    env is the environment's long name (prod), region Azure's (norwayeast); both are turned into short codes. number is
+    the resource's place among mlz-core's own of its type where it is (names.py's and vending.py's tables): it is the
+    {nn} of a template without {purpose}, which then tells them apart. With {purpose}, {nn} is nn, as it always was."""
+    if counts(naming, kind):
+        nn = number
     problems: list[str] = []
     rules = rules_for(kind)
     short("app", "app", app, problems)
@@ -207,7 +224,7 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
     purpose = (purpose or "") if rules["dashes"] else (purpose or "").replace("-", "")
     values = {"type": rules["slug"], "org": naming.org, "app": app, "purpose": purpose, "env": naming.environments[env],
               "region": naming.regions[region], "nn": f"{nn:02d}"}
-    parts = list(naming.templates.get(kind) or naming.template)
+    parts = list(template_of(naming, kind))
     # An empty optional token goes, with the dash before it, or the one after it when it comes first.
     for index in reversed([i for i, (k, v) in enumerate(parts) if k == "token" and v in OPTIONAL and not values[v]]):
         if index > 0 and parts[index - 1][0] == "dash":
@@ -243,11 +260,12 @@ def repository_name(naming: Naming, workload: str, env: str) -> str:
     return name
 
 
-def platform_name(naming: Naming, part: str, kind: str, region: str, purpose: str | None = None) -> str:
-    """The name of one of the platform's resources: its part (PLATFORM) is the app, its environment prod."""
+def platform_name(naming: Naming, part: str, kind: str, region: str, purpose: str | None = None, number: int = 1) -> str:
+    """The name of one of the platform's resources: its part (PLATFORM) is the app, its environment prod. number: its
+    place among the part's own of its type (names.py), for a template without {purpose}."""
     if part not in PLATFORM:
         raise ConfigError(f"{part!r} is not a part of the platform; use {', '.join(PLATFORM)}.")
-    return render(naming, kind, app=naming.platform[part], env=PLATFORM_ENVIRONMENT, region=region, purpose=purpose)
+    return render(naming, kind, app=naming.platform[part], env=PLATFORM_ENVIRONMENT, region=region, purpose=purpose, number=number)
 
 
 def check(kind: str, name: str) -> str:

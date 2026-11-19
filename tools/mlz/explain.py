@@ -143,6 +143,10 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         recorded = vending.flat(everything.get(key, {}))
         names, given = landing_zone_names(key, lz, entry, governance, everything, [])  # problems() reports what stops one
         fresh = vending.flat(landing_zone_names(key, lz, entry, governance, {}, [])[1])  # the template's, nothing kept
+        try:
+            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+        except ConfigError:
+            settings = None  # problems() reports it
         for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k in (vending.REPOSITORY, vending.SUBSCRIPTION, "network_security_groups")}).items():
             if not value:
                 continue
@@ -151,12 +155,31 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 source = f"names: in {file_of(repo, lz['where'])}"
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
-                if fresh.get(item) not in (None, value):
+                # A counted NSG keeps the number it was first given, which a fresh count need not repeat.
+                if fresh.get(item) not in (None, value) and not number_origin(item, settings).startswith("; NSG"):
                     source += f"; the template now gives {fresh[item]} (./mlz names --repo . --renew {key})"
+                source += number_origin(item, settings)
             else:
-                source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request"
+                source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request" + number_origin(item, settings)
             worked.append((label, value, source))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
+
+
+def number_origin(item: str, settings: naming.Naming | None) -> str:
+    """Why a name has its {nn}, where its type's template has no {purpose} and mlz-core numbers its own (docs/naming.md,
+    without {purpose}); "" otherwise."""
+    if settings is None:
+        return ""
+    if item.startswith("network_security_groups."):
+        if not naming.counts(settings, "network_security_group"):
+            return ""
+        return "; NSGs are numbered: the lowest number no NSG of the landing zone held when it was first named"
+    if item not in vending.NUMBERS or not naming.counts(settings, vending.NAMED[item][0]):
+        return ""
+    kind = vending.NAMED[item][0]
+    alike = [other for other in vending.NUMBERS if vending.NAMED[other][0] == kind]
+    plural = {"resource_group": "resource groups", "user_assigned_identity": "identities"}.get(kind, f"{kind.replace('_', ' ')}s")
+    return f"; number {vending.NUMBERS[item]:02d} of the landing zone's {plural} ({', '.join(alike)})"
 
 
 def landing_zone_names(key: str, lz: dict, entry: dict, governance: dict, recorded_names: dict, found: list[str]) -> tuple[dict, dict]:
