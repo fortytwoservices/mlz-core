@@ -6,7 +6,6 @@ GITHUB_RUN_ID; reads .mlz/summary-<stack>.md and writes .mlz/comment-<stack>.md.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -14,8 +13,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
 
 from ci.gh import ConfigError, Pipeline, env, work  # noqa: E402
+from ci.run_mlz import mlz  # noqa: E402
 
-TOOLS = str(Path(__file__).resolve().parents[1])
 BOT = "github-actions[bot]"  # the run's token posts as this: never a comment someone else wrote with the marker
 
 
@@ -27,8 +26,7 @@ def settings(role: str, stack: str) -> str:
     """The stack's settings difference against the base branch, or a line saying why there is none; its own failure
     leaves the plan to be posted without it."""
     # Only stdout is read: mlz diff's own message about a failure stays in the log, which the line below points to.
-    found = subprocess.run([sys.executable, "-m", "mlz", "diff", "--role", role, "--stack", stack], stdout=subprocess.PIPE, text=True,
-                           env={**os.environ, "PYTHONPATH": TOOLS})
+    found = subprocess.run(mlz("diff", "--role", role, "--stack", stack), stdout=subprocess.PIPE, text=True)
     return found.stdout.rstrip("\n") if found.returncode == 0 else "(The settings' difference could not be worked out; the run's log says why.)"
 
 

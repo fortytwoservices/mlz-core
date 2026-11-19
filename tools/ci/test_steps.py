@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from ci import apply_guard, changed, code_owners, comment, stale_comments
+from ci import apply_guard, changed, code_owners, comment, run_mlz, stale_comments
 
 RUN = "https://github.com/acme/mlz-vending/actions/runs/7"
 
@@ -81,7 +81,7 @@ class CommentTest(Case):
             self.assertEqual(comment.settings("vending", "pay-prod"), "(The settings' difference could not be worked out; the run's log says why.)")
         with mock.patch.object(comment.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="| a |\n\n")) as run:
             self.assertEqual(comment.settings("vending", "pay-prod"), "| a |")  # as bash's $(...) kept it
-        self.assertEqual(run.call_args.args[0][1:], ["-m", "mlz", "diff", "--role", "vending", "--stack", "pay-prod"])
+        self.assertEqual(run.call_args.args[0], run_mlz.mlz("diff", "--role", "vending", "--stack", "pay-prod"))  # mlz-core's own mlz
         self.assertNotIn("capture_output", run.call_args.kwargs)  # its message about a failure stays in the log
         self.assertNotIn("stderr", run.call_args.kwargs)
 
@@ -144,7 +144,7 @@ class CodeOwnersTest(Case):
                                                     "Push the branch to acme/mlz-vending and open the pull request from there.")
 
     def test_the_new_teams_mode_and_a_pull_request_s_base(self):
-        self.assertEqual(self.command()[3:], ["owners", "--repo", "acme/mlz-vending", "--ref", "sha"])
+        self.assertEqual(self.command(), run_mlz.mlz("owners", "--repo", "acme/mlz-vending", "--ref", "sha"))  # mlz-core's own mlz
         self.assertEqual(self.command(NEW_TEAMS="grant")[-2:], ["--new-teams", "grant"])
         self.assertEqual(self.command(GITHUB_EVENT_NAME="pull_request", HEAD_REPO="acme/mlz-vending", NEW_TEAMS="note", BASE="b")[-4:],
                          ["--new-teams", "note", "--base", "b"])
