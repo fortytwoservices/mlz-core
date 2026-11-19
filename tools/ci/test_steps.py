@@ -121,9 +121,9 @@ class Pulls:
         self.comments.append((repo, number, body))
 
 
-def pull(number, ref="feature", kind="User", sha="sha1", title="feat: a hub", repo="acme/mlz-platform"):
+def pull(number, ref="feature", kind="User", sha="sha1", title="feat: a hub", repo="acme/mlz-platform", base="main"):
     return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind},
-            "head": {"ref": ref, "repo": {"full_name": repo}}, "title": title}
+            "head": {"ref": ref, "repo": {"full_name": repo}}, "base": {"ref": base}, "title": title}
 
 
 class ChangedTest(Case):
@@ -208,6 +208,14 @@ class ChangedTest(Case):
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(8, title="chore: vending contract update")]))
         self.assertIn("It was started by #8, merged: chore: vending contract update.", summary)
         self.assertEqual([number for _, number, _ in self.github.comments], [8])
+
+    def test_a_pull_request_merged_into_another_branch_started_nothing_here(self):
+        # Merged into release, its merge commit then pushed onto main: a push, not that pull request's merge into main.
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(11, base="release")]),
+                                      message="fix: on release")
+        self.assertIn("It was started by a push to main: fix: on release.", summary)
+        self.assertEqual(self.github.comments, [])
 
     def test_a_push_without_a_pull_request(self):
         self.changes()
@@ -306,7 +314,8 @@ class ApplyGuardTest(Case):
     def test_a_state_another_run_changed_refuses(self):
         self.assertEqual(apply_guard.state("pay-prod", "4:lineage", say=self.said.append), apply_guard.GO)
         self.assertEqual(apply_guard.state("pay-prod", "5:lineage", say=self.said.append), apply_guard.REFUSE)
-        self.assertEqual(self.said, ["::error::pay-prod's state changed after this plan was reviewed (it was at 4:lineage, it is at 5:lineage): another "
+        self.assertEqual(self.said, ["The state is the one the reviewed plan started from: 4:lineage.",  # a pass is logged too (finding 19)
+                                     "::error::pay-prod's state changed after this plan was reviewed (it was at 4:lineage, it is at 5:lineage): another "
                                      "run applied it. Nothing is applied. Start a new run on main for a fresh plan (gh workflow run mlz.yml --ref main)."])
         self.assertEqual(apply_guard.state("pay-dev", "none", say=self.said.append), apply_guard.REFUSE)  # not recorded is no match
         self.assertIn("(it was at not recorded, it is at none)", self.said[-1])

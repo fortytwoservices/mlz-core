@@ -43,9 +43,10 @@ def changes(stack: str) -> bool:
 
 
 def merged_pull(github: Pipeline, repo: str, sha: str) -> dict | None:
-    """The pull request whose merge made this commit on main, or None for a push without one."""
+    """The pull request whose merge made this commit on main, or None for a push without one. Merged into main: one merged
+    into another branch, whose merge commit was then pushed onto main, did not start this run."""
     return next((pull for pull in github.commit_pulls(repo, sha, timeout=DEADLINE)
-                 if pull.get("merged_at") and pull.get("merge_commit_sha") == sha), None)
+                 if pull.get("merged_at") and pull.get("merge_commit_sha") == sha and (pull.get("base") or {}).get("ref") == "main"), None)
 
 
 def head_title() -> str:
@@ -128,4 +129,5 @@ def main(github: Pipeline | None = None, say=print) -> None:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     main()
