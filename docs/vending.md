@@ -345,10 +345,11 @@ changes in Azure.
   another before it merges.
 - The ruleset `main-checks`: the pipeline's plan, `workload / plan`, must pass on a branch up to date with `main`
   before any merge into `main`.
-- **Nobody but the MLZ App may bypass the check**, and the App only for its own commits of `mlz.auto.tfvars.json` and
-  `.github/CODEOWNERS`, so that a landing zone's values keep reaching the repo without a person. The run on `main`
-  that such a commit starts still plans, and still waits for the team in `apply`. The App's key is only in the vending
-  repo, behind its `pipeline-files` rule (`docs/pipelines.md`).
+- **Nobody but the MLZ App may bypass the check**, which vending uses only for its own commits of
+  `mlz.auto.tfvars.json` and `.github/CODEOWNERS`, so that a landing zone's values keep reaching the repo without a
+  person. The run on `main` that such a commit starts still plans, and still waits for the team in `apply`. The App's
+  key is a secret of the three role repos (governance, platform and vending), each behind its `pipeline-files` rule
+  (`docs/pipelines.md`): whoever may change their pipelines can reach it, and so a workload repo's `main`.
 - The bypass team, `bootstrap.yaml`'s `github.bypass_team`, may merge a pull request without the code owner's
   approval, and only a pull request. It reaches vending through governance's contract (`github.bypass_team` in
   `_generated/governance.yaml`), and vending gives it write access to each repo, without which its bypass is no use.
