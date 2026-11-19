@@ -26,9 +26,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # tools/: 
 
 from ci.gh import Pipeline  # noqa: E402
 
-# A contract pull request (publish.py): its branch, and its commit's first line, which a squash merge keeps.
-CONTRACT_BRANCH = re.compile(r"^mlz/(governance|platform|vending)-contract$")
-CONTRACT_TITLE = re.compile(r"^chore: (governance|platform|vending) contract\b")
+# A contract pull request: its branch, and its title, which its commit's first line repeats (publish.py, and mlz install
+# publish for the bootstrap's, opened with an engineer's own login).
+CONTRACT_BRANCH = re.compile(r"^mlz/(bootstrap|governance|platform|vending)-contract$")
+CONTRACT_TITLE = re.compile(r"^chore: (bootstrap|governance|platform|vending) contract\b")
+# Each call to GitHub, well inside the job's five minutes: a stalled one is a notice, never a skipped apply.
+DEADLINE = 30
+QUEUE = "Every later run on main queues behind this one until it finishes: applied, or rejected."
 
 
 def changes(stack: str) -> bool:
@@ -39,13 +43,16 @@ def changes(stack: str) -> bool:
 
 def merged_pull(github: Pipeline, repo: str, sha: str) -> dict | None:
     """The pull request whose merge made this commit on main, or None for a push without one."""
-    return next((pull for pull in github.commit_pulls(repo, sha) if pull.get("merged_at") and pull.get("merge_commit_sha") == sha), None)
+    return next((pull for pull in github.commit_pulls(repo, sha, timeout=DEADLINE)
+                 if pull.get("merged_at") and pull.get("merge_commit_sha") == sha), None)
 
 
 def started_by(event: str, title: str, actor: str, pull: dict | None) -> str:
-    """What started the run, in words."""
+    """What started the run, in words: the merged pull request's own title where there is one (a merge commit's subject
+    is "Merge pull request #...", a rebase's its last commit's), else the head commit's."""
     if event != "push":
         return f"a manual run by {actor}"
+    title = (pull or {}).get("title") or title
     contract = CONTRACT_BRANCH.match((pull or {}).get("head", {}).get("ref", "")) or CONTRACT_TITLE.match(title)
     if contract:
         return f"{contract.group(1)}'s contract, merged by itself" + (f" (#{pull['number']})" if pull else "")
@@ -66,14 +73,14 @@ def waiting(role: str, stacks: list[str], github: Pipeline | None = None, say=pr
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
         out.write(f"\n### Waiting for approval\n\nThis run applies {', '.join(stacks)} once it is approved in the `{role}` environment, by one "
                   f"of its required reviewers. It was started by {started_by(event, title, os.environ.get('GITHUB_ACTOR', ''), pull)}. "
-                  "Every later run on main queues behind this one until it is approved or rejected.\n")
+                  f"{QUEUE}\n")
     person = pull is not None and pull.get("user", {}).get("type") == "User" and not CONTRACT_BRANCH.match(pull.get("head", {}).get("ref", ""))
     if not person or os.environ.get("GITHUB_RUN_ATTEMPT", "1") != "1":
         return
     try:
         (github or Pipeline()).comment(os.environ["GITHUB_REPOSITORY"], pull["number"], (
             f"This merge's run waits for approval in the `{role}` environment before it applies {', '.join(stacks)}: "
-            f"{os.environ.get('RUN_URL', '')}\n\nEvery later run on main queues behind it until it is approved or rejected."))
+            f"{os.environ.get('RUN_URL', '')}\n\n{QUEUE}"), timeout=DEADLINE)
     except Exception as error:  # noqa: BLE001
         say(f"::notice::Could not comment on #{pull['number']} ({error}); the run's page says why it waits.")
 

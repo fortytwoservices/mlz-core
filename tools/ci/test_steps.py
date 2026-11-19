@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,22 +103,27 @@ class Pulls:
     """GitHub as changed.py asks it: the pull requests of a commit (pulls, or an error to raise), and the comments."""
 
     def __init__(self, pulls=(), fails: str = ""):
-        self.pulls, self.fails, self.calls, self.comments = list(pulls), fails, [], []
+        self.pulls, self.fails, self.calls, self.comments, self.timeouts = list(pulls), fails, [], [], []
 
-    def commit_pulls(self, repo, sha):
+    def commit_pulls(self, repo, sha, timeout=None):
         self.calls.append(("commit_pulls", repo, sha))
+        self.timeouts.append(timeout)
         if self.fails == "pulls":
             raise RuntimeError("HTTP 502")
+        if self.fails == "stalls":
+            raise subprocess.TimeoutExpired(["gh", "api"], timeout)
         return self.pulls
 
-    def comment(self, repo, number, body):
+    def comment(self, repo, number, body, timeout=None):
+        self.timeouts.append(timeout)
         if self.fails == "comment":
             raise RuntimeError("HTTP 403")
         self.comments.append((repo, number, body))
 
 
-def pull(number, ref="feature", kind="User", sha="sha1"):
-    return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind}, "head": {"ref": ref}}
+def pull(number, ref="feature", kind="User", sha="sha1", title="feat: a hub"):
+    return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind}, "head": {"ref": ref},
+            "title": title}
 
 
 class ChangedTest(Case):
@@ -164,12 +170,19 @@ class ChangedTest(Case):
         self.changes()
         _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(6, sha="other"), pull(7)]))
         self.assertIn("### Waiting for approval\n\nThis run applies connectivity once it is approved in the `platform` environment, by one of its "
-                      "required reviewers. It was started by #7, merged: feat: a hub (#7). Every later run on main queues behind this one until "
-                      "it is approved or rejected.", summary)
+                      "required reviewers. It was started by #7, merged: feat: a hub. Every later run on main queues behind this one until "
+                      "it finishes: applied, or rejected.", summary)
         self.assertEqual(self.github.calls, [("commit_pulls", "acme/mlz-platform", "sha1")])
         self.assertEqual(self.github.comments, [("acme/mlz-platform", 7, "This merge's run waits for approval in the `platform` environment before it "
-                                                 "applies connectivity: https://example/run/9\n\nEvery later run on main queues behind it until it "
-                                                 "is approved or rejected.")])
+                                                 "applies connectivity: https://example/run/9\n\nEvery later run on main queues behind this one "
+                                                 "until it finishes: applied, or rejected.")])
+        self.assertEqual(self.github.timeouts, [changed.DEADLINE, changed.DEADLINE])  # never the job's whole five minutes
+
+    def test_the_pull_request_s_own_title_not_a_merge_commit_s(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7, title="feat: a second hub")]),
+                                      HEAD_TITLE="Merge pull request #7 from acme/second-hub")
+        self.assertIn("It was started by #7, merged: feat: a second hub.", summary)
 
     def test_a_contract_merge_says_whose_contract_and_comments_nowhere(self):
         self.changes()
@@ -179,6 +192,11 @@ class ChangedTest(Case):
         self.assertEqual(self.github.comments, [])
         # Any other pull request an app opened gets no comment either.
         self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(15, kind="Bot")]))
+        self.assertEqual(self.github.comments, [])
+        # The bootstrap's contract, which mlz install publish opens with an engineer's own login: a contract all the same.
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push",
+                                      github=Pulls([pull(3, ref="mlz/bootstrap-contract", title="chore: bootstrap contract")]))
+        self.assertIn("It was started by bootstrap's contract, merged by itself (#3).", summary)
         self.assertEqual(self.github.comments, [])
 
     def test_a_push_without_a_pull_request(self):
@@ -209,6 +227,10 @@ class ChangedTest(Case):
         self.assertTrue(out.startswith('stacks=["connectivity"]\n'))
         self.assertIn("It was started by a push to main: feat: a hub (#7).", summary)
         self.assertEqual(self.said, ["::notice::The pull request this push merged could not be found (HTTP 502); the run's page says why it waits."])
+        # Stalled past its deadline: the same, well inside the job's own timeout.
+        out, _ = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7)], fails="stalls"))
+        self.assertTrue(out.startswith('stacks=["connectivity"]\n'))
+        self.assertTrue(self.said[0].startswith("::notice::The pull request this push merged could not be found (Command '['gh', 'api']' timed out after 30 seconds)"))
         self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7)], fails="comment"))
         self.assertEqual(self.said, ["::notice::Could not comment on #7 (HTTP 403); the run's page says why it waits."])
 
