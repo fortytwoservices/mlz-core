@@ -17,9 +17,9 @@
     python3 -m mlz map      --repo <a customer repo>                 each settings file's stack, root and modules
     python3 -m mlz reference --out docs/reference                    who owns each module input, a page per root
     python3 -m mlz inputs   --refresh | --check                      the modules' inputs at their pins (tools/mlz/inputs.py)
-    python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.sh
+    python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.py
     python3 -m mlz batches  --stacks <json> [--daily]               the plan jobs for a run, as JSON (role.yml)
-    python3 -m mlz diff     --role <role> --stack <stack>            a stack's settings against the base branch's (comment.sh)
+    python3 -m mlz diff     --role <role> --stack <stack>            a stack's settings against the base branch's (tools/ci/comment.py)
 
 A role reads the contracts it needs from its repo's `_generated/` (governance.yaml, platform.yaml);
 --governance and --platform point elsewhere. The configs a Terraform root reads are JSON, written for
@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     ck = roles.add_parser("check", help="every check the repo's pipeline makes before it plans, and the stacks it would plan")
     ck.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
     ck.add_argument("--out", type=Path, help="where to write the configs the roots read (default: a temporary folder; CI: .mlz)")
-    ck.add_argument("--json", action="store_true", help="print only the stacks, as JSON (tools/ci/check.sh)")
+    ck.add_argument("--json", action="store_true", help="print only the stacks, as JSON (tools/ci/check.py)")
     ck.add_argument("--github-meta", type=Path, help="platform: a saved copy of api.github.com/meta for the firewall step, read instead of fetching it")
     gv = roles.add_parser("governance", help="customer.yaml, merged with Fortytwo's defaults and checked, into the governance root's library and config")
     gv.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
@@ -129,18 +129,18 @@ def main(argv: list[str] | None = None) -> int:
     mode = ip.add_mutually_exclusive_group(required=True)
     mode.add_argument("--refresh", action="store_true", help="download each root's modules (terraform get) and write the snapshot")
     mode.add_argument("--check", action="store_true", help="fail when the snapshot is not what --refresh would write (CI)")
-    st = roles.add_parser("stacks", help="of the stacks given, those whose rendered config differs from the base's (tools/ci/check.sh)")
+    st = roles.add_parser("stacks", help="of the stacks given, those whose rendered config differs from the base's (tools/ci/check.py)")
     st.add_argument("--role", dest="stack_role", required=True, choices=["governance", "platform", "vending"])
-    st.add_argument("--stacks", required=True, help="every stack, as JSON, as check.sh found them")
-    st.add_argument("--base", type=Path, required=True, help="the base commit's copy of the repo, checked by check.sh")
+    st.add_argument("--stacks", required=True, help="every stack, as JSON, as check.py found them")
+    st.add_argument("--base", type=Path, required=True, help="the base commit's copy of the repo, checked by check.py")
     st.add_argument("--repo", type=Path, default=Path("."), help="this commit's repo, checked (default: here)")
     bt = roles.add_parser("batches", help="the plan jobs for a run: one stack each, or groups of stacks (tools/mlz/stacks.py)")
     bt.add_argument("--stacks", required=True, help="the stacks the run plans, as JSON")
     bt.add_argument("--daily", action="store_true", help="the daily check, which plans in groups")
-    df = roles.add_parser("diff", help="a stack's settings that differ from the base branch's, for its plan comment (tools/ci/comment.sh)")
+    df = roles.add_parser("diff", help="a stack's settings that differ from the base branch's, for its plan comment (tools/ci/comment.py)")
     df.add_argument("--role", dest="stack_role", required=True, choices=["governance", "platform", "vending"])
     df.add_argument("--stack", required=True, help="the stack, as the pipeline names it")
-    df.add_argument("--repo", type=Path, default=Path("."), help="the repo, after check.sh (default: here)")
+    df.add_argument("--repo", type=Path, default=Path("."), help="the repo, after check.py (default: here)")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -409,8 +409,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def check(repo: Path, out: Path | None, as_json: bool, github_meta: Path | None = None) -> int:
-    """Every check the repo's pipeline makes before it plans (tools/ci/check.sh calls this), with the configs the roots
-    read written to out, and the stacks a run would plan: all of them, as on the daily check (check.sh then keeps those
+    """Every check the repo's pipeline makes before it plans (tools/ci/check.py calls this), with the configs the roots
+    read written to out, and the stacks a run would plan: all of them, as on the daily check (check.py then keeps those
     a change touches). The role is the one the repo's workflow names."""
     with tempfile.TemporaryDirectory() as scratch:
         found = every_stack(repo, out or Path(scratch), github_meta)

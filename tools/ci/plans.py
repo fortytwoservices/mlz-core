@@ -1,6 +1,6 @@
 """plans.py <role> <stack> [<stack> ...]: plans a group of stacks one after the other, in one job (tools/mlz/stacks.py's
 batches), so a hundred landing zones hold a runner for a few jobs instead of queueing a hundred. For each stack, as one
-job per stack did before: the plan (plan.sh), its summary on the run page, its plan comment on a pull request
+job per stack did before: the plan (plan.py), its summary on the run page, its plan comment on a pull request
 (comment.py), and on the daily check its status for drift.py (.mlz/status-<stack>.txt: the plan's exit code, or none
 when the job stopped before planning it). Exits 1 when any plan failed or was refused, or the daily check found drift;
 every stack is planned either way. Needs GITHUB_EVENT_NAME, and on a pull request what comment.py needs.
@@ -15,12 +15,12 @@ from pathlib import Path
 
 
 def plan(role: str, stacks: list[str], say=print) -> int:
-    core, work = Path.cwd() / ".mlz-core", Path.cwd() / ".mlz"  # tools/ci/lib.sh's CORE and WORK
+    core, work = Path.cwd() / ".mlz-core", Path.cwd() / ".mlz"  # mlz-core's checkout, and what the run works out
     event = os.environ.get("GITHUB_EVENT_NAME", "")
     failed = []
     for stack in stacks:
-        status = subprocess.run([str(core / "tools/ci/plan.sh"), role, stack]).returncode
-        # plan.sh's own codes are 0, 2 and 3, each with a summary. Anything else, or one without its summary, stopped early
+        status = subprocess.run([sys.executable, str(core / "tools/ci/plan.py"), role, stack]).returncode
+        # plan.py's own codes are 0, 2 and 3, each with a summary. Anything else, or one without its summary, stopped early
         # (a failed sign-in, say): a failed plan, never drift, and never a reason to skip the stacks after it.
         summary = work / f"summary-{stack}.md"
         if status not in (0, 2, 3) or not summary.is_file():

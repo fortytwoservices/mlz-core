@@ -49,7 +49,7 @@ from . import contract, mirror, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, matches, pin_of, push_refused, version
+from .upgrade import EXECUTABLE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -476,26 +476,53 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
     return found
 
 
+# Paths under .github/ a guard must refuse: the two files the installer writes, and names nobody would list one by one,
+# so that a rule naming only some files, or with an exception there, is no guard of the whole folder.
+PIPELINE_PROBES = (WORKFLOW, owners.PATH, ".github/workflows/zz-mlz-probe.yml", ".github/zz-mlz-probe", ".github/actions/zz-mlz-probe/action.yml")
+
+
 def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str], None]) -> list[str]:
-    """Whether an active push ruleset refuses changes under .github/ on every branch, with the bypass team as one that
-    may bypass it (finding 17)."""
+    """Whether the active push rulesets refuse every change under .github/ (finding 17), and let the bypass team, and
+    nobody else, through each of them: GitHub applies them all, so one the team may not bypass refuses its upgrade."""
     try:
         org, team = bypass_team(bootstrap)
         admins = found_bypass_team(github, bootstrap)
+        platform = github.team(*platform_team(bootstrap))
     except ConfigError as error:
         return [str(error)]
-    probes = (WORKFLOW, owners.PATH)  # a file .github/ holds, and one at its top
     guards = [r for r in github.rulesets(repo) if r.get("target") == "push" and r.get("enforcement") == "active"
-              and all(any(matches(p, probe) for rule in r.get("rules") or [] if rule.get("type") == "file_path_restriction"
-                          for p in (rule.get("parameters") or {}).get("restricted_file_paths") or []) for probe in probes)]
-    if not guards:
-        return [f"{repo}: no active push ruleset refuses changes under .github/, so a pull request's own run can reach the MLZ App's "
-                f"key and the plan identity; mlz install repos makes the ruleset {PUSH_RULESET} (docs/pipelines.md)."]
-    if not any(actor.get("actor_type") == "Team" and actor.get("actor_id") == admins["id"] for r in guards for actor in r.get("bypass_actors") or []):
-        return [f"{repo}: its ruleset {guards[0]['name']} refuses changes under .github/, but {org}/{team} (bootstrap.yaml's "
-                "github.bypass_team) may not bypass it, so nobody can run mlz upgrade; add the team as a bypass actor (Settings, Rules, Rulesets)."]
-    out(f"{repo}: changes under .github/ are refused on every branch, but from {org}/{team} (ruleset {guards[0]['name']})")
-    return []
+              and any(restricts(r, probe) for probe in PIPELINE_PROBES)]
+    open_paths = [probe for probe in PIPELINE_PROBES if not any(restricts(r, probe) for r in guards)]
+    if open_paths:
+        which = "changes" if not guards else f"every change (not {', '.join(open_paths)})"
+        return [f"{repo}: no active push ruleset refuses {which} under .github/, so a pull request's own run can reach the MLZ App's key and "
+                f"the plan identity; mlz install repos makes the ruleset {PUSH_RULESET}, restricting {PIPELINE_FILES} (docs/pipelines.md)."]
+    found = []
+    for ruleset in guards:
+        actors = ruleset.get("bypass_actors") or []
+        if not any(a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"] and a.get("bypass_mode") in ("always", "exempt", None) for a in actors):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under .github/, and {org}/{team} (bootstrap.yaml's "
+                         "github.bypass_team) may not bypass it, so nobody can run mlz upgrade; add the team as a bypass actor (Settings, Rules, Rulesets).")
+        others = [describe_actor(a, platform) for a in actors if not (a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"])]
+        if others:
+            found.append(f"{repo}: its ruleset {ruleset['name']} also lets {', '.join(others)} change .github/, and so reach the MLZ App's key; "
+                         f"only {org}/{team} should (Settings, Rules, Rulesets).")
+    if not found:
+        out(f"{repo}: changes under .github/ are refused on every branch, but from {org}/{team} "
+            f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
+    return found
+
+
+def describe_actor(actor: dict, platform_team: dict | None) -> str:
+    """A ruleset's bypass actor, as a person reads it."""
+    kind, actor_id = actor.get("actor_type"), actor.get("actor_id")
+    if kind == "Team":
+        return "the platform team" if platform_team and actor_id == platform_team.get("id") else f"the team with ID {actor_id}"
+    if kind == "RepositoryRole":
+        # 5 is Admin (abc's main ruleset, 19 November); the other IDs are not checked, so they are named by ID.
+        return "the repository's admins" if actor_id == 5 else f"the repository role with ID {actor_id}"
+    return {"OrganizationAdmin": "the organization's owners", "DeployKey": "deploy keys", "Integration": f"the App with ID {actor_id}",
+            "User": f"the user with ID {actor_id}"}.get(kind, f"{kind} {actor_id}")
 
 
 def required_check_problems(github, role: str, repo: str, out: Callable[[str], None]) -> list[str]:

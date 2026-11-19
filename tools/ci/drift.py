@@ -1,7 +1,7 @@
 """drift.py: after the daily check's plans, one issue in the repo says what is not as main says. It is opened, or
 commented on, while the check fails or any stack's plan differs from main or did not finish, and closed by the first
 daily check that finds every stack as main says. Reads CHECK (the check job's result) and, after a check that passed,
-.mlz/status-<stack>.txt (plan.sh's exit status, from each plan job) for the stacks in STACKS (JSON, from check); a stack
+.mlz/status-<stack>.txt (plan.py's exit status, from each plan job) for the stacks in STACKS (JSON, from check); a stack
 without one never got to plan. Needs GH_TOKEN with issues: write, GH_REPO, RUN_URL and ROLE.
 
 The issue is read and written with gh's own issue commands, as drift.sh did.
