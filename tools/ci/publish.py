@@ -35,7 +35,8 @@ def state_contract(role: str) -> dict | None:
     plan identity may only read the state. None when there is no state at all; a state without the output fails."""
     key = state_key(role)
     blob = ["--auth-mode", "login", "--account-name", env("TFSTATE_STORAGE_ACCOUNT"), "--container-name", env("TFSTATE_CONTAINER"), "--name", key]
-    exists = subprocess.run(["az", "storage", "blob", "exists", *blob, "--query", "exists", "-o", "tsv"], capture_output=True, text=True, check=True)
+    # Only stdout is read: the Azure CLI's own message about a failure stays in the log, as it did in bash.
+    exists = subprocess.run(["az", "storage", "blob", "exists", *blob, "--query", "exists", "-o", "tsv"], stdout=subprocess.PIPE, text=True, check=True)
     if exists.stdout.strip() != "true":
         return None
     copy = work() / "state" / key
