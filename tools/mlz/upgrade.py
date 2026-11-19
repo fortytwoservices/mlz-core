@@ -28,6 +28,9 @@ from .merge import ConfigError
 
 WORKFLOW = ".github/workflows/mlz.yml"
 WRAPPER = "mlz"  # ./mlz, which runs mlz-core's command line at the release the workflow calls
+# Where a pull request could change what its own run does (finding 17): every role repo's push ruleset refuses changes
+# here but from bootstrap.yaml's github.bypass_team (tools/mlz/install.py, push_ruleset).
+PIPELINE_FILES = ".github/**/*"
 # The files in a customer repo that belong to mlz-core, which an upgrade replaces with the target release's
 # starter: the workflow, the editor settings pointing at that release's schemas, and ./mlz. A release from before
 # the editor settings, or before ./mlz, does not have them, so going back to one removes them.
@@ -62,6 +65,52 @@ def role_of(workflow: str) -> str:
     if not match:
         raise ConfigError(f"{WORKFLOW} names no role (governance, platform or vending).")
     return match["role"]
+
+
+def matches(pattern: str, path: str) -> bool:
+    """Whether a push rule's path pattern takes the whole path, in GitHub's fnmatch (Ruby's File.fnmatch with
+    File::FNM_PATHNAME): **/ spans any number of folders, none included; a ** without its slash is only a *, as Ruby's
+    docs say, so .github/** takes .github/CODEOWNERS but not .github/workflows/mlz.yml. * and ? stay within one folder,
+    [set] is one character of the set, ranges included. GitHub takes no backslash quoting, no complemented set and no braces (its docs, "Unsupported fnmatch
+    syntax"), so those stay literal here too."""
+    regex = ""
+    i = 0
+    while i < len(pattern):
+        close = pattern.find("]", i + 2) if pattern[i] == "[" else -1
+        if pattern.startswith("**/", i):
+            regex, i = regex + "(?:.*/)?", i + 3
+        elif pattern.startswith("**", i):
+            regex, i = regex + "[^/]*", i + 2
+        elif close != -1:
+            regex, i = regex + "[" + re.sub(r"([\\\]\[^])", r"\\\1", pattern[i + 1:close]) + "]", close + 1
+        else:
+            regex += {"*": "[^/]*", "?": "[^/]"}.get(pattern[i], re.escape(pattern[i]))
+            i += 1
+    return re.fullmatch(regex, path) is not None
+
+
+def restricts(ruleset: dict, path: str) -> bool:
+    """Whether the ruleset's file path rules refuse a change to the path: a restricted pattern takes it, and none of
+    that rule's allowed exceptions (ignored_file_paths) does."""
+    for rule in ruleset.get("rules") or []:
+        parameters = rule.get("parameters") or {}
+        if rule.get("type") == "file_path_restriction" and any(matches(p, path) for p in parameters.get("restricted_file_paths") or []) \
+                and not any(matches(p, path) for p in parameters.get("ignored_file_paths") or []):
+            return True
+    return False
+
+
+def push_refused(github, repo: str, paths: list[str]) -> str | None:
+    """Why a commit of these paths would be refused for whoever is signed in, before it is tried; None when nothing
+    refuses it. An active push ruleset restricting one of them refuses it, unless they may bypass it."""
+    for ruleset in github.rulesets(repo):
+        if ruleset.get("target") != "push" or ruleset.get("enforcement") != "active" or ruleset.get("current_user_can_bypass") in ("always", "exempt"):
+            continue
+        refused = [path for path in sorted(paths) if restricts(ruleset, path)]
+        if refused:
+            return (f"{repo}: its ruleset {ruleset['name']} refuses changes to {', '.join(refused)} from you. Only its bypass team "
+                    f"(bootstrap.yaml's github.bypass_team) may change them: ask one of its members to run this, or join it (docs/pipelines.md).")
+    return None
 
 
 def releases_between(releases: dict[str, str], current: str, target: str) -> list[str]:
@@ -229,6 +278,11 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             out("".join(difflib.unified_diff((before[path] or "").splitlines(True), (after or "").splitlines(True), f"a/{path}", f"b/{path}")))
         out(body)
         return None
+    # Before anything is pushed: a push ruleset that refuses the files would refuse the commit after the copy and the
+    # branch were made, with GitHub's bare 422.
+    refused = push_refused(github, repo, list(changes) + executable)
+    if refused:
+        raise ConfigError(refused)
     if core != mirror.UPSTREAM:
         mirror.push_release(github, core, target, out)
     admit_release(github, repo.split("/")[0], core, target, out, told)

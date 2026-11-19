@@ -40,7 +40,7 @@ def editor(role: str, path: str, tag: str) -> str:
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
                  editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False,
-                 wrapper_from: str | None = None):
+                 wrapper_from: str | None = None, push_rulesets: list | None = None):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -57,6 +57,7 @@ class FakeGitHub:
         self._open_pull = open_pull
         self.writes: list[tuple] = []
         self.group, self.refuse_groups = group, refuse_groups  # the self-hosted runners' group, if any
+        self.push_rulesets = push_rulesets or []  # the repo's rulesets, as GitHub answers for the person signed in
 
     def runner_group(self, org, name):
         if self.refuse_groups:
@@ -68,6 +69,9 @@ class FakeGitHub:
 
     def default_branch(self, repo):
         return "main"
+
+    def rulesets(self, repo):
+        return self.push_rulesets
 
     def file(self, repo, path, ref):
         return self.files.get((repo, path, ref), (None, None))
@@ -175,6 +179,21 @@ class UpgradeTest(unittest.TestCase):
         self.run_upgrade(github, target="v0.1.7")
         self.assertIsNone(github.writes[1][4][WRAPPER])
         self.assertNotIn("executable", [write[0] for write in github.writes])
+
+    def test_a_push_ruleset_the_person_may_not_bypass_stops_the_upgrade_before_anything_is_pushed(self):
+        guard = {"name": "pipeline-files", "target": "push", "enforcement": "active", "current_user_can_bypass": "never",
+                 "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, push_rulesets=[guard])
+        with self.assertRaises(ConfigError) as caught:
+            self.run_upgrade(github)
+        self.assertIn("acme/mlz-governance: its ruleset pipeline-files refuses changes to .github/workflows/mlz.yml from you. "
+                      "Only its bypass team (bootstrap.yaml's github.bypass_team) may change them", str(caught.exception))
+        self.assertEqual(github.writes, [])  # no branch, no commit, no pull request
+        # A member of the bypass team goes ahead, as does anyone where the ruleset is off.
+        for allowed in ({**guard, "current_user_can_bypass": "always"}, {**guard, "enforcement": "disabled"}):
+            github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, push_rulesets=[allowed])
+            url, _ = self.run_upgrade(github)
+            self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
 
     def test_editor_settings_already_on_the_target_are_left_out(self):
         current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.7")) for path in EDITOR}
