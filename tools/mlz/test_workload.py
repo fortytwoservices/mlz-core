@@ -26,7 +26,7 @@ class FakeGitHub:
     team push in between, with that file in it."""
 
     def __init__(self, repos: dict[str, dict[str, str]], archived=(), push_on=None, core=None, pulls=None, releases=None,
-                 teams=None, rulesets=None, writers=None):
+                 teams=None, rulesets=None, writers=None, secret=()):
         self.repos, self.archived, self.commits, self.push_on = repos, set(archived), [], push_on
         self.heads = {repo: 0 for repo in repos}
         # mlz-core's files at its releases, {(path, ref): text}; each repo's pull requests, newest last; release notes.
@@ -40,12 +40,13 @@ class FakeGitHub:
         self.teams = {"acme-admins": 7, "payments-devs": 8} if teams is None else teams
         self.made_rulesets = rulesets if rulesets is not None else {}
         self.writers = writers if writers is not None else {}
+        self.secret = set(secret)  # teams the organization keeps secret, which GitHub reads in no CODEOWNERS
 
     def app_id(self, slug):
         return {"mlz-release": 99}[slug]
 
     def team(self, org, slug):
-        return {"slug": slug, "id": self.teams[slug]} if slug in self.teams else None
+        return {"slug": slug, "id": self.teams[slug], "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
 
     def team_can_write(self, org, slug, repo):
         return slug in self.writers.get(repo, set())
@@ -254,7 +255,7 @@ class UpgradeTest(SyncTest):
     def github(self, files: dict[str, str], **kwargs) -> FakeGitHub:
         self.config("payments-prod")
         core = {(f"starter/mlz-workload/{name}", OLD): text for name, text in old_starter().items()}
-        ruled = {self.REPO: [install.main_ruleset("workload", 7, 99), install.checks_ruleset("workload", 99, workload.CHECK)]}
+        ruled = {self.REPO: [install.main_ruleset("workload", 7, 99, approvals=1), install.checks_ruleset("workload", 99, workload.CHECK)]}
         return FakeGitHub({self.REPO: files}, core=core, releases=kwargs.pop("releases", NOTES), rulesets=ruled,
                           writers={self.REPO: {"acme-admins"}}, **kwargs)
 
@@ -409,22 +410,46 @@ class RuleTest(SyncTest):
         github = self.made()
         out = self.sync(github)
         main, checks = github.made_rulesets[self.REPO]
-        self.assertEqual(main, install.main_ruleset("workload", 7, 99))
+        self.assertEqual(main, install.main_ruleset("workload", 7, 99, approvals=1))
         self.assertEqual(main["bypass_actors"], [{"actor_id": 7, "actor_type": "Team", "bypass_mode": "pull_request"},
                                                  {"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
         self.assertTrue(main["rules"][2]["parameters"]["require_code_owner_review"])
+        self.assertEqual(main["rules"][2]["parameters"]["required_approving_review_count"], 1)  # one besides the author's
         self.assertEqual(checks["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
         self.assertEqual(checks["rules"][0]["parameters"]["required_status_checks"], [{"context": "workload / plan", "integration_id": 15368}])
         self.assertTrue(checks["rules"][0]["parameters"]["strict_required_status_checks_policy"])
         self.assertEqual(github.writers[self.REPO], {"acme-admins"})
         self.assertTrue(github.repos[self.REPO][".github/CODEOWNERS"].endswith("\n* @acme-org/payments-devs\n"))
         self.assertEqual(out[1:], [f"{self.REPO}: acme-org/acme-admins may write, for its bypass of main's approval",
-                                   f"{self.REPO}: ruleset main: pull requests only, a code owner's approval, acme-org/acme-admins may merge without it",
+                                   f"{self.REPO}: ruleset main: pull requests only, a code owner's approval (and one besides the author's), "
+                                   "acme-org/acme-admins may merge without it",
                                    f"{self.REPO}: ruleset main-checks: workload / plan must pass, on a branch up to date with main, before any "
                                    "merge into main; nobody but the MLZ App may bypass it, for its commits of the landing zone's values"])
         # Again: nothing to do, nothing said.
         self.assertEqual(self.sync(github), [])
         self.assertEqual(len(github.made_rulesets[self.REPO]), 2)
+
+    def test_a_secret_owning_team_is_said_and_main_still_asks_another_s_approval(self):
+        # GitHub reads no secret team in CODEOWNERS: without the second approval, the author could merge alone.
+        github = self.made()
+        github.secret.add("payments-devs")
+        out = self.sync(github)
+        self.assertIn(f"::warning::{self.REPO}: the landing zone's team acme-org/payments-devs is secret, so GitHub does not read it in "
+                      "CODEOWNERS: main asks any other writer's approval until it is a visible team.", out)
+        self.assertEqual(github.made_rulesets[self.REPO][0]["rules"][2]["parameters"]["required_approving_review_count"], 1)
+
+    def test_a_failed_rule_leaves_the_upgrade_to_go_on(self):
+        github = self.made()
+        github.rulesets = lambda repo: (_ for _ in ()).throw(ConfigError("gh api GET rulesets: HTTP 502"))
+        offered = []
+        original = workload.offer_upgrade
+        workload.offer_upgrade = lambda *args: offered.append(args[1])
+        try:
+            out = self.sync(github)
+        finally:
+            workload.offer_upgrade = original
+        self.assertIn(f"::warning::{self.REPO}: its rule on main is not complete: gh api GET rulesets: HTTP 502", out)
+        self.assertEqual(offered, [self.REPO])
 
     def test_the_code_owners_file_is_vending_s(self):
         github = self.made()

@@ -97,11 +97,12 @@ def app_bypass(app_id: int | None) -> list[dict]:
     return [{"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"}] if app_id else []
 
 
-def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = None) -> dict:
+def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = None, approvals: int = 0) -> dict:
     """The ruleset main: pull requests only, a code owner's approval, no force push or deletion. The bypass team
     (team_id) may merge a pull request without the approval, and only a pull request (decision D8): GitHub records each
     bypass under the repo's Insights, Rules. A bypass covers its whole ruleset, so the check lives in a ruleset of its
-    own (checks_ruleset), which nobody bypasses but, in a workload repo, the MLZ App (app_id)."""
+    own (checks_ruleset), which nobody bypasses but, in a workload repo, the MLZ App (app_id). approvals: how many
+    approvals besides the code owner rule (a workload repo asks one, tools/mlz/workload.py)."""
     actors = ([{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "pull_request"}] if team_id else []) + app_bypass(app_id)
     return {
         "name": "main",
@@ -113,7 +114,7 @@ def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = Non
             {"type": "deletion"},
             {"type": "non_fast_forward"},
             {"type": "pull_request", "parameters": {
-                "required_approving_review_count": 0,
+                "required_approving_review_count": approvals,
                 "dismiss_stale_reviews_on_push": False,
                 "require_code_owner_review": True,
                 "require_last_push_approval": False,

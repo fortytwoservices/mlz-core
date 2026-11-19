@@ -126,6 +126,9 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
             if app_slug and app_id is None:
                 app_id = github.app_id(app_slug)
             protect(github, repo, github_config, app_id, out)
+        except ConfigError as error:
+            out(f"::warning::{repo}: its rule on main is not complete: {error}")
+        try:
             offer_upgrade(github, repo, releases, out)
         except ConfigError as error:
             out(f"::warning::{repo}: no upgrade pull request: {error}")
@@ -141,6 +144,12 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
         out(f"::warning::{repo}: no rule on main: the MLZ App's ID is not known (MLZ_APP_SLUG), and the rule would refuse its commits of the values.")
         return
     organization, bypass = config["organization"], config.get("bypass_team")
+    # GitHub reads no secret team in CODEOWNERS, and leaves the paths without an owner: main also asks one approval
+    # besides the author's, so a change never merges unseen; the code owner's approval is that one when it works.
+    owner = github.team(organization, config["team"]) if config.get("team") else None
+    if owner is None or owner.get("privacy") == "secret":
+        out(f"::warning::{repo}: the landing zone's team {organization}/{config.get('team')} is {'secret' if owner else 'not there'}, so "
+            "GitHub does not read it in CODEOWNERS: main asks any other writer's approval until it is a visible team.")
     team = github.team(organization, bypass) if bypass else None
     if not bypass:
         out(f"::warning::{repo}: governance's contract names no bypass team yet (bootstrap.yaml's github.bypass_team), so nobody may "
@@ -150,12 +159,12 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
     elif not github.team_can_write(organization, bypass, repo):
         github.grant_team(organization, bypass, repo)
         out(f"{repo}: {organization}/{bypass} may write, for its bypass of main's approval")
-    wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id), install.checks_ruleset("workload", app_id, CHECK)]
+    wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id, approvals=1), install.checks_ruleset("workload", app_id, CHECK)]
     found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
     for ruleset in wanted:
         if ruleset["name"] not in found:
             github.add_ruleset(repo, ruleset)
-            out(f"{repo}: " + ("ruleset main: pull requests only, a code owner's approval" + (f", {organization}/{bypass} may merge without it" if team else "")
+            out(f"{repo}: " + ("ruleset main: pull requests only, a code owner's approval (and one besides the author's)" + (f", {organization}/{bypass} may merge without it" if team else "")
                                if ruleset["name"] == "main" else
                                f"ruleset {install.CHECKS_RULESET}: {CHECK} must pass, on a branch up to date with main, before any merge into main; "
                                "nobody but the MLZ App may bypass it, for its commits of the landing zone's values"))

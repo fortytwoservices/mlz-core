@@ -407,7 +407,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path, bootstrap_file: 
 
     config = {**normalize(config), "github": bypass_team(bootstrap_file)}
     tags = tag_assignments(config)
-    prepare_output(out, [customer_file, defaults_file])
+    prepare_output(out, [customer_file, defaults_file, *([bootstrap_file] if bootstrap_file else [])])
 
     write_json(out, "config.json", config)
     write_json(

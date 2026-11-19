@@ -230,6 +230,12 @@ class RenderTest(unittest.TestCase):
         config = rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
         self.assertEqual(config["github"], {"bypass_team": "demo-admins"})
         self.assertEqual(self.read(out, "config.json")["github"], {"bypass_team": "demo-admins"})
+        # A bootstrap.yaml inside the output folder would be deleted with it: refused, as the other inputs are.
+        inside = out / "bootstrap.yaml"
+        inside.write_text("github:\n  bypass_team: demo-admins\n")
+        with self.assertRaisesRegex(rl.RenderError, "holds source files"):
+            rl.render(self.customer(self.BASE), DEFAULTS, out, inside)
+        self.assertTrue(inside.is_file())
         bootstrap.write_text("github:\n  bypass_team: [demo-admins]\n")
         with self.assertRaisesRegex(rl.ConfigError, "bootstrap.yaml: github.bypass_team is \\['demo-admins'\\]: the slug"):
             rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
