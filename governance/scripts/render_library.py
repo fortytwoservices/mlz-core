@@ -40,7 +40,7 @@ from pathlib import Path
 # mlz-core's naming, in the same checkout (tools/mlz/naming.py, names.py): customer.yaml's naming section is checked
 # here, where it is written, and names management's resources; platform, vending and the bootstrap name theirs with it.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mlz import naming  # noqa: E402
+from mlz import advanced, naming  # noqa: E402
 from mlz.names import governance as governance_names  # noqa: E402
 from mlz.merge import ConfigError  # noqa: E402
 
@@ -82,6 +82,7 @@ OPTIONAL_GROUPS = ("security", "local")
 SETTINGS = (
     "name", "root_id", "root_display_name", "primary_region", "security_contact", "parent_management_group_id",
     "subscriptions", "allowed_regions", "management_groups", "tags", "policy_assignments_to_remove", "naming",
+    "advanced",  # inputs of the root's module calls mlz-core leaves at their defaults (tools/mlz/advanced.py)
 )
 # The archetypes in platform/alz; policy_assignments_to_remove may name only these.
 ALZ_ARCHETYPES = (
@@ -219,6 +220,7 @@ def validate(config: dict) -> None:
             )
             continue
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
+    advanced.check("customer", "customer.yaml", config.get("advanced"), problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
 
@@ -228,14 +230,21 @@ def normalize(config: dict) -> dict:
     case, and every optional management group as true or false (null and missing mean false)."""
     groups = config.get("management_groups") or {}
     return {
-        **config,
+        **{key: value for key, value in config.items() if key != "advanced"},
         "subscriptions": {role: value.lower() for role, value in (config.get("subscriptions") or {}).items()},
         "management_groups": {name: groups.get(name) is True for name in OPTIONAL_GROUPS},
         # Always a mapping, so the contract carries one: validate() refused anything else.
         "naming": config.get("naming") or {},
         # What the governance root names, worked out on every run from the template (tools/mlz/names.py).
         "names": governance_names(naming.settings(config, config["root_id"]), config["primary_region"]),
-    }
+    } | blocks(config)
+
+
+def blocks(config: dict) -> dict:
+    """advanced:, checked by validate() and without its nulls, only when it sets something: without it, config.json
+    is as before. A key of its own here, so config.json never carries the block as given."""
+    checked = advanced.clean("customer", config.get("advanced"))
+    return {"advanced": checked} if checked else {}
 
 
 def prepare_output(out: Path, inputs: list[Path]) -> None:

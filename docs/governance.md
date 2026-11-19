@@ -27,6 +27,20 @@ out for management's resources, and the check `render_library.py` makes. `--inpu
 two module calls, ALZ's and management's, with its class, value and source (`docs/reference/governance.md` has
 them without the values).
 
+## Module inputs mlz-core leaves alone
+
+`customer.yaml`'s `advanced:` sets inputs of governance's two module calls that mlz-core does not set, each under
+the call's name: `alz` (policy assignments to modify, management group role assignments, non-compliance messages,
+...) and `management` (the workspace's retention and daily quota, its network access, Sentinel, a data collection
+rule's options, ...). Anything mlz-core owns is refused with a message that names its owner: `docs/advanced.md`, and
+the inputs it takes on `docs/reference/governance.md`.
+
+```yaml
+advanced:
+  management:
+    retention_in_days: 90
+```
+
 ## What the defaults give (decided by the user, 30 October 2026)
 
 | Topic | Default |

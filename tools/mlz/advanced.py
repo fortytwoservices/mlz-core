@@ -32,6 +32,7 @@ class Scope(NamedTuple):
     # Maps of objects the root keys itself, by input path: advanced: names the entry by its key, as the module does
     # (virtual_networks.spoke.subnets.app...); what a page shows for the key; the loader says which keys there are.
     maps: dict = {}
+    label: str = ""  # what the block's path starts with, where a file reaches several calls: the call's name
 
 
 SCOPES = {
@@ -42,7 +43,12 @@ SCOPES = {
         "virtual_networks": "spoke", "virtual_networks.subnets": "<subnet>", "network_security_groups": "<subnet>",
         "budgets": "monthly", "budgets.notifications": "<actual_80 or forecast_100>",
     }),
+    # customer.yaml reaches both of governance's calls, each under its name: advanced.alz, advanced.management.
+    "customer.alz": Scope("customer", "governance/terraform", "alz", "", "advanced.alz", {}, "alz"),
+    "customer.management": Scope("customer", "governance/terraform", "management", "", "advanced.management", {}, "management"),
 }
+# A file whose advanced: reaches several module calls names the call first.
+CALLS = {"customer": ("alz", "management")}
 PRIMITIVES = {"string": str, "number": (int, float), "bool": bool}
 
 
@@ -51,17 +57,57 @@ def check(kind: str, where: str, given: object, problems: list[str], keys: dict[
     scope's maps has for this stack (a landing zone's subnets), by input path."""
     if given is None:
         return {}
+    if kind in CALLS:  # by call: each part checked on its own
+        if not isinstance(given, dict):
+            problems.append(f"{where}: advanced maps each module call, {' or '.join(CALLS[kind])}, to its inputs ({reference(SCOPES[f'{kind}.{CALLS[kind][0]}'])}).")
+            return {}
+        problems += [f"{where}: advanced.{name} is not a module call this file reaches; use {' or '.join(CALLS[kind])}." for name in given if name not in CALLS[kind]]
+        parts = {name: check(f"{kind}.{name}", where, value, problems, keys) for name, value in given.items() if name in CALLS[kind]}
+        return {name: part for name, part in parts.items() if part}
     scope = SCOPES[kind]
     if not isinstance(given, dict):
-        problems.append(f"{where}: advanced maps module inputs to their values ({reference(scope)}).")
+        problems.append(f"{where}: advanced{'.' + scope.label if scope.label else ''} maps module inputs to their values ({reference(scope)}).")
         return {}
     call = inputs.load_snapshot()[scope.root][scope.call]
     section = inputs.load_maps()[scope.root][scope.call]
     entries = {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}
     found: list[str] = []
-    walk(scope, call, section, entries, given, "", "", where, found, keys or {})
+    walk(scope, call, section, entries, given, "", scope.label, where, found, keys or {})
     problems += found
-    return {} if found else prune(given)
+    return {} if found else pruned(scope, entries, given, "")
+
+
+def clean(kind: str, given: object) -> dict:
+    """A block check() has passed, as the config carries it: pruned, by call where the file reaches several."""
+    if not isinstance(given, dict):
+        return {}
+    if kind in CALLS:
+        parts = {name: clean(f"{kind}.{name}", value) for name, value in given.items() if name in CALLS[kind]}
+        return {name: part for name, part in parts.items() if part}
+    scope = SCOPES[kind]
+    section = inputs.load_maps()[scope.root][scope.call]
+    return pruned(scope, {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}, given, "")
+
+
+def pruned(scope: Scope, entries: dict, block: dict, rel: str) -> dict:
+    """A checked block without its nulls, and without a group of inputs (or an entry of a map mlz-core keys) left empty
+    by them, so a block that sets nothing is no block. An input's own value keeps an empty object: {} may be what it
+    sets (sentinel_onboarding: {})."""
+    found = {}
+    for key, value in block.items():
+        here = f"{rel}.{key}" if rel else str(key)
+        if value is None:
+            continue
+        if inputs.covering(scope.prefix + here, entries):  # an input's value, whole
+            found[key] = prune(value)
+        elif scope.prefix + here in scope.maps:
+            kept = {name: pruned(scope, entries, item, here) for name, item in value.items()}
+            kept = {name: item for name, item in kept.items() if item}
+            if kept:
+                found[key] = kept
+        elif pruned(scope, entries, value, here):
+            found[key] = pruned(scope, entries, value, here)
+    return found
 
 
 def prune(value):
@@ -174,7 +220,7 @@ def given(root: str, call: str, config: dict | None, places: dict[str, str]) -> 
         block = inputs.value_at(config, scope.config, places)
     except KeyError:
         return []
-    return flat(scope, block)
+    return flat(scope, block, "", scope.label)
 
 
 def flat(scope: Scope, value: dict, rel: str = "", label: str = "") -> list[tuple[str, str, object]]:
@@ -201,7 +247,7 @@ def open_leaf(scope: Scope, rel: str) -> bool:
 
 def written_path(scope: Scope, path: str) -> str:
     """An input path as advanced: writes it: each of the scope's maps with what stands for its keys."""
-    parts, done = [], ""
+    parts, done = [scope.label] if scope.label else [], ""
     for part in path.removeprefix(scope.prefix).split("."):
         done = f"{done}.{part}" if done else part
         parts.append(part)
@@ -220,6 +266,11 @@ def where(root: str, call: str, path: str) -> str | None:
 
 def schema(kind: str) -> dict:
     """The JSON Schema of a file's advanced:: every open input it reaches, nested, typed as the module has it."""
+    if kind in CALLS:  # a part per call
+        parts = {name: schema(f"{kind}.{name}") for name in CALLS[kind]}
+        return {"description": f"Module inputs mlz-core leaves at the module's default, by module call ({', '.join(CALLS[kind])}); "
+                               "anything else is refused with what owns it.",
+                "type": ["object", "null"], "properties": parts, "additionalProperties": False}
     scope = SCOPES[kind]
     paths = inputs.load_snapshot()[scope.root][scope.call]["inputs"]
     entries = {path: inputs.entry(value) for path, value in (inputs.load_maps()[scope.root][scope.call].get("inputs") or {}).items()}

@@ -205,6 +205,10 @@ class LandingZoneTest(unittest.TestCase):
         self.assertIn("role_assignments", self.build()["advanced"])
         self.assertNotIn("advanced", self.build("  role_assignments: null\n"))  # nothing left: no block at all
 
+    def test_a_group_or_map_entry_left_empty_by_nulls_is_no_block(self):
+        self.assertNotIn("advanced", self.build("  virtual_networks:\n    spoke:\n      subnets:\n        app:\n"
+                                                "          service_endpoints: null\n"))
+
     def test_a_decommissioned_landing_zone_s_advanced_is_shown_as_not_given(self):
         self.prod += "decommission: true\n"
         config = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n"
@@ -235,6 +239,59 @@ class LandingZoneTest(unittest.TestCase):
         self.assertEqual(rows["virtual_networks.subnets.service_endpoints"][1:], (
             "{virtual_networks.spoke.subnets.app.service_endpoints: [Microsoft.Storage]}",
             "open: set under advanced.virtual_networks.spoke.subnets.<subnet>.service_endpoints in a landing zone's file or a layer above it"))
+
+
+
+class GovernanceTest(unittest.TestCase):
+    """customer.yaml's advanced: reaches both of governance's calls, each under its name."""
+    rules = schema.governance_rules()
+    starter = (inputs.CORE / "starter/mlz-governance/customer.yaml").read_text()
+
+    def render(self, block: str) -> dict:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "customer.yaml"
+            path.write_text(self.starter + block)
+            merged = self.rules.merge(self.rules.load_yaml(inputs.CORE / "governance/defaults.yaml"), self.rules.load_yaml(path))
+        self.rules.validate(merged)
+        return self.rules.normalize(merged)
+
+    def problems(self, block: str) -> list[str]:
+        with self.assertRaises(self.rules.RenderError) as caught:
+            self.render(block)
+        return [line.strip() for line in str(caught.exception).splitlines()[1:]]
+
+    def test_each_call_under_its_name(self):
+        config = self.render("advanced:\n  management:\n    retention_in_days: 90\n    data_collection_rules:\n      vm_insights:\n"
+                             "        processes_and_dependencies_enabled: true\n  alz:\n    policy_assignments_to_modify: {}\n")
+        self.assertEqual(config["advanced"], {"management": {"retention_in_days": 90, "data_collection_rules": {"vm_insights": {"processes_and_dependencies_enabled": True}}},
+                                              "alz": {"policy_assignments_to_modify": {}}})
+
+    def test_without_advanced_config_json_has_no_trace_of_it(self):
+        self.assertNotIn("advanced", self.render(""))
+        self.assertNotIn("advanced", self.render("advanced:\n  management:\n    retention_in_days: null\n"))
+        self.assertNotIn("advanced", self.render("advanced:\n  management:\n    data_collection_rules:\n      vm_insights:\n"
+                                                 "        processes_and_dependencies_enabled: null\n"))  # no group left empty
+        self.assertEqual(self.render("advanced:\n  management:\n    sentinel_onboarding: {}\n")["advanced"],
+                         {"management": {"sentinel_onboarding": {}}})  # an input's own {} is what it sets
+
+    def test_what_governance_owns_and_calls_it_does_not_reach_are_refused(self):
+        self.assertEqual(sorted(self.problems("advanced:\n  management:\n    name: log-mine\n    local_authentication_enabled: true\n"
+                                              "  alz:\n    enable_telemetry: true\n  platform:\n    x: 1\n")), [
+            "customer.yaml: advanced.alz.enable_telemetry is fixed by Fortytwo (no module mlz-core calls sends telemetry). Ask for a change in mlz-core.",
+            "customer.yaml: advanced.management.local_authentication_enabled is fixed by Fortytwo (off: Entra ID only). Ask for a change in mlz-core.",
+            "customer.yaml: advanced.management.name is worked out by mlz-core (the naming template (customer.yaml's naming)); it cannot be set.",
+            "customer.yaml: advanced.platform is not a module call this file reaches; use alz or management."])
+
+    def test_the_schema_and_the_reference_page_name_the_call(self):
+        block = schema.customer()["properties"]["advanced"]
+        self.assertEqual(set(block["properties"]), {"alz", "management"})
+        self.assertEqual(block["properties"]["management"]["properties"]["retention_in_days"], {"type": ["number", "null"]})
+        self.assertIn("set it with `advanced.management.retention_in_days` in `customer.yaml`", (inputs.CORE / "docs/reference/governance.md").read_text())
+
+    def test_explain_shows_what_it_sets(self):
+        config = self.render("advanced:\n  management:\n    retention_in_days: 90\n")
+        rows = {row[0]: row for part in explain.module_inputs("governance/terraform", config, {}).values() for row in part}
+        self.assertEqual(rows["retention_in_days"][1:], ("90", "open: set under advanced.management.retention_in_days in customer.yaml"))
 
 
 if __name__ == "__main__":
