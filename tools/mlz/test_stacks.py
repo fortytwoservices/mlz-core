@@ -226,6 +226,33 @@ class ChangedTest(unittest.TestCase):
         self.assertEqual(stacks.difference("platform", "connectivity", repo).splitlines()[4:], [
             '| `hubs.norwayeast.firewall.sku_tier` | `"Standard"` | `"Premium"` |'])
 
+    def test_the_first_hub_on_the_starter_is_a_new_stack(self):
+        # The base is the platform starter, which renders no config: the base folder is still made, with its marker,
+        # so the comment says the stack is new instead of nothing.
+        import os
+        import subprocess
+        from mlz.contract import render
+        from mlz.test_platform import GOVERNANCE
+        repo = self.head
+        shutil.copytree(STARTERS / "mlz-platform", repo)
+        (repo / "_generated").mkdir()
+        (repo / "_generated" / "governance.yaml").write_text(render("governance", GOVERNANCE))
+        (repo / ".gitignore").write_text(".mlz/\n.mlz-core\n")
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_EVENT_NAME", "PYTHONPATH")}
+        env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        git = lambda *a: subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", *a], cwd=repo, env=env, check=True, capture_output=True)
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-qm", "the starter")
+        (repo / "connectivity" / "norwayeast.yaml").write_text("platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\n")
+        git("commit", "-qam", "the first hub")
+        (repo / ".mlz-core").symlink_to(stacks.CORE)
+        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
+                              env={**env, "GITHUB_EVENT_NAME": "pull_request"}, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertTrue((repo / ".mlz/base/README").is_file())
+        self.assertEqual(stacks.difference("platform", "connectivity", repo), "**connectivity** is new: the base branch has no such stack.\n")
+
     def test_check_sh_names_every_input_the_roots_are_given(self):
         # What vars_for passes a root must be what inputs() compares, or a change to it would plan nothing.
         lib = (stacks.CORE / "tools" / "ci" / "lib.sh").read_text()

@@ -91,7 +91,11 @@ if ! (cd "$copy" && GITHUB_EVENT_NAME='' "$CORE/tools/ci/check.sh" "$role" > "$W
 fi
 python3 -m mlz stacks --role "$role" --stacks "$stacks" --base "$copy"
 # The base's configs, which the plan comments compare each stack's settings with (comment.sh, mlz diff). In .mlz/,
-# so the run's artifact takes them to the plan jobs.
+# so the run's artifact takes them to the plan jobs. The folder is made even when the base has none (the platform
+# starter, before its first hub): then every stack is new. Its marker keeps it through the artifact, which drops an
+# empty folder.
+mkdir -p "$WORK/base"
+echo "The base commit's configs, for the plan comments: tools/ci/check.sh, mlz diff." > "$WORK/base/README"
 for path in platform.json firewall.json vending rendered/config.json; do
   if [[ -e $copy/.mlz/$path ]]; then
     mkdir -p "$(dirname "$WORK/base/$path")"
