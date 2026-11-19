@@ -1,0 +1,31 @@
+# Who owns each input of this root's module calls (tools/mlz/inputs.py says how to read it); the page
+# docs/reference/bootstrap.md is written from it. An input mlz-core does not set is `open`.
+
+runners:
+  builds: the self-hosted runners, Fortytwo's runner image on a scale set in management's network, once their vault holds the runner App's key
+  file: bootstrap
+  inputs:
+    name: {class: derived, by: "the naming template (customer.yaml's naming)"}
+    parent_id: {class: derived, by: "the bootstrap's resource group"}
+    location: {class: setting, file: customer, key: primary_region}
+    subnet_resource_id: {class: derived, by: "management's runners subnet, from names"}
+    sku_name: {class: setting, key: github.runners.size}
+    instances: {class: setting, key: github.runners.instances}
+    image: {class: setting, key: github.runners.image, by: "fortytwo or dev, as the Marketplace image and plan (tools/mlz/install.py, RUNNER_IMAGES)"}
+    user_assigned_identity_name: {class: derived, by: "the naming template"}
+    network_security_group_name: {class: derived, by: "the naming template"}
+    app_key_secret_resource_id: {class: derived, by: "the vault's github-runner-app-key, which mlz install runners writes"}
+    github.scope: {class: setting, key: github.organization}
+    github.app_client_id: {class: setting, key: github.runners.app_client_id}
+    github.labels: {class: fixed, value: [mlz], why: "the label the pipelines' MLZ_RUNS_ON names"}
+    github.runner_group: {class: fixed, value: mlz, why: "the runner group mlz install runners makes, open to the three repos only"}
+    tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
+    admin_username: open
+    computer_name_prefix: open
+    encryption_at_host_enabled: open
+    os_disk: open
+    zones: open
+    retry: open
+    timeouts: open
+    resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}

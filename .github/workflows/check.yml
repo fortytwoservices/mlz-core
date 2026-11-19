@@ -67,6 +67,11 @@ jobs:
             echo "::endgroup::"
           done
 
+      # What each pinned module declares, which the input maps beside the roots are checked against (the loader
+      # tests): the init above downloaded every module at its pin.
+      - name: Module inputs at their pins
+        run: PYTHONPATH=tools python3 -m mlz inputs --check
+
       # Plans with the providers mocked, so no Azure either: what a root builds for a given config.
       - name: Test the roots
         run: terraform -chdir=vending/terraform test

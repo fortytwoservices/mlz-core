@@ -1,0 +1,43 @@
+# Who owns each input of this root's module calls (tools/mlz/inputs.py says how to read it); the page
+# docs/reference/platform-rules.md is written from it. An input mlz-core does not set is `open`.
+
+rule_collection_group:
+  builds: the rule collection groups in each hub's firewall policy, platform for the shared rules and lz-<nn> for the landing zones' (tools/mlz/firewall.py)
+  file: firewall-rules
+  notes:
+    application_rule_collections: <owner>-application, the rules to names and FQDN tags on https and http
+    application_rule_collections.rules: one per rule, by its name
+    network_rule_collections: <owner>-network, the rules to addresses, landing zones and service tags, and to names on other ports
+    network_rule_collections.rules: one to three per rule, by its name (<name>, <name>-names, <name>-udp)
+  inputs:
+    name: {class: derived, by: "platform, or lz-<nn> with nn from the landing zone's key, so a landing zone's rules never move"}
+    parent_id: {class: derived, by: "the region's hub firewall policy, by its name"}
+    priority: {class: derived, by: "500 for platform, 1000 + 100 × nn for lz-<nn>"}
+    application_rule_collections.priority: {class: derived, by: "the owner's, plus 5"}
+    application_rule_collections.action: {class: fixed, value: Allow, why: "a rule allows; whatever no rule allows is denied"}
+    application_rule_collections.rules.description: {class: setting, key: outbound.description}
+    application_rule_collections.rules.source_addresses: {class: derived, by: "the landing zone's range (vending contract), every landing zone range of the hub for platform.yaml, or the network's own range"}
+    application_rule_collections.rules.source_ip_groups: {class: closed, why: "a rule's source is worked out, never written"}
+    application_rule_collections.rules.protocols: {class: setting, key: outbound.ports, by: "https and http"}
+    application_rule_collections.rules.destination_fqdns: {class: setting, key: outbound.to, by: "the names among them"}
+    application_rule_collections.rules.destination_fqdn_tags: {class: setting, key: outbound.to, by: "the FQDN tags among them"}
+    application_rule_collections.rules.destination_addresses: {class: closed, why: "addresses go into network rules"}
+    application_rule_collections.rules.destination_urls: {class: closed, why: "URL filtering needs TLS inspection, which mlz-core does not set up"}
+    application_rule_collections.rules.terminate_tls: {class: closed, why: "TLS inspection is not set up"}
+    application_rule_collections.rules.http_headers: {class: closed, why: "TLS inspection is not set up"}
+    application_rule_collections.rules.web_categories: {class: closed, why: "a rule names what it reaches; web categories are not offered yet"}
+    network_rule_collections.priority: {class: derived, by: "the owner's"}
+    network_rule_collections.action: {class: fixed, value: Allow, why: "a rule allows; whatever no rule allows is denied"}
+    network_rule_collections.rules.description: {class: setting, key: outbound.description}
+    network_rule_collections.rules.protocols: {class: setting, key: outbound.ports, by: "TCP, or UDP for udp:<port>"}
+    network_rule_collections.rules.source_addresses: {class: derived, by: "the landing zone's range (vending contract), every landing zone range of the hub for platform.yaml, or the network's own range"}
+    network_rule_collections.rules.source_ip_groups: {class: closed, why: "a rule's source is worked out, never written"}
+    network_rule_collections.rules.destination_addresses: {class: setting, key: outbound.to, by: "the addresses, ranges and service tags among them, and the ranges of the landing zones they name"}
+    network_rule_collections.rules.destination_ip_groups: {class: closed, why: "IP groups are not offered yet"}
+    network_rule_collections.rules.destination_fqdns: {class: setting, key: outbound.to, by: "the names among them, on ports written as numbers"}
+    network_rule_collections.rules.destination_ports: {class: setting, key: outbound.ports}
+    nat_rule_collections: {class: closed, why: "outbound rules only: nothing comes in through the firewall yet"}
+    retry: open
+    timeouts: open
+    resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}
