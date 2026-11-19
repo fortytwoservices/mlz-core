@@ -15,6 +15,7 @@ PLANS = Path(__file__).resolve().parent / "plans.sh"
 FAKE_PLAN = """#!/usr/bin/env bash
 code=$(cat ".fake/$2")
 echo "planned $2" >> .fake/calls
+[[ $code == early-* ]] && exit "${code#early-}"  # stopped before planning: no summary
 [[ $code != 1 ]] && echo "**$2**: summary" > ".mlz/summary-$2.md"
 exit "$code"
 """
@@ -40,7 +41,7 @@ class PlansTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def run_plans(self, codes: dict[str, int], event: str) -> tuple[int, str, str]:
+    def run_plans(self, codes: dict[str, int | str], event: str) -> tuple[int, str, str]:
         for stack, code in codes.items():
             (self.dir / ".fake" / stack).write_text(f"{code}\n")
         summary = self.dir / "step-summary.md"
@@ -66,6 +67,14 @@ class PlansTest(unittest.TestCase):
         self.assertIn("**a-prod**: summary", record)  # on the run page
         self.assertNotIn("**c-prod**", record)  # a failed plan has no summary
         self.assertNotIn("comment", record)  # comments only on a pull request
+
+    def test_a_plan_that_stopped_early_is_a_failure_whatever_its_code_and_the_next_stack_is_planned(self):
+        code, out, record = self.run_plans({"a-prod": "early-2", "b-prod": "early-127", "c-prod": 0}, "schedule")
+        self.assertEqual(code, 1)
+        self.assertEqual([self.status(s) for s in ("a-prod", "b-prod", "c-prod")], ["1", "1", "0"])  # not drift
+        self.assertIn("planned c-prod", record)
+        self.assertIn("::error::a-prod: the plan failed.", out)
+        self.assertNotIn("drift", out)
 
     def test_a_pull_request_comments_each_plan_and_changes_are_no_failure(self):
         (self.dir / ".fake" / "comment-fails").write_text("a-prod\n")  # one comment fails: the next stack is still planned

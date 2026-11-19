@@ -15,6 +15,9 @@ for stack in "$@"; do
   "$CORE/tools/ci/plan.sh" "$role" "$stack"
   status=$?
   set -e
+  # plan.sh's own codes are 0, 2 and 3, each with a summary. Anything else, or one without its summary, stopped early
+  # (a failed sign-in, say): a failed plan, never drift, and never a reason to skip the stacks after it.
+  if [[ ! $status =~ ^[023]$ || ! -f $WORK/summary-$stack.md ]]; then status=1; fi
   [[ ${GITHUB_EVENT_NAME:-} == schedule ]] && echo "$status" > "$WORK/status-$stack.txt"
   if [[ $status != 1 ]]; then
     cat "$WORK/summary-$stack.md" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
