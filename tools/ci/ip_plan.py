@@ -14,7 +14,6 @@ BASE_SHA (its base).
 from __future__ import annotations
 
 import base64
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -23,17 +22,16 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
 
 from ci.gh import ConfigError, Pipeline, env, work  # noqa: E402
+from ci.run_mlz import mlz  # noqa: E402
 
 PATHS = ("_generated/ip-plan.yaml", "_generated/names.yaml")
 MESSAGE = "chore: IP plan and names for this pull request"
-TOOLS = str(Path(__file__).resolve().parents[1])
 
 
 def allocate(base_names: Path) -> None:
     """Writes the plan and the names, or nothing at all and fails when anything is wrong (a conflict, a landing zone that
     does not fit, a name Azure would refuse): that failure is the check's own, with every problem listed."""
-    subprocess.run([sys.executable, "-m", "mlz", "allocate", "--repo", ".", "--base-names", str(base_names)],
-                   stdout=sys.stderr, check=True, env={**os.environ, "PYTHONPATH": TOOLS})
+    subprocess.run(mlz("allocate", "--repo", ".", "--base-names", str(base_names)), stdout=sys.stderr, check=True)
 
 
 def changed() -> bool:

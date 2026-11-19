@@ -12,7 +12,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-TOOLS = str(Path(__file__).resolve().parents[1])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
+
+from ci.run_mlz import mlz  # noqa: E402
 
 
 def command() -> list[str] | None:
@@ -28,11 +30,11 @@ def command() -> list[str] | None:
         args += ["--new-teams", new_teams]
     if new_teams == "note":
         args += ["--base", os.environ.get("BASE", "")]
-    return [sys.executable, "-m", "mlz", "owners", *args]
+    return mlz("owners", *args)
 
 
 if __name__ == "__main__":
     found = command()
     if found is None:
         sys.exit(1)
-    sys.exit(subprocess.run(found, env={**os.environ, "PYTHONPATH": TOOLS}).returncode)
+    sys.exit(subprocess.run(found).returncode)

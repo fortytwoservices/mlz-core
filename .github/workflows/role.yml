@@ -50,9 +50,10 @@ env:
   TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
   # Terraform's version check reaches a host the private runners' firewall does not allow, and is not needed.
   CHECKPOINT_DISABLE: "1"
-  # Python runs from the customer's checkout, which a pull request controls. Without this, a file such as
-  # mlz/ or json.py at its root would be imported before mlz-core's own code and the standard library, in a
-  # step that may hold a write token. Python 3.11 and later honour it.
+  # Python runs from the customer's checkout, which a pull request controls: a file such as mlz/ or json.py at its
+  # root must never be imported before mlz-core's own code and the standard library, in a step that may hold a token
+  # or an Azure sign-in. mlz runs isolated, on every Python (python3 -I tools/ci/run_mlz.py); this keeps the checkout
+  # off the path of everything else too, on Python 3.11 and later, which honour it.
   PYTHONSAFEPATH: "1"
 
 jobs:
@@ -206,7 +207,7 @@ jobs:
           stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")  # its own assignment, so that a failed check fails the step
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
           # The plan jobs: one stack each, or groups on the daily check and when many stacks are planned.
-          batches=$(PYTHONPATH=.mlz-core/tools python3 -m mlz batches --stacks "$stacks" ${{ github.event_name == 'schedule' && '--daily' || '' }})
+          batches=$(python3 -I .mlz-core/tools/ci/run_mlz.py batches --stacks "$stacks" ${{ github.event_name == 'schedule' && '--daily' || '' }})
           echo "batches=$batches" >> "$GITHUB_OUTPUT"
 
       # A stack an earlier commit of the pull request planned, and this one does not, keeps no plan that no longer holds.
@@ -698,8 +699,7 @@ jobs:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
           MLZ_REPOSITORIES: ${{ vars.MLZ_REPOSITORIES }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          PYTHONPATH: .mlz-core/tools
-        run: python3 -m mlz decommission --repo .
+        run: python3 -I .mlz-core/tools/ci/run_mlz.py decommission --repo .
 
   # Each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values whenever they
   # change (tools/mlz/workload.py): after every run on main in which nothing failed, so a repo the apply just made
@@ -759,8 +759,7 @@ jobs:
       - name: Give the workload repos their files
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
-          PYTHONPATH: .mlz-core/tools
-        run: python3 -m mlz workload-repos --configs .mlz/vending
+        run: python3 -I .mlz-core/tools/ci/run_mlz.py workload-repos --configs .mlz/vending
 
   # A contract pull request (tools/ci/publish.py, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's
