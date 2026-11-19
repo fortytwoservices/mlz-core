@@ -438,9 +438,10 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             out(f"{repo}: has a ruleset named {PUSH_RULESET} already, left as it is; mlz install check says whether it refuses changes "
                 "under .github/")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
-        if github.add_ruleset(repo, main_ruleset(role, admins["id"])):
-            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, no force push or deletion; {org}/{admins['slug']} may "
-                "merge a pull request without the approval)")
+        # A push after an approval needs a new one, as in the workload repos (the user's decision, 19 November).
+        if github.add_ruleset(repo, main_ruleset(role, admins["id"], dismiss_stale=True)):
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, which a later push takes back; no force push or "
+                f"deletion; {org}/{admins['slug']} may merge a pull request without the approval)")
         else:
             out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
                 "and requires a code owner's review (mlz install check says)")
@@ -515,8 +516,14 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
                for rule in github.branch_rules(repo, branch)):
         found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}, so CODEOWNERS only suggests reviewers; "
                      "turn on 'Require review from Code Owners' in its ruleset main (Settings, Rules, Rulesets), and check that it is active.")
+    elif not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("dismiss_stale_reviews_on_push")
+                 for rule in github.branch_rules(repo, branch)):
+        found.append(f"{repo}: an approval on {branch} stays after a later push, so an approved change can become another before it merges; "
+                     "turn on 'Dismiss stale pull request approvals when new commits are pushed' in its ruleset main (Settings, Rules, "
+                     "Rulesets). Bringing a branch up to date with main keeps the approval (docs/pipelines.md, Code owners).")
     if not found:
-        out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}")
+        out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}, "
+            "which a later push takes back")
     return found
 
 
