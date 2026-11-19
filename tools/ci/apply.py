@@ -55,6 +55,7 @@ def apply(role: str, stack: str, run=subprocess.run, say=print) -> int:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         sys.exit(apply(sys.argv[1], sys.argv[2]))
     except subprocess.CalledProcessError as error:

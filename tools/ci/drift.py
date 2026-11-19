@@ -75,6 +75,7 @@ def report() -> int:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         sys.exit(report())
     except subprocess.CalledProcessError as error:

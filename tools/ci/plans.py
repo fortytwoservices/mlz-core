@@ -52,4 +52,5 @@ def plan(role: str, stacks: list[str], say=print) -> int:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     sys.exit(plan(sys.argv[1], sys.argv[2:], say=lambda text: print(text, flush=True)))

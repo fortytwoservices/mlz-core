@@ -28,5 +28,6 @@ def mlz(*args: str) -> list[str]:
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     sys.path.insert(0, str(HERE.parents[1]))  # tools/
     runpy.run_module("mlz", run_name="__main__", alter_sys=True)

@@ -58,6 +58,7 @@ def post(stack: str, status: str, role: str, github: Pipeline, difference=settin
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
     try:
         post(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "", Pipeline())
     except (ConfigError, OSError) as error:
