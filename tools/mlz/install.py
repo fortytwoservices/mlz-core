@@ -49,7 +49,7 @@ from . import contract, mirror, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, matches, pin_of, push_refused, restricts, version
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -379,7 +379,13 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             make_executable(github, repo, branch, files, message)
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
-            missing = {path: text for path, text in starter_files(role, folder).items() if github.file(repo, path, branch)[0] is None}
+            starter = starter_files(role, folder)
+            missing = {path: text for path, text in starter.items() if github.file(repo, path, branch)[0] is None}
+            # The repo's own .gitignore keeps every line it has; the starter's it lacks are appended.
+            if GITIGNORE in starter and GITIGNORE not in missing:
+                ignore = gitignore_with(github.file(repo, GITIGNORE, branch)[0], starter[GITIGNORE])
+                if ignore is not None:
+                    missing[GITIGNORE] = ignore
             # GitHub reads .github/CODEOWNERS before the root's and docs/: one added beside the repo's own would replace it.
             if any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
                 missing.pop(owners.PATH, None)
