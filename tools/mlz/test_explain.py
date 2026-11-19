@@ -326,6 +326,23 @@ class PlatformExplainTest(unittest.TestCase):
         self.assertIn("module.rule_collection_group:", out)
         self.assertRegex(out, r"nat_rule_collections +- +<- closed: outbound rules only")
 
+    def test_only_a_network_the_platform_builds(self):
+        status, _, err = self.run_main("identity/swedencentral")
+        self.assertEqual(status, 1)
+        self.assertIn("identity/swedencentral: no file there, so identity's network is not built in swedencentral (it is built in norwayeast)", err)
+        status, _, err = self.run_main("management/swedencentral", "--inputs")
+        self.assertEqual(status, 1)
+        self.assertIn("management's network is built in the primary region, norwayeast, only", err)
+
+    def test_a_network_file_with_settings_is_shown_and_refused_with_or_without_the_contract(self):
+        self.write("identity/norwayeast.yaml", "dns_servers: [10.0.0.4]\n")
+        for contract in (True, False):
+            if not contract:
+                (self.repo / "_generated" / "governance.yaml").unlink()
+            out = self.run_main("identity/norwayeast")[1]
+            self.assertRegex(out, r"dns_servers +\[10.0.0.4\] +<- identity/norwayeast.yaml")
+            self.assertIn("identity/norwayeast: takes no settings yet", out)
+
     def test_without_governance_s_contract_what_is_worked_out_waits(self):
         (self.repo / "_generated" / "governance.yaml").unlink()
         out = self.run_main("norwayeast")[1]

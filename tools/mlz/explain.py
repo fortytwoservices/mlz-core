@@ -342,9 +342,17 @@ def platform_target(repo: Path, target: str | None, governance: dict | None) -> 
     if name == "firewall-rules":
         return "firewall-rules", "platform/rules/terraform", {}
     if name in ("management", "identity"):
-        region = region or (governance or {}).get("primary_region", "")
+        primary = (governance or {}).get("primary_region")
+        region = region or primary or ""
         if not region:
             raise ConfigError(f"{name}: give its region, {name}/<region>, or let governance's contract say the primary region.")
+        # Only a network the platform builds: management's in the primary region, identity's where its file is.
+        if name == "management" and primary and region != primary:
+            raise ConfigError(f"management/{region}: management's network is built in the primary region, {primary}, only.")
+        if name == "identity" and region not in setting_names(repo / "identity"):
+            built = setting_names(repo / "identity")
+            raise ConfigError(f"identity/{region}: no file there, so identity's network is not built in {region} "
+                              f"({'it is built in ' + ', '.join(built) if built else 'it is built nowhere yet'}).")
         return name, "platform/networks/terraform", {"network": name, "region": region}
     region = region if name == platform.CONNECTIVITY else name
     if region not in regions:
@@ -384,6 +392,11 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
         filled += [(key, "none", what) for key, what in (("reserved", "no range is reserved"), ("names", "every name from the naming template (docs/naming.md)"))
                    if key not in settings]
     else:
+        written = read_setting(repo / stack / places["region"]) or {}
+        layered = [(dotted(path), show(value), file_of(repo, where)) for path, value in leaves(written).items()]
+        if governance is None:  # the file's own checks need no contract; the rest waits for it
+            hubs = dict.fromkeys(setting_names(repo / platform.CONNECTIVITY), {})
+            platform.network_regions(repo, stack, hubs, places["region"], found)
         filled = [(stack, "no settings", f"{stack}/<region>.yaml takes none yet; {'its being there builds' if stack == 'identity' else 'management builds'} the network")]
     worked = module_inputs(root, config, places, worked_out=True).get("Worked out", []) if config else \
         [("everything else", "not known yet", WAITS if governance is None else "the platform's settings must check first (below)")]
