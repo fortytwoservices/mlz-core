@@ -488,7 +488,8 @@ jobs:
 
       # Vending makes each landing zone's workload repo, gives its team access, its apply environment and its
       # variables, as the MLZ App (docs/vending.md). Administration makes the repo too: tested in a test
-      # organization, where it alone did (GitHub lists Repository creation as well, which is not needed).
+      # organization, where it alone did (GitHub lists Repository creation as well, which is not needed). The action
+      # passes on any permission-* input; Variables (actions_variables) is not among the ones it lists, hence a warning.
       - id: github-writer
         if: inputs.role == 'vending'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
@@ -710,7 +711,7 @@ jobs:
           name: mlz-${{ inputs.role }}
           path: .mlz/
 
-      # Writing a workflow file needs Workflows as well as Contents.
+      # Writing a workflow file needs Workflows as well as Contents; the upgrade pull requests, Pull requests.
       - id: writer
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -719,6 +720,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           permission-contents: write
           permission-workflows: write
+          permission-pull-requests: write
 
       - name: Give the workload repos their files
         env:

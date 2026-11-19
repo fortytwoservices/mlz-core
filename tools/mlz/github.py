@@ -177,6 +177,21 @@ class GitHub:
     def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
         return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]
 
+    def latest_pull(self, repo: str, branch: str) -> dict | None:
+        """The newest pull request from the branch, open or closed: html_url, number, title, state, merged_at,
+        created_at; None when the branch never had one."""
+        owner = repo.split("/")[0]
+        pulls = self._api(f"repos/{repo}/pulls?state=all&head={owner}:{branch}&sort=created&direction=desc&per_page=1")
+        return pulls[0] if pulls else None
+
+    def update_pull(self, repo: str, number: int, title: str, body: str) -> None:
+        self._api(f"repos/{repo}/pulls/{number}", "PATCH", {"title": title, "body": body})
+
+    def root_files(self, repo: str, ref: str) -> list[str]:
+        """The names of the files at the top of the repo, not in a folder."""
+        found = self._api(f"repos/{repo}/contents/?ref={ref}", missing_ok=True)
+        return sorted(item["path"] for item in found or [] if item["type"] == "file")
+
     # Releases
 
     def releases(self, core: str) -> dict[str, str]:

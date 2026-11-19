@@ -285,7 +285,8 @@ way, so its workflows sign in from its `apply` environment and its pull requests
 **Its files.** After the apply that made it, vending's pipeline gives the repo mlz-core's workload starter
 (`starter/mlz-workload`), in one commit by the MLZ App (`python3 -m mlz workload-repos`, `tools/mlz/workload.py`):
 
-- `.github/workflows/mlz.yml`, which calls mlz-core's `workload.yml` at the release vending runs on. Every pull request
+- `.github/workflows/mlz.yml`, which calls mlz-core's `workload.yml` at the release vending ran on when it made the repo
+  (below: an upgrade moves it). Every pull request
   and every push to `main` plans, as the plan identity, from a read-only copy of the state; on `main` the apply then
   waits for the team in `apply`, and applies, as the deploy identity, only the changes that plan showed. The scripts
   are the role repos' own (`tools/ci/plan.py`, `apply.py`).
@@ -307,11 +308,29 @@ way, so its workflows sign in from its `apply` environment and its pull requests
   Vending writes it again whenever they change, so a team never types them.
 
 The starter goes in once, and adds only files that are not there: nothing the team wrote is replaced, and after that
-only `mlz.auto.tfvars.json` is written. So a repo made before a release that adds a value keeps its `variables.tf`:
-Terraform drops the values its `mlz` type does not declare, without an error or a warning (checked with Terraform
-1.17.0), so nothing breaks, and the team takes the new `variable "mlz"` from `starter/mlz-workload/variables.tf` of
-that release when it wants the new values. None of it is in Terraform's state, so none of it is deleted when the landing
-zone is decommissioned and its repo archived.
+only `mlz.auto.tfvars.json` is written to `main`. None of it is in Terraform's state, so none of it is deleted when the
+landing zone is decommissioned and its repo archived.
+
+**Its upgrades.** Once vending runs a newer mlz-core release than a workload repo's pipeline calls, vending's next run
+on `main` offers the repo a pull request that moves it there, `chore: mlz-core <release>` on branch `mlz/upgrade`, with
+the release notes in between, breaking changes first. The owning team merges it; its plan shows what the release
+changes in Azure.
+
+- **What it changes:** `.github/workflows/mlz.yml`, which belongs to mlz-core (it keeps calling the mlz-core repo it
+  calls), and the starter's other files only while they are exactly as the starter of the repo's release wrote them.
+  A file new in the release is added, and one the team removed stays removed.
+- **What it never changes:** a starter file the team has edited, which the pull request names instead, any other file,
+  and `mlz.auto.tfvars.json`. For `variables.tf`, it names the keys the release's `variable "mlz"` declares and the
+  repo's does not. Terraform drops the values a type does not declare, without an error or a warning (checked with
+  Terraform 1.17.0), so nothing breaks, and the team takes the new block from `starter/mlz-workload/variables.tf` of
+  that release when it wants them. It also names each place the repo's own Terraform pins mlz-core's naming module at
+  another release: moving that may rename resources, so it is the team's change.
+- **Only forward, one at a time:** a repo on vending's release, ahead of it, or pinned to a branch gets nothing. While
+  the pull request waits, each of vending's runs says so on its page, and a newer release moves the same pull request
+  on. One the team closed without merging is not offered again until the next release. Nothing is forced: a repo
+  keeps running its release.
+- A repo vending does not make (`github.create: false`, or an existing `github.repo`) is the team's own, and so are
+  its upgrades.
 
 The workload repos are in the organization the vending repo is in: the pipeline's App tokens are for that one. The
 root's `landing_zone` output names the identities and the state.
