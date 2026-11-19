@@ -185,10 +185,23 @@ jobs:
         # A fork's pull request is refused first (tools/ci/code_owners.py).
         run: python3 .mlz-core/tools/ci/code_owners.py
 
+      # The platform's check needs GitHub's list of the names its runners reach (api.github.com/meta, for the runners'
+      # firewall rule). Read here with the job's token, whose rate limit is this repository's own, not anonymously from
+      # an address the runner shares; in a step of its own, so the check keeps no token (tools/ci/github_meta.py).
+      - name: Read GitHub's meta
+        id: meta
+        if: inputs.role == 'platform'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .mlz-core/tools/ci/github_meta.py "$RUNNER_TEMP/github-meta.json"
+          echo "file=$RUNNER_TEMP/github-meta.json" >> "$GITHUB_OUTPUT"
+
       - name: Check the YAML
         id: check
         env:
           EVENT_BEFORE: ${{ github.event.before }} # a push's: where main was, to plan only what the push touches
+          MLZ_GITHUB_META: ${{ steps.meta.outputs.file }} # the platform's: the meta read above (tools/ci/check.sh)
         run: |
           stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")  # its own assignment, so that a failed check fails the step
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
