@@ -23,31 +23,19 @@ the one the workflow takes.
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
 wait for which:
 
-- **Governance's and the platform's runs on `main` go one at a time**, first in first out (a concurrency group
-  with `queue: max` on the job that calls `role.yml`). A run starts only when the one before it has finished,
-  review included, so it plans against what that run applied and the plan its reviewer approves is the plan that
-  applies.
-- **Vending's runs on `main` do not queue** (decision D3): a landing zone's change never waits behind another
-  landing zone's. Each run plans only the landing zones it touches ([below](#what-a-run-plans)), and a landing zone
-  applies one run at a time (the apply job's concurrency group, per landing zone). What makes that safe:
-  - **An apply stands down when a newer commit changed its landing zone**: it renders the landing zone's config at
-    `main`'s latest commit, and when that differs from what this run planned (a newer change, or the change taken
-    back), it applies nothing and says so; that commit's run plans it and applies what is left to change.
-  - **An apply refuses a state another run changed after its plan**: the plan records the state's version (its
-    lineage and serial, `tools/ci/state_version.py`), and the apply compares it after planning again, while
-    Terraform refuses a saved plan whose state changed after it. So an older run never applies its older values over
-    a newer run's. This holds for every role. When it stops an apply, start a manual run, whose plan has both.
-  - **What is left:** the check above reads `main` when the apply job starts. A change taken back in the seconds after
-    that, whose run plans before this apply writes the state, finds nothing to change and applies nothing, while this
-    apply goes on: Azure then has the change `main` no longer has. Only a queue per landing zone would close that, which
-    GitHub Actions does not offer short of the queue on `main`. The daily check reports it in its drift issue, and a
-    manual run puts it right.
-  - **Only a pull request's run writes the IP plan and the names**, and a pull request merges only up to date with
-    `main` (the ruleset `main`), so two landing zones never get the same addresses.
-  - **Only the run of `main`'s latest commit offers vending's contract** and the decommission pull requests, and
-    the decommission pull requests wait until the landing zone's own state says its decommission is applied.
-  - **The workload repos get their files from `main`'s current commit**, whichever run gets there, so an older run
-    never writes older values, and a repo an older run's apply made still gets its files.
+- **Runs on `main` go one at a time**, first in first out (a concurrency group with `queue: max` on the job
+  that calls `role.yml`). A run starts only when the one before it has finished, review included, so it
+  plans against what that run applied and the plan its reviewer approves is the plan that applies. Two
+  runs therefore never apply at once, not even different stacks of one role. Two guards hold besides:
+  - **An apply refuses a state that changed after its plan**: the plan records the state's version (its lineage and
+    serial, `tools/ci/state_version.py`), and the apply compares it after planning again, while Terraform refuses a
+    saved plan whose state changed after it. A hand-made apply in between, for one, stops it; start a manual run.
+  - **A vending apply stands down when a newer commit changed its landing zone**: it renders the landing zone's config
+    at `main`'s latest commit, and when that differs from what its run planned (a newer change, or the change taken
+    back, merged while it waited for its reviewer), it applies nothing and says so; that commit's run, queued behind
+    it, plans the landing zone and applies what is left to change.
+  Vending keeps its queue for now (decision D3, put off by the user on 19 November): without it, a workload repo's
+  values could be written before the change they describe is applied.
 - **A pull request's newer push cancels its older run**, so an older plan never replaces the newer one's
   comment.
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact
