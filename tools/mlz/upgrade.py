@@ -68,9 +68,10 @@ def role_of(workflow: str) -> str:
 
 
 def matches(pattern: str, path: str) -> bool:
-    """Whether a push rule's path pattern takes the whole path, in GitHub's fnmatch (File::FNM_PATHNAME): ** spans
-    folders (and with its slash, no folder at all), * and ? stay within one, [set] is one character of the set, ranges
-    included. GitHub takes no backslash quoting, no complemented set and no braces (its docs, "Unsupported fnmatch
+    """Whether a push rule's path pattern takes the whole path, in GitHub's fnmatch (Ruby's File.fnmatch with
+    File::FNM_PATHNAME): **/ spans any number of folders, none included; a ** without its slash is only a *, as Ruby's
+    docs say, so .github/** takes .github/CODEOWNERS but not .github/workflows/mlz.yml. * and ? stay within one folder,
+    [set] is one character of the set, ranges included. GitHub takes no backslash quoting, no complemented set and no braces (its docs, "Unsupported fnmatch
     syntax"), so those stay literal here too."""
     regex = ""
     i = 0
@@ -79,7 +80,7 @@ def matches(pattern: str, path: str) -> bool:
         if pattern.startswith("**/", i):
             regex, i = regex + "(?:.*/)?", i + 3
         elif pattern.startswith("**", i):
-            regex, i = regex + ".*", i + 2
+            regex, i = regex + "[^/]*", i + 2
         elif close != -1:
             regex, i = regex + "[" + re.sub(r"([\\\]\[^])", r"\\\1", pattern[i + 1:close]) + "]", close + 1
         else:

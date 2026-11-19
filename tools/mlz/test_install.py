@@ -634,6 +634,8 @@ class InstallTest(unittest.TestCase):
             self.assertTrue(install.matches(".github/**/*", path), path)
         for path in ("customer.yaml", "mlz", "_generated/governance.yaml", "docs/.github/x", ".githubx/y"):
             self.assertFalse(install.matches(".github/**/*", path), path)
+        self.assertTrue(install.matches(".github/**", ".github/CODEOWNERS"))
+        self.assertFalse(install.matches(".github/**", ".github/workflows/mlz.yml"))  # ** without its slash is *
 
     def test_the_bypass_team_is_required_visible_and_not_the_platform_team(self):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  bypass_team: mlz-admins\n", ""))
@@ -676,6 +678,9 @@ class InstallTest(unittest.TestCase):
         files = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/workflows/mlz.yml", ".github/CODEOWNERS"]}}]}
         self.assertIn("no active push ruleset refuses every change (not .github/workflows/zz-mlz-probe.yml, .github/zz-mlz-probe, "
                       ".github/actions/zz-mlz-probe/action.yml) under .github/", check(files))
+        # .github/** reaches the folder's top only: a ** without its slash is one *, in Ruby's fnmatch.
+        top_only = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**"]}}]}
+        self.assertIn("(not .github/workflows/mlz.yml, .github/workflows/zz-mlz-probe.yml, .github/actions/zz-mlz-probe/action.yml)", check(top_only))
         excepted = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"], "ignored_file_paths": [".github/workflows/*"]}}]}
         self.assertIn("(not .github/workflows/mlz.yml, .github/workflows/zz-mlz-probe.yml)", check(excepted))
         # GitHub applies every ruleset: one more, from the organization, that the team may not bypass refuses its upgrade.
