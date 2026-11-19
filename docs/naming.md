@@ -21,10 +21,10 @@ rg-acme-pay-net-pd-nwe-01        vnet-acme-pay-pd-nwe-01        stacmepaypdnwe01
 | `{type}` | The resource's short name, CAF's abbreviation: `rg`, `vnet`, `st`, `kv` | mlz-core |
 | `{org}` | The customer's code, 2 to 4 lower-case letters and digits | `naming.org`, or the root ID |
 | `{app}` | The landing zone's short name, 2 to 5 | the workload |
-| `{purpose}` | Optional: what a resource is for, where there are several of a type | mlz-core, or the engineer naming it |
+| `{purpose}` | Optional: what a resource is for, where there are several of a type ([without it](#without-purpose), `{nn}` tells mlz-core's own apart) | mlz-core, or the engineer naming it |
 | `{env}` | The environment's short name | the landing zone's file name |
 | `{region}` | The region's short name, Microsoft's code | `modules/naming/region-codes.json` |
-| `{nn}` | 01, 02 and so on, for more of the same role | |
+| `{nn}` | 01, 02 and so on: 01 for each of mlz-core's own while the template has `{purpose}`, its number without it | mlz-core, or the engineer naming it |
 
 A template is tokens in braces, dashes, and lower-case text such as `az`. It must contain `{type}`. An empty
 `{purpose}` drops out with one dash beside it; no other token may be empty, so a missing short name, or an
@@ -87,8 +87,9 @@ so they keep that pattern.
 
   A changed name replaces the resource: the plan shows it deleted and created again. The subscription is the
   exception: only its display name changes, as it is made by an alias that never does.
-- Both resource groups, and every NSG, need names of their own. A template without `{purpose}` gives them one
-  each, so the check refuses it until `{purpose}` is back or one of them is named under `names:`.
+- The resource groups, the two identities and every NSG need names of their own. A template without `{purpose}`
+  numbers them in `{nn}` ([below](#without-purpose)); one without `{purpose}` and `{nn}` gives them one name, so the
+  check refuses it until one of the two is back or one of them is named under `names:`.
 - `./mlz explain --repo . <key>` shows every name and where it came from.
 
 ### A name, once given, stays
@@ -141,7 +142,8 @@ module "gateway_name" {
 ```
 
 A name that does not fit stops the plan, as mlz-core's own do. A test renders cases through the module and through
-`tools/mlz/naming.py` and requires the same names.
+`tools/mlz/naming.py` and requires the same names. The module names one resource at a time and cannot count the
+team's others: with a template without `{purpose}`, give each resource of a type its own `nn`.
 
 ## The platform, governance and the bootstrap
 
@@ -168,6 +170,52 @@ change to `customer.yaml`, whose plans show every renamed resource replaced. Two
   holds every role's state, so it has `prevent_destroy`: a change that would rename it stops the plan instead
   (`docs/bootstrap.md`). A storage account's name is global, so this is also the way out when another tenant
   has taken it.
+
+## Without `{purpose}`
+
+A customer whose template has no `{purpose}` (the general one, or a type's own under `naming.templates`) names
+nothing by hand: mlz-core tells its own resources of one type in one place apart by their number in `{nn}`. With
+`{purpose}` in the template every `{nn}` is `01`, as it always was, so mlz-core's default names do not change. Without
+`{purpose}` and without `{nn}`, two of a type would share a name, and the check refuses it, saying to add one of them.
+
+Each resource has a fixed number, never a count of what happens to be there: a component switched off keeps its
+number, and switching it on or off renames nothing. The numbers are in names, so the tables are only ever added to.
+A resource not listed is alone of its type where it is, and is `01`.
+
+| Where | Type | Numbers |
+|---|---|---|
+| A landing zone | resource groups | the network's `01`, the identity's `02`, the state's `03` |
+| A landing zone | identities | the deploy identity `01`, the plan identity `02` |
+| A hub, in each region | public IPs | the firewall's `01`, the firewall's management IP `02`, Bastion's `03` |
+| A part of the platform | resource groups | the part's own `01` (governance's in management), its network's `02` (management's, identity's) |
+| Management | data collection rules | change tracking `01`, VM insights `02`, Defender for SQL `03` |
+| The bootstrap | identities | governance's plan `01` and apply `02`, the platform's `03` and `04`, vending's `05` and `06`, the runners' `07` |
+| The bootstrap | private endpoints, and their network interfaces | the state account's `01`, the vault's `02` |
+
+A hub whose public IP template had no `{purpose}` worked before only with all but one of its public IPs named under
+the hub file's `names:`, and that one was `01`. It now takes its fixed number, which replaces the IP and changes its
+address: pin it under `names:` with its current name before upgrading.
+
+A landing zone's NSGs, one per subnet, are numbered when they are first named: a new subnet's NSG takes the lowest
+number no NSG of the landing zone holds in `_generated/names.yaml`, and NSGs named in the same pull request take
+theirs in the order of their subnets' names. A recorded name never changes. A removed subnet's NSG keeps its name in
+the record for as long as the IP plan holds its block, until `./mlz release`, so its number is not given again while
+that NSG may still be there. An NSG named under `names:` is the landing zone's own and stays out of the record: its name
+holds a number only while it is named there, so give it one the template does not give, such as `nsg-pay-web`.
+
+The platform's networks keep no such record, so management's and identity's NSGs cannot be numbered in a way that
+holds when a subnet is added or removed. Their template keeps `{purpose}`, which is the subnet's name: with a general
+template without it, give NSGs one of their own in `customer.yaml`, or the check refuses it:
+
+```yaml
+naming:
+  template: "{type}-{org}-{app}-{env}-{region}-{nn}"
+  templates:
+    network_security_group: "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}"
+```
+
+`./mlz explain --repo . <key>` says, for a landing zone's numbered name, which number it is and why. The tables are
+`NUMBERS` in `tools/mlz/names.py` and `tools/mlz/vending.py`, each pinned by a test.
 
 ## customer.yaml
 

@@ -44,6 +44,40 @@ class ExplainTest(unittest.TestCase):
         parts = explain.explain(self.repo, "payments-prod", lz, vending.ip_plan(self.repo), governance, platform)
         return {setting: (value, source) for part in parts.values() for setting, value, source in part}
 
+    def test_a_numbered_name_says_where_its_number_comes_from(self):
+        # A template without {purpose}: mlz-core numbers its own (docs/naming.md, without {purpose}).
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        (self.repo / vending.NAMES).unlink()
+        self.allocate(flat)
+        rows = self.rows(flat)
+        self.assertEqual(rows["name identity_resource_group"], ("rg-demo-pay-pd-nwe-02", "recorded in _generated/names.yaml; number 02 of the landing "
+                         "zone's resource groups (network_resource_group, identity_resource_group, state_resource_group)"))
+        self.assertEqual(rows["name plan_identity"][1], "recorded in _generated/names.yaml; number 02 of the landing zone's identities "
+                         "(deploy_identity, plan_identity)")
+        self.assertTrue(rows["name NSG of default"][1].endswith("; NSGs are numbered: the lowest number no NSG of the landing zone held when it was first named"))
+        self.assertEqual(rows["name virtual_network"][1], "recorded in _generated/names.yaml")  # alone of its type: nothing to say
+        # A recorded NSG whose number a fresh count would not repeat is no change; another short name is one.
+        self.write(vending.NAMES, (self.repo / vending.NAMES).read_text().replace("nsg-demo-pay-pd-nwe-01", "nsg-demo-pay-pd-nwe-02"))
+        self.assertEqual(self.rows(flat)["name NSG of default"][0:1], ("nsg-demo-pay-pd-nwe-02",))
+        self.assertNotIn("the template now gives", self.rows(flat)["name NSG of default"][1])
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.assertIn("the template now gives nsg-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)", self.rows(flat)["name NSG of default"][1])
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
+        # A location that is no single region: explain still runs, and problems() says what it must be.
+        self.write("landing-zones/payments/prod.yaml", PROD + "location: [norwayeast]\n")
+        self.assertEqual(self.rows(flat)["name NSG of default"][0], "nsg-demo-pay-pd-nwe-02")  # the recorded one
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        # Named under another template, a recorded name keeps its name and has no number to explain: only the change.
+        (self.repo / vending.NAMES).unlink()
+        self.allocate()
+        rows = self.rows(flat)
+        self.assertEqual(rows["name identity_resource_group"][1], "recorded in _generated/names.yaml; the template now gives rg-demo-pay-pd-nwe-02 "
+                         "(./mlz names --repo . --renew payments-prod)")
+        self.assertEqual(rows["name NSG of default"][1], "recorded in _generated/names.yaml; the template now gives nsg-demo-pay-pd-nwe-01 "
+                         "(./mlz names --repo . --renew payments-prod)")
+        # With {purpose}, nothing is numbered and nothing is said.
+        self.assertEqual(self.rows()["name identity_resource_group"][1], "recorded in _generated/names.yaml")
+
     def test_each_value_names_the_file_that_set_it_and_what_it_replaced(self):
         rows = self.rows()
         self.assertEqual(rows["owner"], ("payments@demo.example", "landing-zones/payments/workload-defaults.yaml"))

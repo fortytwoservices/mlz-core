@@ -143,6 +143,10 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         recorded = vending.flat(everything.get(key, {}))
         names, given = landing_zone_names(key, lz, entry, governance, everything, [])  # problems() reports what stops one
         fresh = vending.flat(landing_zone_names(key, lz, entry, governance, {}, [])[1])  # the template's, nothing kept
+        try:
+            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+        except ConfigError:
+            settings = None  # problems() reports it
         for item, value in vending.flat({k: v for k, v in names.items() if k in vending.NAMED or k in (vending.REPOSITORY, vending.SUBSCRIPTION, "network_security_groups")}).items():
             if not value:
                 continue
@@ -151,12 +155,46 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 source = f"names: in {file_of(repo, lz['where'])}"
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
-                if fresh.get(item) not in (None, value):
+                # Whether the recorded name is the one the template gives now: a counted NSG keeps the number it was first
+                # given, which a fresh count need not repeat, so for it any number will do. Only a name the template no
+                # longer gives is a change to report, and only a current one has the template's number to explain.
+                current = numbered_alike(value, lz, settings) if item.startswith("network_security_groups.") else fresh.get(item) == value
+                if fresh.get(item) not in (None, value) and not (item.startswith("network_security_groups.") and current):
                     source += f"; the template now gives {fresh[item]} (./mlz names --repo . --renew {key})"
+                if current:
+                    source += number_origin(item, settings)
             else:
-                source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request"
+                source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request" + number_origin(item, settings)
             worked.append((label, value, source))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
+
+
+def numbered_alike(value: str, lz: dict, settings: naming.Naming | None) -> bool:
+    """Whether a recorded NSG name is the one the template gives now with some number: the number is the only
+    difference a fresh count can show for it."""
+    if settings is None or not naming.counts(settings, "network_security_group"):
+        return False
+    app, env, region = vending.short_name(lz), lz["environment"], lz["settings"].get("location")
+    if not all(isinstance(part, str) for part in (app, env, region)):
+        return False  # a location that is a list, say: problems() says what it must be
+    return any(vending.nsg_name(settings, app, env, region, n).lower() == value.lower() for n in range(1, 100))
+
+
+def number_origin(item: str, settings: naming.Naming | None) -> str:
+    """Why a name has its {nn}, where its type's template has no {purpose} and mlz-core numbers its own (docs/naming.md,
+    without {purpose}); "" otherwise."""
+    if settings is None:
+        return ""
+    if item.startswith("network_security_groups."):
+        if not naming.counts(settings, "network_security_group"):
+            return ""
+        return "; NSGs are numbered: the lowest number no NSG of the landing zone held when it was first named"
+    if item not in vending.NUMBERS or not naming.counts(settings, vending.NAMED[item][0]):
+        return ""
+    kind = vending.NAMED[item][0]
+    alike = [other for other in vending.NUMBERS if vending.NAMED[other][0] == kind]
+    plural = {"resource_group": "resource groups", "user_assigned_identity": "identities"}.get(kind, f"{kind.replace('_', ' ')}s")
+    return f"; number {vending.NUMBERS[item]:02d} of the landing zone's {plural} ({', '.join(alike)})"
 
 
 def landing_zone_names(key: str, lz: dict, entry: dict, governance: dict, recorded_names: dict, found: list[str]) -> tuple[dict, dict]:

@@ -18,7 +18,8 @@ module "gateway_name" {
 - **`type`** is one of `name-rules.json`'s types.
 - **`purpose`** is optional, up to 20 lower-case letters, digits and inner hyphens. An empty one drops out of the name
   with one dash.
-- **`nn`** (default 1) tells apart more of the same role: `01`, `02`.
+- **`nn`** (default 1) tells apart more of the same role: `01`, `02`. With a template that has no `{purpose}`, it is
+  what tells two of a type apart: the module names one resource at a time, so give each its own.
 - A name Azure would not take for its type stops the plan with the reason, as mlz-core's own names do: it is
   refused, never cut.
 
