@@ -110,6 +110,19 @@ run "identity_roles_named_from_ids" {
   }
 }
 
+# A live landing zone without budget.monthly: no budget, and the plan goes through sub-vending's types with its
+# optional block left out (a null typed as an empty object would fail there, as the hub's Bastion did in v0.11.3).
+run "live_without_a_budget" {
+  command = plan
+  variables {
+    config_file = "tests/no-budget.json"
+  }
+  assert {
+    condition     = length(local.budgets) == 0 && length(azapi_resource.resource_group) == 2 && length(azapi_resource.identity_role) == 4
+    error_message = "A live landing zone without a budget has everything but the budget."
+  }
+}
+
 # A corp landing zone: ALZ's Deny-Public-Endpoints on its management group would refuse the state account.
 run "corp_denies_public_endpoints" {
   command = plan

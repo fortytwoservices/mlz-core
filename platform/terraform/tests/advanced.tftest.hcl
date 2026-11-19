@@ -1,14 +1,14 @@
-# What the hub module is given for a hub with advanced: and one without, with the provider mocked: no Azure.
-# Run: terraform -chdir=platform/terraform test. tests/advanced.json is what python3 -m mlz platform writes for
-# connectivity/norwayeast.yaml (no advanced:) and connectivity/swedencentral.yaml (with it); test_advanced.py checks
-# that it still is.
+# What the hub module is given for a hub with advanced: and one without, and for a hub with each component a hub file
+# can turn off, with the provider mocked: no Azure. Run: terraform -chdir=platform/terraform test. tests/advanced.json
+# is what python3 -m mlz platform writes for connectivity/norwayeast.yaml (no advanced:), swedencentral.yaml (with it),
+# westeurope.yaml (no Bastion) and northeurope.yaml (no DNS resolver); test_advanced.py checks that it still is.
 mock_provider "azapi" {
-  # The hub module's region lookups list Azure's locations: the two hubs' regions are enough.
+  # The hub module's region lookups list Azure's locations: the hubs' regions are enough.
   mock_data "azapi_resource_action" {
     defaults = {
       output = {
         value = [
-          for name in ["norwayeast", "swedencentral"] : {
+          for name in ["norwayeast", "swedencentral", "westeurope", "northeurope"] : {
             name                     = name
             displayName              = name
             availabilityZoneMappings = [{ logicalZone = "1" }, { logicalZone = "2" }, { logicalZone = "3" }]
@@ -51,5 +51,17 @@ run "advanced" {
       sort(keys(local.hub_virtual_networks["norwayeast"].bastion)) == sort(["name", "public_ip_name", "subnet_address_prefix"])
     )
     error_message = "A hub without advanced: is not given what it was before."
+  }
+
+  # A component the hub file turns off reaches the module as no object at all, and the plan goes through the module's
+  # types (a plan run: a null typed as an empty object failed it, v0.11.3, abc's hub without Bastion).
+  assert {
+    condition = (
+      local.hub_virtual_networks["westeurope"].bastion == null &&
+      local.hub_virtual_networks["westeurope"].dns_resolver.name == "dnspr-demo-hub-pd-we-01" &&
+      local.hub_virtual_networks["northeurope"].dns_resolver == null &&
+      local.hub_virtual_networks["northeurope"].bastion.name == "bas-demo-hub-pd-ne-01"
+    )
+    error_message = "A hub without Bastion, or without its DNS resolver, is not given what its file says."
   }
 }
