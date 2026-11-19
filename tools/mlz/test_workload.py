@@ -451,6 +451,28 @@ class RuleTest(SyncTest):
         self.assertIn(f"::warning::{self.REPO}: its rule on main is not complete: gh api GET rulesets: HTTP 502", out)
         self.assertEqual(offered, [self.REPO])
 
+    def test_a_commit_the_repo_s_own_rule_refuses_leaves_the_rest_to_go_on_and_fails_the_run(self):
+        self.config("payments-prod")
+        self.config("website-prod")
+        github = FakeGitHub({self.REPO: {}, "acme-org/website-prod": {}})
+        refuse = github.commit_files
+        def commit_files(repo, branch, head, files, message):
+            if repo == self.REPO and branch == "main":
+                raise ConfigError("gh api POST graphql: Repository rule violations found")
+            refuse(repo, branch, head, files, message)
+        github.commit_files = commit_files
+        out = []
+        with self.assertRaisesRegex(ConfigError, f"vending's commit to main was refused in {self.REPO}: a ruleset of the repo's own"):
+            workload.sync(github, self.configs, out.append, "mlz-release")
+        self.assertTrue(any(line.startswith(f"::error::{self.REPO}: GitHub refused vending's commit of") for line in out))
+        self.assertIn(self.REPO, github.made_rulesets)  # its rule still made
+        self.assertEqual([repo for repo, *_ in github.commits], ["acme-org/website-prod"])  # and the next repo still served
+
+    def test_a_ruleset_with_a_deploy_key_is_compared_not_crashed_on(self):
+        own = {**install.main_ruleset("workload", 7, 99, approvals=1)}
+        own["bypass_actors"] = own["bypass_actors"] + [{"actor_id": None, "actor_type": "DeployKey", "bypass_mode": "always"}]
+        self.assertFalse(workload.same_ruleset(own, install.main_ruleset("workload", 7, 99, approvals=1)))
+
     def test_the_code_owners_file_is_vending_s(self):
         github = self.made()
         self.sync(github)

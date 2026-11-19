@@ -83,6 +83,7 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
     the rule lets through; without it no rule is made, since it would refuse them."""
     releases: dict[str, str] = {}
     app_id = None
+    refused: list[str] = []  # repos whose commit to main GitHub refused: said once every repo has had its turn
     for path in sorted(configs.glob("*.json")):
         config = json.loads(path.read_text())
         github_config, workload = config.get("github") or {}, config.get("workload")
@@ -118,8 +119,14 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
         if owners and github.file(repo, CODEOWNERS, head)[0] != owners:
             files[CODEOWNERS] = owners
         if files:
-            github.commit_files(repo, BRANCH, head, files, message)
-            out(f"{repo}: {', '.join(sorted(files))}")
+            try:
+                github.commit_files(repo, BRANCH, head, files, message)
+                out(f"{repo}: {', '.join(sorted(files))}")
+            except ConfigError as error:
+                # A ruleset of the repo's own, left as it is, may refuse the MLZ App: the repo's rule and upgrade, and the
+                # other repos, still go on, and the run fails at the end.
+                out(f"::error::{repo}: GitHub refused vending's commit of {', '.join(sorted(files))} to main: {error}")
+                refused.append(repo)
         # Its values reach main whatever happens to the rule or the upgrade: a failure there is reported, and the next
         # repo goes on.
         try:
@@ -132,6 +139,9 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
             offer_upgrade(github, repo, releases, out)
         except ConfigError as error:
             out(f"::warning::{repo}: no upgrade pull request: {error}")
+    if refused:
+        raise ConfigError(f"vending's commit to main was refused in {', '.join(refused)}: a ruleset of the repo's own must let the MLZ App "
+                          "through, as vending's do (docs/vending.md, Its rule on main).")
 
 
 def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[str], None] = print) -> None:
@@ -175,8 +185,8 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
 def same_ruleset(found: dict, wanted: dict) -> bool:
     """Whether a ruleset GitHub holds is the one wanted: its target, enforcement, bypass actors and conditions, and
     each rule with at least the parameters wanted (GitHub adds others of its own)."""
-    def actors(ruleset):
-        return sorted((a.get("actor_id"), a.get("actor_type"), a.get("bypass_mode")) for a in ruleset.get("bypass_actors") or [])
+    def actors(ruleset):  # a set: a deploy key's actor_id is null, which does not sort with the others' numbers
+        return {(a.get("actor_id"), a.get("actor_type"), a.get("bypass_mode")) for a in ruleset.get("bypass_actors") or []}
     rules = {rule["type"]: rule.get("parameters") or {} for rule in found.get("rules") or []}
     return (all(found.get(key) == wanted.get(key) for key in ("target", "enforcement", "conditions")) and actors(found) == actors(wanted)
             and set(rules) == {rule["type"] for rule in wanted["rules"]}
