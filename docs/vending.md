@@ -335,10 +335,12 @@ changes in Azure.
 **Its rule on main.** Vending gives each repo it makes the rule the role repos have (decision D14), on every run on
 `main`, as the MLZ App:
 
-- The ruleset `main`: changes only through a pull request, with a code owner's approval, and no force push or
-  deletion. The code owner is the landing zone's `github.team`, in `.github/CODEOWNERS` (`* @<org>/<team>`), which
-  belongs to mlz-core: vending writes it and keeps it as it is. Where the platform team owns the workload repos, that
-  is `team: platform` in `workload-defaults.yaml`.
+- The ruleset `main`: changes only through a pull request, with a code owner's approval and one approval besides the
+  author's (the code owner's, as a rule), and no force push or deletion. The code owner is the landing zone's
+  `github.team`, in `.github/CODEOWNERS` (`* @<org>/<team>`), which belongs to mlz-core: vending writes it and keeps it
+  as it is. Where the platform team owns the workload repos, that is `team: platform` in `workload-defaults.yaml`. The
+  team must be visible: GitHub reads no secret team in CODEOWNERS, and each run warns while it is, so that until then
+  any other writer's approval is the one that counts.
 - The ruleset `main-checks`: the pipeline's plan, `workload / plan`, must pass on a branch up to date with `main`
   before any merge into `main`.
 - **Nobody but the MLZ App may bypass the check**, and the App only for its own commits of `mlz.auto.tfvars.json` and
