@@ -3,7 +3,10 @@ state for a key it has not seen, so this plans against a downloaded copy of the 
 stack's root (tools/mlz/stacks.py). Writes, in .mlz/: plan-<stack>.txt (the full plan), summary-<stack>.md (for
 people), changes-<stack>.txt (what the apply must match) and version-<stack>.txt (the state it started from). Exits 0
 for no changes, 2 for changes, 3 when summary.py refuses the plan (the summary says why), and 1 when the plan fails;
-a step that fails before planning exits with its own code. Was plan.sh. Needs TFSTATE_STORAGE_ACCOUNT and
+a step that fails before planning exits with its own code. Changes or not is only ever summary.py's list, from the
+plan's JSON: Terraform's exit code says whether a plan was made, never whether it changes anything (no
+-detailed-exitcode, which said 2 for an import, a move or a forget alone while the list had none of them). A plan is
+failed when terraform exits non-zero, its plan file is not there, `terraform show` fails, or the JSON says errored. Was plan.sh. Needs TFSTATE_STORAGE_ACCOUNT and
 TFSTATE_CONTAINER, and az signed in.
 """
 
@@ -39,20 +42,24 @@ def plan(role: str, stack: str, run=subprocess.run) -> int:
     terraform = ["terraform", f"-chdir={root}"]
     run([*terraform, "init", "-reconfigure", "-input=false", "-no-color"], stdout=subprocess.DEVNULL, check=True)
     tfplan, as_json = work / "plans" / f"{stack}.tfplan", work / "plans" / f"{stack}.json"
-    status = run([*terraform, "plan", "-input=false", "-no-color", "-lock=false", "-detailed-exitcode",
-                  *stacks.terraform_vars(role, stack), f"-out={tfplan}"]).returncode
-    if status == 1:
+    made = run([*terraform, "plan", "-input=false", "-no-color", "-lock=false", *stacks.terraform_vars(role, stack), f"-out={tfplan}"]).returncode == 0
+    if not made or not tfplan.is_file():
         return 1
     with open(work / f"plan-{stack}.txt", "w") as out:
-        run([*terraform, "show", "-no-color", str(tfplan)], stdout=out, check=True)
+        if run([*terraform, "show", "-no-color", str(tfplan)], stdout=out).returncode != 0:
+            return 1
     with open(as_json, "w") as out:
-        run([*terraform, "show", "-json", str(tfplan)], stdout=out, check=True)
-    checked = summary.main(str(as_json), stack, str(work / f"summary-{stack}.md"), str(work / f"changes-{stack}.txt"))
+        if run([*terraform, "show", "-json", str(tfplan)], stdout=out).returncode != 0:
+            return 1
+    changes = work / f"changes-{stack}.txt"
+    checked = summary.main(str(as_json), stack, str(work / f"summary-{stack}.md"), str(changes))  # 1 for an errored plan
     as_json.unlink()
     tfplan.unlink()
     if checked == 3:
         return 3
-    return status if checked == 0 else 1
+    if checked != 0:
+        return 1
+    return 2 if changes.read_text().strip() else 0
 
 
 if __name__ == "__main__":
