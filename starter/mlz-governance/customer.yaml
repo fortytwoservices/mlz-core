@@ -26,3 +26,6 @@ subscriptions:
 # tags:
 #   required: [Owner, CostCenter, BusinessUnit]
 #   in_sandboxes: true             # sandbox users must tag what they create, for cost allocation
+
+# advanced: {management: {retention_in_days: 90}}   # inputs of governance's modules mlz-core leaves at their
+#                                                   # defaults: docs/advanced.md

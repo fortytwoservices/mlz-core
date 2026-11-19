@@ -26,9 +26,10 @@ builds:
 |---|---|---|
 | `connectivity/<region>.yaml` | that region's hub in `az-tf-mlz-connectivity-hub`'s `hub_virtual_networks` | `bastion.sku`, `firewall.zones`, `virtual_network_dns_servers`, ... |
 | a landing zone's file, or a layer above it | `Azure/avm-ptn-alz-sub-vending`'s call: its own inputs, and its objects by the keys vending gives them | `role_assignments`, `virtual_networks.spoke.subnets.<subnet>.service_endpoints`, `network_security_groups.<subnet>.security_rules`, ... |
+| `customer.yaml` | governance's two calls, each under its name: `alz` (`Azure/avm-ptn-alz`) and `management` (`az-tf-mlz-management`) | `alz.policy_assignments_to_modify`, `management.retention_in_days`, `management.data_collection_rules.vm_insights.processes_and_dependencies_enabled`, ... |
 
-`customer.yaml` comes next (brief L3). An input of the whole hub module call, such as its `retry`, is not reached
-from a hub file, since each region has its own file.
+An input of the whole hub module call, such as its `retry`, is not reached from a hub file, since each region has
+its own file.
 
 A landing zone's `advanced:` goes in any of its layers and is merged as its other settings are, so
 `defaults/landing-zone-defaults.yaml` can give every landing zone a role assignment, and one landing zone's file a
@@ -82,7 +83,8 @@ fixes for everyone.
    `local.hub_virtual_networks`, vending's `local.network_security_groups`, `local.virtual_networks` and
    `local.budgets`. A module input of its own is passed from the block, or as `null` or the module's default when the
    block has none (sub-vending's `role_assignments` and `subscription_register_resource_providers_and_features` are
-   `nullable = false`, so `null` is their default). A stack without one is given exactly what it was given before:
+   `nullable = false`, so `null` is their default; governance's inputs likewise, each `null` or the module's own
+   default). A stack without one is given exactly what it was given before:
    `platform/terraform/tests/advanced.tftest.hcl` and vending's `tests/decommission.tftest.hcl` (runs `advanced` and
    `without_advanced`) check both, with the providers mocked.
 
