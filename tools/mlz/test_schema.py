@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mlz import firewall, install, platform, schema, vending
+from mlz import firewall, governance, install, platform, schema, vending
 from mlz.files import read_setting
 from mlz.merge import ConfigError
 from mlz.test_platform import GOVERNANCE as PLATFORM_GOVERNANCE
@@ -40,7 +40,7 @@ class SchemaTest(unittest.TestCase):
         self.assertEqual(committed("network.schema.json")["properties"], {})  # management/ and identity/ take no settings yet
         rule = committed("firewall-rules.schema.json")["properties"]["outbound"]["items"]
         self.assertEqual(set(rule["properties"]), set(firewall.RULE_KEYS))
-        rules = schema.governance_rules()
+        rules = governance
         customer = committed("customer.schema.json")["properties"]
         self.assertEqual(set(customer), set(rules.SETTINGS))
         self.assertEqual(set(customer["subscriptions"]["properties"]), set(rules.PLATFORM_ROLES))

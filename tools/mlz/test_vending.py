@@ -480,7 +480,7 @@ class VendingTest(unittest.TestCase):
         self.write(IP_PLAN, render_plan(plan, retired))
         self.assertIn("payments-prod: _generated/names.yaml has no name for web yet; run the IP allocator", self.problems(build, GOVERNANCE, PLATFORM))
         (self.repo / NAMES).unlink()
-        self.assertIn("payments-prod: no names yet; run the IP allocator (python3 -m mlz allocate).", self.problems(build, GOVERNANCE, PLATFORM))
+        self.assertIn("payments-prod: no names yet; run the IP allocator (./mlz allocate --repo .).", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_explicit_names_win_and_are_checked(self):
         self.allocate()

@@ -1,13 +1,13 @@
 locals {
-  # Defaults and customer.yaml, merged and checked by scripts/render_library.py.
+  # Defaults and customer.yaml, merged and checked by mlz governance (tools/mlz/governance.py).
   config = jsondecode(file("${var.rendered_library_path}/config.json"))
 
   subscriptions = local.config.subscriptions
   region        = local.config.primary_region
   tags          = { ManagedBy = "mlz-core" }
-  # From the customer's naming template, worked out by render_library.py (tools/mlz/names.py).
+  # From the customer's naming template, worked out by mlz governance (tools/mlz/names.py).
   names = local.config.names
-  # customer.yaml's advanced:, checked by render_library.py; absent when it sets nothing.
+  # customer.yaml's advanced:, checked by mlz governance; absent when it sets nothing.
   advanced = try(local.config.advanced, {})
 
   # Resource IDs built from names, so the policies know them at plan time, before management is applied.

@@ -9,7 +9,7 @@ library and a per-customer rendering step.
 1. The customer's `customer.yaml` holds only what differs from Fortytwo's defaults
    (`governance/defaults.yaml`). A key that is neither one of governance's settings nor in the defaults
    is refused, so a mistyped key cannot leave its default in place unnoticed.
-2. `governance/scripts/render_library.py` merges the two, checks them, and writes the customer's part of
+2. `python3 -m mlz governance` (`tools/mlz/governance.py`) merges the two, checks them, and writes the customer's part of
    the ALZ library: the management group tree, Fortytwo's archetype overrides and the tag policy
    assignments, plus `config.json` for Terraform. Management group IDs cannot be templated at plan time,
    which is why this step exists.
@@ -21,9 +21,9 @@ library and a per-customer rendering step.
 
 ## Where a value comes from
 
-`python3 -m mlz explain --repo .` in the governance repo shows every setting and where it comes from: `customer.yaml`
+`./mlz explain --repo .` in the governance repo shows every setting and where it comes from: `customer.yaml`
 (naming the default it replaces), `governance/defaults.yaml`, or mlz-core's naming defaults; then the names worked
-out for management's resources, and the check `render_library.py` makes. `--inputs` lists every input of the root's
+out for management's resources, and the check `mlz governance` makes. `--inputs` lists every input of the root's
 two module calls, ALZ's and management's, with its class, value and source (`docs/reference/governance.md` has
 them without the values).
 
@@ -66,7 +66,7 @@ most 24.
 - `az-tf-mlz-management` runs in this root: the Log Analytics workspace, the Azure Monitor Agent's
   identity and the three data collection rules, in `rg-acme-mgt-pd-nwe-01` in the management subscription:
   `log-acme-mgt-pd-nwe-01`, `id-acme-mgt-ama-pd-nwe-01`, `dcr-acme-mgt-changetracking-pd-nwe-01` and so on. The
-  names come from `customer.yaml`'s naming template (`docs/naming.md`), worked out by `render_library.py` with
+  names come from `customer.yaml`'s naming template (`docs/naming.md`), worked out by `mlz governance` with
   `tools/mlz/names.py`, which every root's names come from. So `naming:` is checked on every run, section or
   not: a root ID that cannot be the customer's code (over four characters, or with a hyphen) needs `naming.org`.
 - The ALZ policies get their IDs as defaults (`log_analytics_workspace_id`, the `ama_*` values,

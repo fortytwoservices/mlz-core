@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import advanced, inputs, naming, platform, schema, vending
+from . import advanced, governance, inputs, naming, platform, schema, vending
 from .files import SUFFIXES, read_setting, setting_names
 from .merge import ConfigError
 
@@ -152,7 +152,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
                 if fresh.get(item) not in (None, value):
-                    source += f"; the template now gives {fresh[item]} (python3 -m mlz names --renew {key})"
+                    source += f"; the template now gives {fresh[item]} (./mlz names --repo . --renew {key})"
             else:
                 source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request"
             worked.append((label, value, source))
@@ -414,7 +414,7 @@ def platform_explain(repo: Path, target: str | None, governance: dict | None, ve
 
 
 def governance_explain(repo: Path, show_inputs: bool) -> str:
-    rules = schema.governance_rules()
+    rules = governance
     defaults_file = inputs.CORE / "governance" / "defaults.yaml"
     try:
         defaults, customer = rules.load_yaml(defaults_file), rules.load_yaml(repo / "customer.yaml")

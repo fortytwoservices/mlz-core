@@ -1,7 +1,8 @@
 """The GitHub calls mlz upgrade and mlz install make, through the gh CLI and the engineer's own login.
 
 Commits go through createCommitOnBranch, which GitHub signs, so they show as verified; the REST contents API
-leaves a commit made with a person's login unsigned.
+leaves a commit made with a person's login unsigned. The one exception is make_executable: createCommitOnBranch
+cannot set a file's mode.
 """
 
 from __future__ import annotations
@@ -126,6 +127,23 @@ class GitHub:
             "message": {"headline": message},
             "fileChanges": {"additions": additions, **({"deletions": deletions} if deletions else {})},
         }}})
+
+    def make_executable(self, repo: str, branch: str, paths: list[str], message: str) -> bool:
+        """One commit that makes the paths executable (mode 100755), only if one is not yet; returns whether it made
+        one. createCommitOnBranch cannot set a mode, and keeps the one a file has (checked 19 November 2026), so a file
+        it adds is not executable until this commit. The REST API makes it unsigned: on a pull request's branch the
+        squash merge makes it part of a verified commit; on a new repo's main it stays the one unverified commit. Only
+        paths at the repo's top: the root tree is read."""
+        head = self.head(repo, branch)
+        tree = self._api(f"repos/{repo}/git/commits/{head}")["tree"]["sha"]
+        entries = [{"path": item["path"], "mode": "100755", "type": "blob", "sha": item["sha"]}
+                   for item in self._api(f"repos/{repo}/git/trees/{tree}")["tree"] if item["path"] in paths and item["mode"] != "100755"]
+        if not entries:
+            return False
+        made = self._api(f"repos/{repo}/git/trees", "POST", {"base_tree": tree, "tree": entries})["sha"]
+        commit = self._api(f"repos/{repo}/git/commits", "POST", {"message": message, "tree": made, "parents": [head]})["sha"]
+        self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": commit, "force": False})
+        return True
 
     # Pull requests
 

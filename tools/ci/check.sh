@@ -7,55 +7,10 @@ source "$(dirname "$0")/lib.sh"
 role=$1
 mkdir -p "$WORK"
 
-# Every stack the settings make, as JSON, with the configs the roots read written to .mlz/.
+# Every stack the settings make, as JSON, with the configs the roots read written to .mlz/: the checks a person runs
+# with ./mlz check (python3 -m mlz check, in tools/mlz/__main__.py), for the role the repo's workflow names.
 every_stack() {
-  set -e # bash clears errexit in a command substitution: a failed render or check must fail it, and the script
-  case $role in
-    governance)
-      python3 "$CORE/governance/scripts/render_library.py" --customer customer.yaml --out "$WORK/rendered" >&2
-      echo '["governance"]'
-      ;;
-    platform)
-      python3 -m mlz platform --repo . --out "$WORK/platform.json" >&2
-      # As the starter comes, no connectivity file has a setting: the platform waits and plans nothing. On a first
-      # deployment governance's contract then merges itself, and the pull request that writes the hub is checked against it.
-      if [[ ! -f $WORK/platform.json ]]; then
-        echo "::notice::No connectivity file has a setting yet (connectivity/): the platform waits for one; nothing is planned or changed." >&2
-        echo '[]'
-        exit 0
-      fi
-      # The rules stack runs with or without firewall-rules/: every hub's platform group holds the rules mlz-core
-      # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
-      python3 -m mlz firewall --repo . --platform-config "$WORK/platform.json" --out "$WORK/firewall.json" >&2
-      # Until vending publishes its first contract, the landing zones' rules have no sources, so the rules
-      # stack stays out of the run: on a first deployment the hub goes first, and a contract gone missing from
-      # a platform already deployed never plans their rules away. The files are still checked above.
-      # Management's and identity's networks run every time, built or not, so turning one off takes it out
-      # of Azure. They apply after the hub, which they peer with, and before the rules.
-      if [[ -f _generated/vending.yaml ]]; then
-        echo '["connectivity","management","identity","firewall-rules"]'   # in this order: the rules need the hub's policy
-      else
-        echo "::notice::No vending contract yet (_generated/vending.yaml): the firewall rules stack waits for it; nothing in it is planned or changed." >&2
-        echo '["connectivity","management","identity"]'
-      fi
-      ;;
-    vending)
-      # Vending works everything out from governance's and platform's contracts. Until both are here, it waits
-      # and plans nothing: on a first deployment it goes last, and its contract pull requests merge themselves
-      # meanwhile; a contract gone missing from a vending already deployed never plans its landing zones away.
-      for contract in governance platform; do
-        if [[ ! -f _generated/$contract.yaml ]]; then
-          echo "::notice::No $contract contract yet (_generated/$contract.yaml): vending waits for it; nothing is planned or changed." >&2
-          echo '[]'
-          exit 0
-        fi
-      done
-      python3 -m mlz allocate --repo . --check >&2
-      python3 -m mlz vending --repo . --out "$WORK/vending" >&2
-      python3 -c 'import json, pathlib, sys; print(json.dumps(sorted(p.stem for p in pathlib.Path(sys.argv[1]).glob("*.json"))))' "$WORK/vending"
-      ;;
-    *) echo "unknown role $role" >&2; exit 1 ;;
-  esac
+  python3 -m mlz check --repo . --out "$WORK" --json
 }
 
 stacks=$(every_stack) # its own assignment, so that a failed check fails the script

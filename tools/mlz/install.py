@@ -49,7 +49,7 @@ from . import contract, mirror, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW, pin_of, version
+from .upgrade import EXECUTABLE, RELEASE_PLEASE_MARKER, WORKFLOW, pin_of, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -221,6 +221,14 @@ def starter_text(text: str, core: str) -> str:
     return RELEASE_PLEASE_MARKER.sub("", text).replace(f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
 
 
+def make_executable(github, repo: str, branch: str, files: dict[str, str], message: str) -> None:
+    """The starter files a person runs (./mlz), made executable after the commit that wrote them, which cannot set a
+    mode (GitHub.make_executable). A new repo's: before its ruleset, as its first commit is."""
+    executable = [path for path in EXECUTABLE if path in files]
+    if executable:
+        github.make_executable(repo, branch, executable, f"{message}: {', '.join(executable)} executable")
+
+
 def answer(question: str) -> str:
     """The person's answer, read only from a terminal: a pipe or a script never answers (a piped "y" would
     otherwise approve an apply), so without one it counts as no. --yes is the way to say yes without a person."""
@@ -276,7 +284,9 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         branch = github.default_branch(repo)
         message = f"chore: mlz-{role} from mlz-core {release()}"
         if created:
-            github.commit_files(repo, branch, github.head(repo, branch), starter_files(role, folder), message)
+            files = starter_files(role, folder)
+            github.commit_files(repo, branch, github.head(repo, branch), files, message)
+            make_executable(github, repo, branch, files, message)
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
             missing = {path: text for path, text in starter_files(role, folder).items() if github.file(repo, path, branch)[0] is None}
@@ -286,6 +296,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             url = github.open_pull(repo, STARTER_BRANCH)
             if not url:
                 github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
+                make_executable(github, repo, STARTER_BRANCH, missing, message)
                 url = github.create_pull(repo, STARTER_BRANCH, branch, message, f"The {role} starter's files this repo does not have yet, from `mlz install repos`. Files already here are left as they are.\n")
             out(f"{repo}: the {role} starter's missing files are offered in {url}")
         else:

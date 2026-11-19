@@ -75,7 +75,7 @@ class FakeGitHub:
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
-        self.created, self.commits, self.rulesets, self.pulls, self.branches = [], [], [], [], []
+        self.created, self.commits, self.rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
         self.ruleset_bodies = {}
 
     def repo(self, repo):
@@ -116,6 +116,10 @@ class FakeGitHub:
 
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, head, files, message))
+
+    def make_executable(self, repo, branch, paths, message):
+        self.executable.append((repo, branch, tuple(paths)))
+        return True
 
     def add_ruleset(self, repo, ruleset):
         if (repo, ruleset["name"]) in self.existing_rulesets:
@@ -422,6 +426,9 @@ class InstallTest(unittest.TestCase):
                          "examples/payments/workload-defaults.yaml"} <= set(commits["acme/mlz-vending"]))
         self.assertTrue({"connectivity/norwayeast.yaml", "firewall-rules/platform.yaml"} <= set(install.starter_files("platform", self.folder)))
         self.assertNotIn("x-release-please", workflow)
+        # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
+        self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
+        self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
         self.assertEqual(github.rulesets, [(repo, "main") for repo in REPOS.values()])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
 
@@ -615,6 +622,7 @@ class InstallTest(unittest.TestCase):
         offered = next(files for repo, branch, _, files, _ in github.commits if repo == "acme/mlz-governance" and branch == "mlz/starter")
         self.assertNotIn(".github/CODEOWNERS", offered)
         self.assertIn(".github/workflows/mlz.yml", offered)
+        self.assertIn(("acme/mlz-governance", "mlz/starter", ("mlz",)), github.executable)  # on the offer's branch
 
     def test_check_lists_what_stops_the_code_owners(self):
         github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=lambda role: [],

@@ -1,5 +1,7 @@
 """mlz-core's loader from the command line.
 
+    python3 -m mlz check    [--repo <a customer repo>] [--out <folder>] [--json]   every check before a plan, and the stacks
+    python3 -m mlz governance --customer <customer.yaml> --out <folder> [--defaults <file>]
     python3 -m mlz platform --repo <mlz-platform> --out <config.json>
     python3 -m mlz allocate --repo <mlz-vending> [--check]
     python3 -m mlz names    --repo <mlz-vending> --renew <key> [<key> ...]
@@ -32,22 +34,33 @@ customer's settings are not valid.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 from . import contract, decommission, explain, firewall, install, new, owners, platform, schema, stacks, upgrade, vending, workload
 from . import inputs as input_maps  # main() has a local of the module's name
+from . import governance as renderer  # and of this one's
 from .github import GitHub
 from .files import preload, read_yaml, yaml_files
 from .merge import ConfigError
 
 MARKER = ".written-by-mlz"
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mlz", description="Customer YAML in, one checked JSON file per role out.")
     roles = parser.add_subparsers(dest="role", required=True)
+    ck = roles.add_parser("check", help="every check the repo's pipeline makes before it plans, and the stacks it would plan")
+    ck.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
+    ck.add_argument("--out", type=Path, help="where to write the configs the roots read (default: a temporary folder; CI: .mlz)")
+    ck.add_argument("--json", action="store_true", help="print only the stacks, as JSON (tools/ci/check.sh)")
+    gv = roles.add_parser("governance", help="customer.yaml, merged with Fortytwo's defaults and checked, into the governance root's library and config")
+    gv.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
+    gv.add_argument("--defaults", type=Path, default=renderer.DEFAULTS, help="Fortytwo's defaults (default: governance/defaults.yaml in mlz-core)")
+    gv.add_argument("--out", type=Path, required=True, help="the folder to write the library and config.json to, replaced on every run")
     p = roles.add_parser("platform", help="connectivity/, management/ and identity/ into the config of the platform's stacks")
     p.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     p.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
@@ -143,7 +156,19 @@ def main() -> int:
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
     i.add_argument("--yes", action="store_true", help="apply the bootstrap's plan, move the subscriptions, or give the billing role, without asking")
     i.add_argument("--app-key", type=Path, help="runners: the runner App's private key (.pem), put into the runners' vault; delete the file afterwards")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+
+    if args.role == "check":
+        return check(args.repo, args.out, args.json)
+
+    if args.role == "governance":
+        try:
+            config = renderer.render(args.customer, args.defaults, args.out)
+        except (renderer.RenderError, ConfigError) as error:
+            print(f"mlz governance: {error}", file=sys.stderr)
+            return 1
+        print(f"mlz governance: wrote the library for {config['root_id']} to {args.out}")
+        return 0
 
     if args.role == "schema":
         print(f"mlz schema: wrote {', '.join(schema.write(args.out))} to {args.out}")
@@ -362,7 +387,9 @@ def main() -> int:
                 stale = [name for name, text in texts.items() if not (args.repo / name).exists() or (args.repo / name).read_text() != text]
                 if stale:
                     raise ConfigError(
-                        f"{' and '.join(stale)} {'is' if len(stale) == 1 else 'are'} not up to date; run python3 -m mlz allocate and commit {'it' if len(stale) == 1 else 'them'}."
+                        f"{' and '.join(stale)} {'is' if len(stale) == 1 else 'are'} not up to date: a pull request's check brings "
+                        f"{'it' if len(stale) == 1 else 'them'} up to date itself; on main, or to do it here, run ./mlz allocate --repo . "
+                        f"and commit {'it' if len(stale) == 1 else 'them'}."
                         + "".join(f"\n  {c}" for c in changes)
                     )
                 print(f"mlz allocate: {vending.IP_PLAN} and {vending.NAMES} are up to date")
@@ -371,7 +398,7 @@ def main() -> int:
                 write_file(args.repo / name, text)
             print("mlz allocate: " + (f"{len(changes)} change(s)" if changes else "nothing new") + "".join(f"\n  {c}" for c in changes))
             for key in retired:
-                print(f"mlz allocate: {key} was removed but holds its range; once it is destroyed, run: python3 -m mlz release --repo {args.repo} {key}")
+                print(f"mlz allocate: {key} was removed but holds its range; once it is destroyed, run: ./mlz release --repo . {key}")
         elif args.role == "names":
             record, changes = vending.give_names(args.repo, vending.ip_plan(args.repo), published("governance"), set(args.renew))
             write_file(args.repo / vending.NAMES, vending.render_names(record))
@@ -394,6 +421,72 @@ def main() -> int:
         print(f"mlz {args.role}: {error}", file=sys.stderr)
         return 1
     return 0
+
+
+def check(repo: Path, out: Path | None, as_json: bool) -> int:
+    """Every check the repo's pipeline makes before it plans (tools/ci/check.sh calls this), with the configs the roots
+    read written to out, and the stacks a run would plan: all of them, as on the daily check (check.sh then keeps those
+    a change touches). The role is the one the repo's workflow names."""
+    with tempfile.TemporaryDirectory() as scratch:
+        found = every_stack(repo, out or Path(scratch))
+    if found is None:
+        return 1
+    if as_json:
+        print(json.dumps(found))
+    else:
+        print(f"mlz check: {repo.resolve().name} checks; its stacks: {', '.join(found) if found else 'none yet'}")
+    return 0
+
+
+def every_stack(repo: Path, out: Path) -> list[str] | None:
+    """The stacks the repo's settings make, in the order they apply, with their configs written to out; None when a
+    check fails (the command that failed has said why). Each step is the command a person can run on its own."""
+    def run(*argv: object) -> bool:
+        with contextlib.redirect_stdout(sys.stderr):  # stdout is for the stacks
+            return main([str(a) for a in argv]) == 0
+
+    role = stacks.role(repo)
+    if role == "governance":
+        return ["governance"] if run("governance", "--customer", repo / "customer.yaml", "--out", out / "rendered") else None
+    if role == "platform":
+        if not run("platform", "--repo", repo, "--out", out / "platform.json"):
+            return None
+        # As the starter comes, no connectivity file has a setting: the platform waits and plans nothing. On a first
+        # deployment governance's contract then merges itself, and the pull request that writes the hub is checked
+        # against it.
+        if not (out / "platform.json").is_file():
+            notice(f"No connectivity file has a setting yet ({platform.CONNECTIVITY}/): the platform waits for one; nothing is planned or changed.")
+            return []
+        # The rules stack runs with or without firewall-rules/: every hub's platform group holds the rules mlz-core
+        # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
+        if not run("firewall", "--repo", repo, "--platform-config", out / "platform.json", "--out", out / "firewall.json"):
+            return None
+        # Management's and identity's networks run every time, built or not, so turning one off takes it out of Azure.
+        # They apply after the hub, which they peer with, and before the rules, which need the hub's policy: the
+        # order of stacks.STACKS, which map shows too.
+        every = [stack.name for stack in stacks.STACKS if stack.role == "platform"]
+        if (repo / "_generated" / "vending.yaml").is_file():
+            return every
+        # Until vending publishes its first contract, the landing zones' rules have no sources, so the rules stack
+        # stays out of the run: on a first deployment the hub goes first, and a contract gone missing from a platform
+        # already deployed never plans their rules away. The files are still checked above.
+        notice("No vending contract yet (_generated/vending.yaml): the firewall rules stack waits for it; nothing in it is planned or changed.")
+        return [name for name in every if name != "firewall-rules"]
+    # Vending works everything out from governance's and platform's contracts. Until both are here, it waits and plans
+    # nothing: on a first deployment it goes last, and its contract pull requests merge themselves meanwhile; a
+    # contract gone missing from a vending already deployed never plans its landing zones away.
+    for contract_ in ("governance", "platform"):
+        if not (repo / "_generated" / f"{contract_}.yaml").is_file():
+            notice(f"No {contract_} contract yet (_generated/{contract_}.yaml): vending waits for it; nothing is planned or changed.")
+            return []
+    if not run("allocate", "--repo", repo, "--check") or not run("vending", "--repo", repo, "--out", out / "vending"):
+        return None
+    return sorted(p.stem for p in (out / "vending").glob("*.json"))
+
+
+def notice(text: str) -> None:
+    """A note on the run's page in GitHub Actions; a line on the terminal anywhere else."""
+    print(f"::notice::{text}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"mlz check: {text}", file=sys.stderr)
 
 
 def optional_contracts(args) -> tuple[dict | None, dict | None]:

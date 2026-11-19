@@ -1,8 +1,7 @@
-#!/usr/bin/env python3
-"""Renders a customer's part of the ALZ library from customer.yaml.
+"""Renders a customer's part of the ALZ library from customer.yaml: python3 -m mlz governance, which mlz check runs.
 
 The ALZ provider reads management group IDs and archetypes from library files,
-and those cannot be templated at plan time. So this script writes them before
+and those cannot be templated at plan time. So this module writes them before
 terraform init, from Fortytwo's defaults (governance/defaults.yaml) merged with
 the customer's customer.yaml:
 
@@ -23,30 +22,28 @@ It needs Python 3.10 or later (standard library only) and terraform on the
 PATH, which converts the YAML.
 
 Usage:
-    render_library.py --customer FILE [--defaults FILE] [--out DIR]
+    python3 -m mlz governance --customer FILE [--defaults FILE] --out DIR
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
-# mlz-core's naming, in the same checkout (tools/mlz/naming.py, names.py): customer.yaml's naming section is checked
-# here, where it is written, and names management's resources; platform, vending and the bootstrap name theirs with it.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-from mlz import advanced, naming  # noqa: E402
-from mlz.names import governance as governance_names  # noqa: E402
-from mlz.merge import ConfigError  # noqa: E402
+# customer.yaml's naming section is checked here, where it is written, and names management's resources (naming.py,
+# names.py); platform, vending and the bootstrap name theirs with it.
+from . import advanced, naming
+from .names import governance as governance_names
+from .merge import ConfigError
 
-GOVERNANCE = Path(__file__).resolve().parent.parent
+GOVERNANCE = Path(__file__).resolve().parents[2] / "governance"
+DEFAULTS = GOVERNANCE / "defaults.yaml"
 MERGED_KEY_BY_KEY = ("management_groups", "tags")
-# Written into every output folder, so a later run replaces only a folder this script made.
+# Written into every output folder, so a later run replaces only a folder mlz governance made.
 MARKER = ".rendered-by-mlz-core"
 
 # The root ID prefixes management group IDs and resource names; 16 characters keep every generated name
@@ -96,9 +93,9 @@ class RenderError(Exception):
 
 
 def load_yaml(path: Path) -> dict:
-    """Parses YAML with terraform's yamldecode, so the script needs no YAML package."""
+    """Parses YAML with terraform's yamldecode, so mlz needs no YAML package."""
     if shutil.which("terraform") is None:
-        raise RenderError("terraform is not on the PATH. The script converts YAML with it.")
+        raise RenderError("terraform is not on the PATH. mlz converts YAML with it.")
     expression = f'jsonencode(yamldecode(file("{path.resolve().as_posix()}")))'
     with tempfile.TemporaryDirectory() as empty:
         run = subprocess.run(
@@ -248,10 +245,10 @@ def blocks(config: dict) -> dict:
 
 
 def prepare_output(out: Path, inputs: list[Path]) -> None:
-    """Empties the output folder, refusing any folder this script did not create.
+    """Empties the output folder, refusing any folder mlz governance did not create.
 
     The folder is deleted and recreated, so it must never be one that holds sources: not an input's
-    folder or any folder above one, and not a folder without the marker this script leaves behind."""
+    folder or any folder above one, and not a folder without the marker it leaves behind."""
     out = out.resolve()
     protected = [GOVERNANCE.parent, *(p.resolve().parent for p in inputs)]
     if any(out == p or out in p.parents for p in protected):
@@ -260,10 +257,10 @@ def prepare_output(out: Path, inputs: list[Path]) -> None:
         if not out.is_dir():
             raise RenderError(f"--out {out} is a file; choose a folder.")
         if any(out.iterdir()) and not (out / MARKER).exists():
-            raise RenderError(f"--out {out} is not empty and was not created by this script; choose an empty folder.")
+            raise RenderError(f"--out {out} is not empty and was not created by mlz governance; choose an empty folder.")
         shutil.rmtree(out)
     out.mkdir(parents=True)
-    (out / MARKER).write_text("Rendered by mlz-core governance/scripts/render_library.py. The next run replaces this folder.\n")
+    (out / MARKER).write_text("Rendered by mlz-core (python3 -m mlz governance). The next run replaces this folder.\n")
 
 
 def management_groups(config: dict) -> list[dict]:
@@ -408,7 +405,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
             "$schema": "https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/library_metadata.json",
             "name": f"{root}-customer",
             "display_name": f"{config['root_display_name']} (rendered)",
-            "description": "Rendered from customer.yaml by mlz-core governance/scripts/render_library.py. Do not edit.",
+            "description": "Rendered from customer.yaml by mlz-core (python3 -m mlz governance). Do not edit.",
             "dependencies": [],
         },
     )
@@ -423,21 +420,3 @@ def render(customer_file: Path, defaults_file: Path, out: Path) -> dict:
         write_json(out, f"policy_assignments/{name}.alz_policy_assignment.json", body)
     return config
 
-
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
-    parser.add_argument("--defaults", type=Path, default=GOVERNANCE / "defaults.yaml")
-    parser.add_argument("--out", type=Path, default=GOVERNANCE / ".rendered")
-    args = parser.parse_args()
-    try:
-        config = render(args.customer, args.defaults, args.out)
-    except RenderError as error:
-        print(f"render_library: {error}", file=sys.stderr)
-        return 1
-    print(f"render_library: wrote the library for {config['root_id']} to {args.out}")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -9,10 +9,11 @@ from pathlib import Path
 
 from mlz import mirror
 from mlz.merge import ConfigError
-from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, breaking_changes, pin_of, releases_between, role_of, upgrade, version
+from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, WRAPPER, breaking_changes, pin_of, releases_between, role_of, upgrade, version
 
 STARTERS = Path(__file__).resolve().parents[2] / "starter"
 CORE = "fortytwoservices/mlz-core"
+EDITOR = (".vscode/settings.json", ".vscode/extensions.json")
 
 
 def caller(role: str, ref: str, core: str = CORE) -> str:
@@ -38,7 +39,8 @@ def editor(role: str, path: str, tag: str) -> str:
 
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
-                 editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False):
+                 editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False,
+                 wrapper_from: str | None = None):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -47,8 +49,10 @@ class FakeGitHub:
                 assert "# x-release-please-version" in starter
                 self.files[(CORE, f"starter/mlz-{role}/{WORKFLOW}", tag)] = (starter, f"sha-{tag}")
                 if version(tag) and version(tag) >= version(editor_from):  # the editor settings came with editor_from
-                    for path in OWNED[1:]:
+                    for path in EDITOR:
                         self.files[(CORE, f"starter/mlz-{role}/{path}", tag)] = (editor(role, path, tag), f"sha-{tag}")
+                if wrapper_from and version(tag) and version(tag) >= version(wrapper_from):  # ./mlz came with wrapper_from
+                    self.files[(CORE, f"starter/mlz-{role}/{WRAPPER}", tag)] = ((STARTERS / f"mlz-{role}" / WRAPPER).read_text(), f"sha-{tag}")
         self._releases = releases
         self._open_pull = open_pull
         self.writes: list[tuple] = []
@@ -77,6 +81,10 @@ class FakeGitHub:
     def reset_branch(self, repo, branch, base):
         self.writes.append(("branch", repo, branch, base))
         return "head-of-main"
+
+    def make_executable(self, repo, branch, paths, message):
+        self.writes.append(("executable", repo, branch, tuple(paths), message))
+        return True
 
     def commit_files(self, repo, branch, head, files, message):
         self.writes.append(("files", repo, branch, head, files, message))
@@ -129,7 +137,7 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(branch, ("branch", "acme/mlz-governance", "mlz/upgrade-v0.1.7", "main"))
         _, _, on, head, files, message = written
         self.assertEqual((on, head, message), ("mlz/upgrade-v0.1.7", "head-of-main", "chore: mlz-core v0.1.7"))
-        self.assertEqual(set(files), set(OWNED))  # one commit: the workflow and the editor settings
+        self.assertEqual(set(files), {WORKFLOW, *EDITOR})  # one commit: the workflow and the editor settings
         self.assertEqual(pin_of(files[WORKFLOW]), (CORE, "v0.1.7"))
         self.assertIn("/mlz-core/v0.1.7/schemas/customer.schema.json", files[".vscode/settings.json"])
         for text in files.values():
@@ -143,14 +151,39 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("### [0.1.7]", body)  # release-please's heading, one level down
         self.assertIn("v0.1.6 -> v0.1.7", printed)
 
+    def test_a_release_with_the_wrapper_writes_it_and_makes_it_executable(self):
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, wrapper_from="v0.1.8")
+        self.run_upgrade(github)
+        branch, written, executable, pull = github.writes
+        self.assertEqual(written[4][WRAPPER], (STARTERS / "mlz-governance" / WRAPPER).read_text())
+        self.assertEqual(executable[:4], ("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,)))  # after the files
+        self.assertEqual(pull[0], "pull")
+        self.assertIn(WRAPPER, OWNED)
+
+    def test_an_unchanged_wrapper_is_still_made_executable(self):
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.8")) for path in EDITOR}
+        current[WRAPPER] = (STARTERS / "mlz-governance" / WRAPPER).read_text()
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, wrapper_from="v0.1.7")
+        self.run_upgrade(github)
+        self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
+        self.assertEqual(github.writes[2][:4], ("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,)))
+
+    def test_going_back_before_the_wrapper_removes_it(self):
+        current = {path: editor("governance", path, "v0.1.8") for path in EDITOR}
+        current[WRAPPER] = (STARTERS / "mlz-governance" / WRAPPER).read_text()
+        github = FakeGitHub(caller("governance", "v0.1.8"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, wrapper_from="v0.1.8")
+        self.run_upgrade(github, target="v0.1.7")
+        self.assertIsNone(github.writes[1][4][WRAPPER])
+        self.assertNotIn("executable", [write[0] for write in github.writes])
+
     def test_editor_settings_already_on_the_target_are_left_out(self):
-        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.7")) for path in OWNED[1:]}
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.7")) for path in EDITOR}
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, repo_files=current)
         self.run_upgrade(github)
         self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
 
     def test_going_back_before_the_editor_settings_removes_them(self):
-        current = {path: editor("governance", path, "v0.1.7") for path in OWNED[1:]}
+        current = {path: editor("governance", path, "v0.1.7") for path in EDITOR}
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, repo_files=current)
         self.run_upgrade(github, target="v0.1.6")
         files = github.writes[1][4]

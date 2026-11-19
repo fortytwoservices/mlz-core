@@ -1,0 +1,46 @@
+#!/bin/sh
+# ./mlz: mlz-core's command line for this repo, at the release its pipeline calls (.github/workflows/mlz.yml), from
+# the copy of mlz-core that file names, fetched with your own GitHub sign-in (gh). mlz-core writes this file and
+# mlz upgrade replaces it, as it does the workflow.
+#
+#   ./mlz check      every check the pipeline makes before it plans, and the stacks it would plan
+#   ./mlz map        each settings file's stack, that stack's Terraform root and its modules
+#   ./mlz --help     every command
+#
+# Needs python3 (3.10 or later), terraform, which reads the YAML, and gh, signed in to an account that can read the
+# copy of mlz-core. A release is fetched once, into ~/.cache/mlz-core.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+workflow=$here/.github/workflows/mlz.yml
+fail() {
+  echo "mlz: $*" >&2
+  exit 1
+}
+
+[ -f "$workflow" ] || fail "$workflow is not there; ./mlz runs in a governance, platform or vending repo."
+pin=$(sed -n 's|^[[:space:]]*uses:[[:space:]]*\([^/[:space:]]*/[^/[:space:]]*\)/\.github/workflows/role\.yml@\([^[:space:]#]*\).*|\1 \2|p' "$workflow" | head -n 1)
+[ -n "$pin" ] || fail "$workflow does not call mlz-core's role.yml."
+core=${pin% *}
+release=${pin#* }
+
+command -v python3 >/dev/null 2>&1 || fail "python3 is not on the PATH; install Python 3.10 or later."
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/mlz-core/$core/$release
+if [ ! -f "$cache/tools/mlz/__main__.py" ]; then
+  command -v gh >/dev/null 2>&1 || fail "gh, the GitHub CLI, is not on the PATH: install it (https://cli.github.com), then run gh auth login."
+  gh auth status --hostname github.com >/dev/null 2>&1 || fail "gh is not signed in to github.com: run gh auth login, with an account that can read $core."
+  download=$(mktemp -d)
+  trap 'rm -rf "$download"' EXIT
+  gh api "repos/$core/tarball/$release" > "$download/core.tar.gz" ||
+    fail "$core at $release could not be fetched with your gh sign-in: can your account read $core, and does it have $release?"
+  mkdir "$download/core"
+  tar -xzf "$download/core.tar.gz" -C "$download/core" --strip-components 1
+  mkdir -p "$(dirname "$cache")"
+  rm -rf "$cache"
+  mv "$download/core" "$cache"
+  rm -rf "$download"
+  trap - EXIT
+fi
+
+cd "$here"
+PYTHONPATH=$cache/tools exec python3 -m mlz "$@"

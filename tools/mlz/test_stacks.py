@@ -17,11 +17,9 @@ STARTERS = stacks.CORE / "starter"
 
 class StacksTest(unittest.TestCase):
     def test_the_table_has_the_platform_s_stacks_in_the_order_the_pipeline_applies_them(self):
-        check = (stacks.CORE / "tools" / "ci" / "check.sh").read_text()
-        planned = re.findall(r"""echo '(\[[^']*\])'""", check)
-        full = max((eval(found) for found in planned), key=len)  # the platform's list once vending has published
-        self.assertEqual(full, [s.name for s in stacks.STACKS if s.role == "platform"])
-        self.assertIn('["governance"]', check)
+        # mlz check plans them in the table's order (tools/mlz/__main__.py): the hub, the networks that peer with it,
+        # then the rules, which need the hub's policy.
+        self.assertEqual([s.name for s in stacks.STACKS if s.role == "platform"], ["connectivity", "management", "identity", "firewall-rules"])
 
     def test_a_contract_is_read_from_the_state_of_the_stack_whose_root_outputs_it(self):
         # publish.sh reads the contract from a state blob, <stack>.tfstate: the stack is not always named after its role.

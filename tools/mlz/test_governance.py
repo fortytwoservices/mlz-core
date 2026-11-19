@@ -1,4 +1,4 @@
-"""Tests for render_library.py. Run with: python3 -m unittest discover governance/scripts"""
+"""Tests for governance.py, the renderer of customer.yaml. Run with: python3 -m unittest discover -s tools -t tools"""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import render_library as rl
+from mlz import governance as rl
 
-DEFAULTS = rl.GOVERNANCE / "defaults.yaml"
+DEFAULTS = rl.DEFAULTS
 
 
 class RenderTest(unittest.TestCase):
@@ -275,7 +275,7 @@ class RenderTest(unittest.TestCase):
         (out / "keep.txt").write_text("not ours")
         with self.assertRaises(rl.RenderError) as caught:
             rl.render(self.customer(self.BASE), DEFAULTS, out)
-        self.assertIn("not created by this script", str(caught.exception))
+        self.assertIn("not created by mlz governance", str(caught.exception))
         self.assertTrue((out / "keep.txt").exists())
 
     def test_an_empty_existing_folder_is_used(self):

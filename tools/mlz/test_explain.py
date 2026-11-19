@@ -65,7 +65,7 @@ class ExplainTest(unittest.TestCase):
         # A changed short name renames nothing; explain shows what renewing would give.
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertEqual(self.rows()["name virtual_network"], (
-            "vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml; the template now gives vnet-demo-pm-pd-nwe-01 (python3 -m mlz names --renew payments-prod)"))
+            "vnet-demo-pay-pd-nwe-01", "recorded in _generated/names.yaml; the template now gives vnet-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)"))
         # Not recorded yet: the template's, which the pull request's run records.
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         (self.repo / vending.NAMES).unlink()
@@ -451,7 +451,7 @@ class ConfigPathTest(unittest.TestCase):
         finally:
             case.tearDown()
         with tempfile.TemporaryDirectory() as folder:
-            rules = explain.schema.governance_rules()
+            rules = explain.governance
             customer = rules.load_yaml(explain.inputs.CORE / "starter/mlz-governance/customer.yaml")
             merged = rules.merge(rules.load_yaml(explain.inputs.CORE / "governance/defaults.yaml"), customer)
             configs["governance/terraform"] = (rules.normalize(merged), [{}])

@@ -27,10 +27,13 @@ from .github import GitHub  # noqa: F401  (re-exported for python3 -m mlz upgrad
 from .merge import ConfigError
 
 WORKFLOW = ".github/workflows/mlz.yml"
+WRAPPER = "mlz"  # ./mlz, which runs mlz-core's command line at the release the workflow calls
 # The files in a customer repo that belong to mlz-core, which an upgrade replaces with the target release's
-# starter: the workflow, and the editor settings pointing at that release's schemas. A release from before
-# the editor settings has only the workflow, so going back to one removes them.
-OWNED = (WORKFLOW, ".vscode/settings.json", ".vscode/extensions.json")
+# starter: the workflow, the editor settings pointing at that release's schemas, and ./mlz. A release from before
+# the editor settings, or before ./mlz, does not have them, so going back to one removes them.
+OWNED = (WORKFLOW, ".vscode/settings.json", ".vscode/extensions.json", WRAPPER)
+# Of those, the ones a person runs: executable (GitHub.make_executable), which the commit that writes them cannot do.
+EXECUTABLE = (WRAPPER,)
 PIN = re.compile(r"uses:\s*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/role\.yml@(?P<ref>[^\s#]+)")
 ROLE = re.compile(r"^\s+role:\s*(?P<role>governance|platform|vending)\s*(#.*)?$", re.M)
 RELEASE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
@@ -204,11 +207,13 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         return None
     # Each file mlz-core owns: the target's version. Where the target has none, the repo's copy is removed
     # only if the release it leaves put it there; a file no release of mlz-core gave is the customer's own.
-    changes, before = {}, {}
+    changes, before, executable = {}, {}, []
     for path in OWNED:
         starter, _ = github.file(source, f"starter/mlz-{role}/{path}", target)
         if starter is None and path == WORKFLOW:
             raise ConfigError(f"{source} {target} has no starter for the {role} role.")
+        if starter is not None and path in EXECUTABLE:
+            executable.append(path)
         before[path] = current_text if path == WORKFLOW else github.file(repo, path, base)[0]
         if starter is None and github.file(source, f"starter/mlz-{role}/{path}", current)[0] is None:
             continue
@@ -237,10 +242,15 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             out(f"{repo}: the upgrade to {target} is already open: {existing}")
             return existing
         github.commit_files(repo, branch, github.reset_branch(repo, branch, base), changes, title)
+        if executable:
+            github.make_executable(repo, branch, executable, f"{title}: {', '.join(executable)} executable")
         out(f"{repo}: the upgrade to {target} in {existing} now calls {core}")
         return existing
     head = github.reset_branch(repo, branch, base)
     github.commit_files(repo, branch, head, changes, title)
+    # Also when ./mlz is unchanged: a copy that came without its mode (an earlier run that stopped) gets it here.
+    if executable:
+        github.make_executable(repo, branch, executable, f"{title}: {', '.join(executable)} executable")
     url = github.create_pull(repo, branch, base, title, body)
     out(f"{repo}: {current} -> {target}: {url}")
     return url
