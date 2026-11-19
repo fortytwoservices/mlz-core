@@ -57,7 +57,9 @@ NAMED = {
     # decommissioning keeps, since the team's resources may outlive the landing zone's.
     "plan_identity": ("user_assigned_identity", "plan"),
     "state_resource_group": ("resource_group", "state"),
-    "state_account": ("storage_account", "state"),
+    # The landing zone's only storage account, so no purpose: with one, a long customer code, app, environment and
+    # region could pass the 24 characters Azure allows (docs/naming.md). One recorded with it keeps its name.
+    "state_account": ("storage_account", None),
 }
 # Recorded beside them: the workload repo vending creates, named by customer.yaml's naming.repository.
 REPOSITORY = "repository"

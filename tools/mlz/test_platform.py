@@ -127,6 +127,15 @@ class PlatformTest(unittest.TestCase):
             "diagnostic_setting": "to-acme-workspace",
         })
 
+    def test_the_hub_s_public_ips_are_named_apart(self):
+        # One group holds all three: a template without {purpose} gives them one name, which Azure refuses.
+        self.hub("norwayeast", HUB)
+        alike = {**GOVERNANCE, "naming": {"templates": {"public_ip_address": "{type}-{org}-{app}-{env}-{region}-{nn}"}}}
+        self.assertIn("firewall_public_ip and firewall_management_public_ip would both be pip-demo-hub-pd-nwe-01, and Azure needs "
+                      "the hub's public IPs named apart", self.problems(alike))
+        self.hub("norwayeast", HUB + "names:\n  firewall_management_public_ip: pip-demo-hub-afwm\n  bastion_public_ip: pip-demo-hub-bas\n")
+        self.assertEqual(build(self.repo, alike)["hubs"]["norwayeast"]["names"]["firewall_public_ip"], "pip-demo-hub-pd-nwe-01")
+
     def test_a_hub_file_s_names_are_checked(self):
         self.hub("norwayeast", HUB + "names:\n  firewall: 'afw legacy'\n  gateway: vgw-1\n")
         message = self.problems()

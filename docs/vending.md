@@ -268,7 +268,7 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
   repo's pull requests; the deploy identity, Contributor, trusted for its `apply` environment. Both trust GitHub's
   immutable subjects, `repo:<organization>@<id>/<repo>@<id>`, as the role repos' identities do, so a renamed or
   recreated repo inherits neither.
-- **Its Terraform state**, in a storage account in the landing zone's own subscription, `stacmepaystatepdnwe01`
+- **Its Terraform state**, in a storage account in the landing zone's own subscription, `stacmepaypdnwe01`
   in `rg-acme-pay-state-pd-nwe-01`: Entra ID only, versioned, 30 days of soft delete, container `tfstate`. The plan
   identity reads it, the deploy identity writes it. It is never replaced (`prevent_destroy`) and outlives a
   decommission ([above](#decommissioning-a-landing-zone)). The pipelines reach it over its public endpoint, as they
