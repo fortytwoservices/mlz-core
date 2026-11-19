@@ -127,6 +127,13 @@ every stack whose config it changes, and no other; a README plans nothing. The r
 pull request, the plan comment of a stack an earlier commit planned and this one does not (a change taken back) is
 marked as not planned on this commit, so no plan stays there that no longer holds.
 
+On a pull request, each stack's plan comment starts with what changed in its settings: every value of the config its
+root reads (`.mlz/platform.json`, `.mlz/vending/<key>.json`, governance's `config.json`) that differs from the base
+branch's, as a table of the setting, its value there and its value now (`tools/mlz/stacks.py`'s `difference`). A
+reviewer sees what a YAML change turned into before reading the Terraform plan: setting `firewall: Premium` in a hub
+file shows one row, `hubs.norwayeast.firewall.sku_tier`. When every stack is planned without comparing, there is no
+base to compare with, and the comment has the plan only.
+
 Every stack is planned on the daily check, on a manual run (Actions, mlz, Run workflow), when the pipeline file changed
 (an upgrade to another mlz-core release), when a push brings more than one commit, and when the base does not check
 with this release. A stack whose apply failed is not planned again by the next push that does not touch it: start a

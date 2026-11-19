@@ -3,6 +3,7 @@ the starters maps to exactly one stack."""
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import tempfile
@@ -176,6 +177,54 @@ class ChangedTest(unittest.TestCase):
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertIn("firewall 'Gold' must be one of", done.stderr)
         self.assertEqual(done.stdout, "")
+
+    def test_the_difference_lists_each_changed_setting_against_the_base(self):
+        self.write(self.head, ".mlz/platform.json", '{"hubs": {"norwayeast": {"firewall": {"sku_tier": "Premium"}, "reserved": ["10.9.0.0/16"]}}}')
+        self.assertEqual(stacks.difference("platform", "connectivity", self.head), "")  # no base copy: every stack was planned
+        self.write(self.head, ".mlz/base/platform.json", '{"hubs": {"norwayeast": {"firewall": {"sku_tier": "Standard"}}}, "old": 1}')
+        self.assertEqual(stacks.difference("platform", "connectivity", self.head).splitlines(), [
+            "**connectivity**: 3 settings changed (`.mlz/platform.json` against the base branch)", "",
+            "| Setting | Base branch | This pull request |", "|---|---|---|",
+            '| `hubs.norwayeast.firewall.sku_tier` | `"Standard"` | `"Premium"` |',
+            '| `hubs.norwayeast.reserved` | (none) | `["10.9.0.0/16"]` |',
+            "| `old` | `1` | (none) |"])
+        self.write(self.head, ".mlz/vending/pay-prod.json", '{"budget": {"monthly": 2000}}')
+        self.assertEqual(stacks.difference("vending", "pay-prod", self.head), "**pay-prod** is new: the base branch has no such stack.\n")
+        self.write(self.head, ".mlz/base/vending/pay-prod.json", '{"budget": {"monthly": 2000}}')
+        self.assertIn("its settings are as on the base branch", stacks.difference("vending", "pay-prod", self.head))
+        self.write(self.head, ".mlz/rendered/config.json", '{"root_id": "demo", "naming": {}}')
+        self.write(self.head, ".mlz/base/rendered/config.json", '{"root_id": "demo", "naming": {"org": "dm"}}')
+        self.assertEqual(stacks.difference("governance", "governance", self.head).splitlines()[4:], ['| `naming.org` | `"dm"` | (none) |'])
+
+    def test_a_pull_request_that_changes_one_value_shows_that_one_difference(self):
+        # check.sh on a pull request keeps the base's configs in .mlz/base/; mlz diff then shows the one setting changed.
+        import os
+        import subprocess
+        from mlz.contract import render
+        from mlz.test_platform import GOVERNANCE
+        repo = self.head
+        shutil.copytree(STARTERS / "mlz-platform", repo)
+        (repo / "_generated").mkdir()
+        (repo / "_generated" / "governance.yaml").write_text(render("governance", GOVERNANCE))
+        (repo / ".gitignore").write_text(".mlz/\n.mlz-core\n")
+        hub = "platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\nfirewall: Standard\n"
+        (repo / "connectivity" / "norwayeast.yaml").write_text(hub)
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_EVENT_NAME", "PYTHONPATH")}
+        env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+        git = lambda *a: subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main", *a], cwd=repo, env=env, check=True, capture_output=True)
+        git("init", "-q")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        (repo / "connectivity" / "norwayeast.yaml").write_text(hub.replace("Standard", "Premium"))
+        git("commit", "-qam", "the change")
+        (repo / ".mlz-core").symlink_to(stacks.CORE)
+        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
+                              env={**env, "GITHUB_EVENT_NAME": "pull_request"}, capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(json.loads(done.stdout.strip().splitlines()[-1]), ["connectivity", "management", "identity"])
+        self.assertTrue((repo / ".mlz/base/platform.json").is_file())
+        self.assertEqual(stacks.difference("platform", "connectivity", repo).splitlines()[4:], [
+            '| `hubs.norwayeast.firewall.sku_tier` | `"Standard"` | `"Premium"` |'])
 
     def test_check_sh_names_every_input_the_roots_are_given(self):
         # What vars_for passes a root must be what inputs() compares, or a change to it would plan nothing.

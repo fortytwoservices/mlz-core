@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
-# comment.sh <stack> <plan exit code>: puts the stack's plan on the pull request, in one comment per stack
-# that later runs update.
+# comment.sh <stack> <plan exit code> [<role>]: puts the stack's plan on the pull request, in one comment per stack
+# that later runs update. With a role (plans.sh's; a workload repo's runs give none), what changed in the stack's
+# settings against the base branch comes first (mlz diff).
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
-stack=$1 status=$2
+stack=$1 status=$2 role=${3:-}
 marker="<!-- mlz-plan:$stack -->"
 run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+settings=""
+if [[ -n $role ]]; then
+  # Its own failure leaves the plan to be posted without it.
+  settings=$(python3 -m mlz diff --role "$role" --stack "$stack") || settings="(The settings' difference could not be worked out; the run's log says why.)"
+fi
 {
   echo "$marker"
+  if [[ -n $settings ]]; then
+    echo "$settings"
+    echo
+  fi
   if [[ $status == 1 ]]; then
     echo "**$stack**: the plan failed; see [the run]($run)."
   else

@@ -23,7 +23,7 @@ for stack in "$@"; do
     cat "$WORK/summary-$stack.md" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
   fi
   if [[ ${GITHUB_EVENT_NAME:-} == pull_request ]]; then
-    "$CORE/tools/ci/comment.sh" "$stack" "$status" || echo "::warning::$stack: its plan could not be put on the pull request; the run page has it."
+    "$CORE/tools/ci/comment.sh" "$stack" "$status" "$role" || echo "::warning::$stack: its plan could not be put on the pull request; the run page has it."
   fi
   case $status in
     1) echo "::error::$stack: the plan failed."; failed+=("$stack") ;;
