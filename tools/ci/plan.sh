@@ -2,7 +2,7 @@
 # plan.sh <role> <stack>: a read-only plan. The plan identity can only read the state, and the backend
 # writes an empty state for a key it has not seen, so this plans against a downloaded copy of the state
 # with a local backend. Writes, in .mlz/: plan-<stack>.txt (the full plan), summary-<stack>.md (for
-# people) and changes-<stack>.txt (what the apply must match). Exits 0 for no changes, 2 for changes, 3
+# people), changes-<stack>.txt (what the apply must match) and version-<stack>.txt (the state it started from). Exits 0 for no changes, 2 for changes, 3
 # when summary.py refuses the plan (the summary says why), and 1 when the plan fails.
 # shellcheck source=tools/ci/lib.sh
 source "$(dirname "$0")/lib.sh"
@@ -17,6 +17,8 @@ exists=$(az storage blob exists "${blob[@]}" --query exists -o tsv)
 if [[ $exists == true ]]; then
   az storage blob download "${blob[@]}" --file "$copy" >/dev/null
 fi
+# The state this plan starts from, for the apply to refuse one another run has changed since (apply.sh).
+if [[ -f $copy ]]; then python3 "$CORE/tools/ci/state_version.py" "$copy"; else echo none; fi > "$WORK/version-$stack.txt"
 printf 'terraform {\n  backend "local" {\n    path = "%s"\n  }\n}\n' "$copy" > "$root/backend_override.tf"
 terraform -chdir="$root" init -reconfigure -input=false -no-color >/dev/null
 set +e

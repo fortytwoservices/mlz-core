@@ -26,7 +26,16 @@ wait for which:
 - **Runs on `main` go one at a time**, first in first out (a concurrency group with `queue: max` on the job
   that calls `role.yml`). A run starts only when the one before it has finished, review included, so it
   plans against what that run applied and the plan its reviewer approves is the plan that applies. Two
-  runs therefore never apply at once, not even different stacks of one role.
+  runs therefore never apply at once, not even different stacks of one role. Two guards hold besides:
+  - **An apply refuses a state that changed after its plan**: the plan records the state's version (its lineage and
+    serial, `tools/ci/state_version.py`), and the apply compares it after planning again, while Terraform refuses a
+    saved plan whose state changed after it. A hand-made apply in between, for one, stops it; start a manual run.
+  - **A vending apply stands down when a newer commit changed its landing zone**: it renders the landing zone's config
+    at `main`'s latest commit, and when that differs from what its run planned (a newer change, or the change taken
+    back, merged while it waited for its reviewer), it applies nothing and says so; that commit's run, queued behind
+    it, plans the landing zone and applies what is left to change.
+  Vending keeps its queue for now (decision D3, put off by the user on 19 November): without it, a workload repo's
+  values could be written before the change they describe is applied.
 - **A pull request's newer push cancels its older run**, so an older plan never replaces the newer one's
   comment.
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact

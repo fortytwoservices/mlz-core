@@ -17,6 +17,10 @@ run does what is due and leaves an open pull request as it is.
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -58,6 +62,30 @@ def rules_in_azure(azure, platform: dict, key: str, cidr: str) -> str | None:
     return None
 
 
+def torn_down(state: dict | None) -> bool:
+    """Whether the landing zone's state says its decommission is applied: vending's landing_zone output carries
+    decommissioned: true, and no resource of its network is left in it. The output follows the configuration, which
+    an apply that destroys nothing (-refresh-only) would record too. No state, or one that cannot be read, is not torn
+    down."""
+    try:
+        if state["outputs"]["landing_zone"]["value"]["decommissioned"] is not True:
+            return False
+    except (TypeError, KeyError):
+        return False
+    return not any("virtualnetwork" in str(resource.get("module", "")) for resource in state.get("resources") or [])
+
+
+def blob_state(key: str) -> dict | None:
+    """The landing zone's state, from the state account (TFSTATE_*), as the signed-in identity reads it; None if it
+    cannot be read."""
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "state.json"
+        done = subprocess.run(["az", "storage", "blob", "download", "--auth-mode", "login", "--only-show-errors",
+                               "--account-name", os.environ["TFSTATE_STORAGE_ACCOUNT"], "--container-name", os.environ["TFSTATE_CONTAINER"],
+                               "--name", f"{key}.tfstate", "--file", str(path)], capture_output=True, text=True)
+        return json.loads(path.read_text()) if done.returncode == 0 and path.is_file() else None
+
+
 def own_files(repo: Path, where: str) -> list[str]:
     """A setting's files in the repo: <where>.yaml or .yml, or the chunks in the folder <where>/."""
     base = repo / where
@@ -84,13 +112,19 @@ def offer(github, repo: str, branch: str, files: dict[str, str | None], title: s
     return github.create_pull(repo, branch, "main", title, body)
 
 
-def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print, sha: str | None = None) -> None:
+def cleanup(github, azure, repo: Path, repositories: dict[str, str], run_url: str, out: Callable[[str], None] = print, sha: str | None = None,
+            state: Callable[[str], dict | None] = blob_state) -> None:
     """sha: the vending commit the checkout is at. Vending's pull request starts from it, so a main that moved on
-    meanwhile shows as a conflict, never as its newer files overwritten."""
+    meanwhile shows as a conflict, never as its newer files overwritten. state: a landing zone's Terraform state by
+    key: nothing is offered for one whose decommission is not applied yet. The daily check runs outside main's queue,
+    so it may get here while a run's decommission still waits for its reviewer."""
     zones, plan = landing_zones(repo), ip_plan(repo)
     platform = read_yaml(repo / "_generated" / "platform.yaml")
     retired = sorted(set(plan) - set(zones))
     for key in sorted(k for k, zone in zones.items() if decommissioned(zone)):
+        if not torn_down(state(key)):
+            out(f"decommission: {key}'s decommission is not applied yet: its pull requests follow once it is")
+            continue
         branch = f"mlz/decommission-{key}"
         rules = rules_files(github, repositories["platform"], key)
         if rules:

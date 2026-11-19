@@ -315,6 +315,7 @@ jobs:
             .mlz/plan-*.txt
             .mlz/summary-*.md
             .mlz/changes-*.txt
+            .mlz/version-*.txt
           if-no-files-found: ignore
           include-hidden-files: true
           overwrite: true # a re-run of a group whose plans partly failed replaces what the failed attempt uploaded
@@ -464,6 +465,15 @@ jobs:
         with:
           persist-credentials: false
 
+      # main's latest commit too, so that apply.sh leaves a landing zone that a commit merged while this run waited for its
+      # reviewer changed (or changed back) to that commit's run.
+      - if: inputs.role == 'vending'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: .mlz-main
+          persist-credentials: false
+
       # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
       # which a repo set up before the copy calls, is public and needs no token.
       - id: core-reader
@@ -523,6 +533,7 @@ jobs:
       - name: Apply
         env:
           STACKS: ${{ matrix.stack }} # one stack, or the platform's changed stacks in order
+          MLZ_MAIN: ${{ inputs.role == 'vending' && '.mlz-main' || '' }} # main's latest commit (above)
           GITHUB_TOKEN: ${{ steps.github-writer.outputs.token }} # vending's GitHub provider; empty for the others
           GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
