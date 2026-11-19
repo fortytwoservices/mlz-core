@@ -342,7 +342,11 @@ changes in Azure.
   team must be visible: GitHub reads no secret team in CODEOWNERS, and each run warns while it is, so that until then
   any other writer's approval is the one that counts.
   A push after an approval needs a new one (stale approvals are dismissed), so an approved change cannot become
-  another before it merges.
+  another before it merges; bringing a branch up to date with `main` keeps the approval while the pull request's own
+  diff is unchanged (tested, `docs/pipelines.md`, Code owners). Left open on purpose, as in the role repos: someone
+  who pushes onto a pull request they did not open, such as vending's upgrade pull request, may approve it themselves.
+  Requiring another approver after the last push would leave a team of two unable to approve a reviewer's small fix;
+  the bypass team, whose every bypass GitHub records, is the way for such exceptions.
 - The ruleset `main-checks`: the pipeline's plan, `workload / plan`, must pass on a branch up to date with `main`
   before any merge into `main`.
 - **Nobody but the MLZ App may bypass the check**, which vending uses only for its own commits of
