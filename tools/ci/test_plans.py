@@ -25,6 +25,9 @@ if code.startswith("early-"):  # stopped before planning: no summary
     sys.exit(int(code[len("early-"):]))
 if code != "1":
     Path(".mlz", f"summary-{stack}.md").write_text(f"**{stack}**: summary\\n")
+listed = Path(".fake", f"{stack}.changes")  # the change list summary.py would write
+if listed.exists():
+    Path(".mlz", f"changes-{stack}.txt").write_text(listed.read_text())
 sys.exit(int(code))
 """
 FAKE_COMMENT = """import sys
@@ -85,6 +88,19 @@ class PlansTest(unittest.TestCase):
         self.assertIn("planned c-prod", record)
         self.assertIn("::error::a-prod: the plan failed.", out)
         self.assertNotIn("drift", out)
+
+    def test_the_daily_check_counts_no_drift_for_updates_only_to_unknown_values(self):
+        # They may well end unchanged (abc's role assignments, 19 November): the run page says how many, the drift issue
+        # sees none. Beside any other change, the stack has drifted as before.
+        (self.dir / ".fake" / "a-prod.changes").write_text("unknown azapi_resource.role 11\nunknown azapi_resource.role2 12\n")
+        (self.dir / ".fake" / "b-prod.changes").write_text("unknown azapi_resource.role 11\nchange azapi_resource.tags 13\n")
+        code, out, record = self.run_plans({"a-prod": 2, "b-prod": 2}, "schedule")
+        self.assertEqual([self.status(s) for s in ("a-prod", "b-prod")], ["0", "2"])
+        self.assertIn("::notice::a-prod: 2 update(s) only to values unknown until apply, which may end unchanged: no drift on their own.", out)
+        self.assertIn("a-prod: 2 update(s) only to values unknown until apply, which may end unchanged; not counted as drift.", record)
+        self.assertNotIn("a-prod: drift", out)
+        self.assertIn("::error::b-prod: drift: Azure differs from main.", out)
+        self.assertEqual(code, 1)
 
     def test_a_pull_request_comments_each_plan_and_changes_are_no_failure(self):
         (self.dir / ".fake" / "comment-fails").write_text("a-prod\n")  # one comment fails: the next stack is still planned
