@@ -103,10 +103,18 @@ class Pipeline:
         owner = repo.split("/")[0]
         return [pull["number"] for pull in self._api(f"repos/{repo}/pulls?state=open&base=main&head={owner}:{branch}") or []]
 
+    def comment(self, repo: str, number: int, body: str) -> None:
+        """A comment on an issue or a pull request."""
+        self._api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": body})
+
+    def commit_pulls(self, repo: str, sha: str) -> list[dict]:
+        """The pull requests a commit belongs to: for a merge's commit on main, the one it merged."""
+        return self._api(f"repos/{repo}/commits/{sha}/pulls") or []
+
     def close_pull(self, repo: str, number: int, comment: str) -> None:
         """Closes a pull request with a comment, and deletes its branch, as gh pr close --delete-branch does."""
         pull = self._api(f"repos/{repo}/pulls/{number}")
-        self._api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": comment})
+        self.comment(repo, number, comment)
         self._api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
         self._api(f"repos/{repo}/git/refs/heads/{pull['head']['ref']}", "DELETE", missing_ok=True)
 

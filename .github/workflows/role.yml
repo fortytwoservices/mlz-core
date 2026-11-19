@@ -369,6 +369,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: read
+      pull-requests: write # a comment on the pull request whose merge waits for approval (tools/ci/changed.py)
     outputs:
       stacks: ${{ steps.changed.outputs.stacks }}
       batch_of: ${{ steps.changed.outputs.batch_of }} # each stack's plan job, for its apply to download only that one
@@ -399,10 +400,15 @@ jobs:
           token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
+      # With something to apply, the run waits for a reviewer, and every later run on main behind it: changed.py says
+      # why on the run's page, and on the merged pull request when a person opened it (finding 11).
       - id: changed
         env:
           STACKS: ${{ needs.check.outputs.stacks }}
           BATCHES: ${{ needs.check.outputs.batches }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_TITLE: ${{ github.event.head_commit.message }}
         run: python3 .mlz-core/tools/ci/changed.py
 
   apply:

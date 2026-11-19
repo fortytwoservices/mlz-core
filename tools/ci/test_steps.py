@@ -98,12 +98,38 @@ class StaleCommentsTest(Case):
         self.assertEqual(Path(".mlz/comment-pay-dev.md").read_text(), text)
 
 
+class Pulls:
+    """GitHub as changed.py asks it: the pull requests of a commit (pulls, or an error to raise), and the comments."""
+
+    def __init__(self, pulls=(), fails: str = ""):
+        self.pulls, self.fails, self.calls, self.comments = list(pulls), fails, [], []
+
+    def commit_pulls(self, repo, sha):
+        self.calls.append(("commit_pulls", repo, sha))
+        if self.fails == "pulls":
+            raise RuntimeError("HTTP 502")
+        return self.pulls
+
+    def comment(self, repo, number, body):
+        if self.fails == "comment":
+            raise RuntimeError("HTTP 403")
+        self.comments.append((repo, number, body))
+
+
+def pull(number, ref="feature", kind="User", sha="sha1"):
+    return {"number": number, "merged_at": "2026-11-19T10:00:00Z", "merge_commit_sha": sha, "user": {"type": kind}, "head": {"ref": ref}}
+
+
 class ChangedTest(Case):
-    def run_changed(self, role, stacks, batches):
+    def run_changed(self, role, stacks, batches, event="workflow_dispatch", github=None, **environment):
         out, summary = Path("out"), Path("summary")
+        self.github, self.said = github or Pulls(), []
         with mock.patch.dict(os.environ, {"ROLE": role, "STACKS": json.dumps(stacks), "BATCHES": json.dumps(batches),
-                                          "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary)}):
-            changed.main()
+                                          "GITHUB_OUTPUT": str(out), "GITHUB_STEP_SUMMARY": str(summary), "GITHUB_EVENT_NAME": event,
+                                          "GITHUB_SHA": "sha1", "GITHUB_REPOSITORY": "acme/mlz-platform", "GITHUB_RUN_ATTEMPT": "1",
+                                          "GITHUB_ACTOR": "alex", "RUN_URL": "https://example/run/9", "HEAD_TITLE": "feat: a hub (#7)\n\nbody",
+                                          **environment}):
+            changed.main(self.github, self.said.append)
         return out.read_text(), summary.read_text()
 
     def test_each_changed_landing_zone_is_an_apply_job_and_no_list_counts_as_changes(self):
@@ -112,7 +138,7 @@ class ChangedTest(Case):
         Path(".mlz/reviewed/changes-b-prod.txt").write_text("\n")
         out, summary = self.run_changed("vending", ["a-prod", "b-prod", "c-prod"], [{"id": "a-prod", "stacks": "a-prod"}, {"id": "group-001", "stacks": "b-prod c-prod"}])
         self.assertEqual(out, 'stacks=["a-prod", "c-prod"]\nbatch_of={"a-prod": "a-prod", "b-prod": "group-001", "c-prod": "group-001"}\n')
-        self.assertEqual(summary, "To apply: a-prod, c-prod. No changes, so no approval: b-prod.\n")
+        self.assertTrue(summary.startswith("To apply: a-prod, c-prod. No changes, so no approval: b-prod.\n"))
 
     def test_the_platform_s_changed_stacks_are_one_job_in_order(self):
         Path(".mlz/reviewed").mkdir()
@@ -127,7 +153,64 @@ class ChangedTest(Case):
         Path(".mlz/reviewed/changes-a-prod.txt").write_text("")
         out, summary = self.run_changed("platform", ["a-prod"], [])
         self.assertTrue(out.startswith("stacks=[]\n"))
-        self.assertEqual(summary, "To apply: nothing. No changes, so no approval: a-prod.\n")
+        self.assertEqual(summary, "To apply: nothing. No changes, so no approval: a-prod.\n")  # no note: nothing waits
+        self.assertEqual((self.github.calls, self.github.comments), ([], []))
+
+    def changes(self):
+        Path(".mlz/reviewed").mkdir()
+        Path(".mlz/reviewed/changes-connectivity.txt").write_text("x\n")
+
+    def test_a_person_s_merge_waits_and_its_pull_request_is_told(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(6, sha="other"), pull(7)]))
+        self.assertIn("### Waiting for approval\n\nThis run applies connectivity once it is approved in the `platform` environment, by one of its "
+                      "required reviewers. It was started by #7, merged: feat: a hub (#7). Every later run on main queues behind this one until "
+                      "it is approved or rejected.", summary)
+        self.assertEqual(self.github.calls, [("commit_pulls", "acme/mlz-platform", "sha1")])
+        self.assertEqual(self.github.comments, [("acme/mlz-platform", 7, "This merge's run waits for approval in the `platform` environment before it "
+                                                 "applies connectivity: https://example/run/9\n\nEvery later run on main queues behind it until it "
+                                                 "is approved or rejected.")])
+
+    def test_a_contract_merge_says_whose_contract_and_comments_nowhere(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(14, ref="mlz/vending-contract", kind="Bot")]),
+                                      HEAD_TITLE="chore: vending contract from acme/mlz-vending (#14)")
+        self.assertIn("It was started by vending's contract, merged by itself (#14).", summary)
+        self.assertEqual(self.github.comments, [])
+        # Any other pull request an app opened gets no comment either.
+        self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(15, kind="Bot")]))
+        self.assertEqual(self.github.comments, [])
+
+    def test_a_push_without_a_pull_request(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([]), HEAD_TITLE="fix: by hand")
+        self.assertIn("It was started by a push to main: fix: by hand.", summary)
+        self.assertEqual(self.github.comments, [])
+        # A contract's commit pushed without its pull request is still named as one.
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([]),
+                                      HEAD_TITLE="chore: governance contract from acme/mlz-governance")
+        self.assertIn("It was started by governance's contract, merged by itself.", summary)
+
+    def test_a_manual_run_asks_github_nothing(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="workflow_dispatch")
+        self.assertIn("It was started by a manual run by alex.", summary)
+        self.assertEqual((self.github.calls, self.github.comments), ([], []))
+
+    def test_a_re_run_comments_no_more(self):
+        self.changes()
+        _, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7)]), GITHUB_RUN_ATTEMPT="2")
+        self.assertIn("### Waiting for approval", summary)
+        self.assertEqual(self.github.comments, [])
+
+    def test_github_failing_never_stops_the_apply(self):
+        self.changes()
+        out, summary = self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7)], fails="pulls"))
+        self.assertTrue(out.startswith('stacks=["connectivity"]\n'))
+        self.assertIn("It was started by a push to main: feat: a hub (#7).", summary)
+        self.assertEqual(self.said, ["::notice::The pull request this push merged could not be found (HTTP 502); the run's page says why it waits."])
+        self.run_changed("platform", ["connectivity"], [], event="push", github=Pulls([pull(7)], fails="comment"))
+        self.assertEqual(self.said, ["::notice::Could not comment on #7 (HTTP 403); the run's page says why it waits."])
 
 
 class ApplyGuardTest(Case):
