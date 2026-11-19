@@ -70,6 +70,9 @@ Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrad
 `--dry-run` shows the change and the text without opening anything. Running it again while the pull
 request is open changes nothing.
 
+`mlz upgrade` moves the three role repos, not the workload repos: once vending's own upgrade is merged, vending's next run on `main` offers each
+workload repo it made a pull request to its release, which the owning team merges (`docs/vending.md`, "Its upgrades").
+
 Merging changes nothing in Azure. The pipeline plans with the new release, and the apply waits for the
 repo's reviewer, so the three repos can move on different days, platform last. The command runs on the
 engineer's own GitHub login, which needs write access to the repos and the `workflow` scope
@@ -91,7 +94,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 | `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 | `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
-| `workload-repos` | vending's `main`, and daily | After every run in which nothing failed: each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values (`mlz.auto.tfvars.json`) whenever they change, by the MLZ App (`docs/vending.md`). |
+| `workload-repos` | vending's `main`, and daily | After every run in which nothing failed: each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values (`mlz.auto.tfvars.json`) whenever they change, by the MLZ App; a repo whose pipeline is on an older release than vending's is offered a pull request to vending's (`docs/vending.md`, "Its upgrades"). |
 | `decommission` | vending's `main`, and daily | After a landing zone's decommission is applied, offers the pull requests that delete its files: the platform's rules file for it first, then, once its rules are out of Azure, its own file with its range released (`docs/vending.md`). Signs in as vending's plan identity to look at the hubs' firewall policies. A person merges them. |
 | `drift` | daily | Keeps one issue in the repo, "Daily check: Azure differs from main": opened, or commented on, when the check fails, or a stack's plan differs from `main` or did not finish (refused, or stopped before planning); closed by the first daily check that finds every stack as `main` says. An issue of that title opened by a person is left alone. |
 
