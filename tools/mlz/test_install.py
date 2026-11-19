@@ -792,6 +792,17 @@ class InstallTest(unittest.TestCase):
                                                  "actors may merge without it; require it in a ruleset without bypass actors"):
             install.step_check(Bypassable(**ready), self.folder, self.out)
 
+        # The check from a bypass-free ruleset, but up to date only by a ruleset someone may bypass: not up to date for them.
+        class StrictOnlyBypassable(Layered):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{"id": 99, "name": "org-strict", "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}]
+
+            def branch_rules(self, repo, branch):
+                return [{**rule, "ruleset_id": 99} if (rule.get("parameters") or {}).get("required_status_checks") == [{"context": "security / scan"}] else rule
+                        for rule in super().branch_rules(repo, branch)]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on a branch up to date"):
+            install.step_check(StrictOnlyBypassable(**ready, strict=False), self.folder, self.out)
+
     def test_check_refuses_an_organization_not_on_enterprise(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])

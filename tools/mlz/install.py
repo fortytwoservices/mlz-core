@@ -585,7 +585,8 @@ def required_check_problems(github, role: str, repo: str, out: Callable[[str], N
         return bool(by_id.get(rule.get("ruleset_id"), {}).get("bypass_actors"))
 
     required = [rule for rule in found if requires(rule)]
-    strict = any((rule.get("parameters") or {}).get("strict_required_status_checks_policy") for rule in found)
+    # Strict from a ruleset nobody bypasses too: one its bypass actors may skip keeps nobody's branch up to date for them.
+    strict = any((rule.get("parameters") or {}).get("strict_required_status_checks_policy") and not bypassed(rule) for rule in found)
     binding = [rule for rule in required if not bypassed(rule)]
     if binding and strict:
         out(f"{repo}: {check} must pass, on a branch up to date with {branch}, before any merge into {branch}; nobody may bypass it")
