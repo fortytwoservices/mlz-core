@@ -9,8 +9,9 @@ mkdir -p "$WORK"
 
 # Every stack the settings make, as JSON, with the configs the roots read written to .mlz/: the checks a person runs
 # with ./mlz check (python3 -m mlz check, in tools/mlz/__main__.py), for the role the repo's workflow names.
+# MLZ_GITHUB_META, a saved copy of api.github.com/meta, is for tests: a run fetches it.
 every_stack() {
-  python3 -m mlz check --repo . --out "$WORK" --json
+  python3 -m mlz check --repo . --out "$WORK" --json ${MLZ_GITHUB_META:+--github-meta "$MLZ_GITHUB_META"}
 }
 
 stacks=$(every_stack) # its own assignment, so that a failed check fails the script

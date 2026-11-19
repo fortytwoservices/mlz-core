@@ -56,6 +56,26 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(out, "mlz check: mlz-vending checks; its stacks: none yet\n")
         self.assertIn("mlz check: No governance contract yet (_generated/governance.yaml)", err)  # no annotation off GitHub
 
+    def test_a_platform_with_its_hub_and_vending_s_contract_plans_every_stack_in_order(self):
+        from mlz.contract import render
+        from mlz.test_firewall import GITHUB, VENDING
+        from mlz.test_platform import GOVERNANCE
+        repo = self.starter("platform")
+        (repo / "_generated").mkdir()
+        (repo / "_generated" / "governance.yaml").write_text(render("governance", GOVERNANCE))
+        # The hub's own space clear of the landing zones' ranges in VENDING (10.100.4.0/24, 10.100.5.0/24).
+        (repo / "connectivity" / "norwayeast.yaml").write_text("platform_address_space: 10.100.16.0/21\nlanding_zone_ranges: 10.100.0.0/16\n")
+        meta = self.dir / "meta.json"  # a saved api.github.com/meta: no fetch
+        meta.write_text(json.dumps({"domains": {"actions": GITHUB}}))
+        code, out, err = self.check(repo, "--json", "--github-meta", str(meta))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out), ["connectivity", "management", "identity"])  # the rules wait for vending
+        (repo / "_generated" / "vending.yaml").write_text(render("vending", VENDING))
+        code, out, err = self.check(repo, "--json", "--github-meta", str(meta), "--out", str(self.dir / "work"))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(json.loads(out), ["connectivity", "management", "identity", "firewall-rules"])
+        self.assertTrue((self.dir / "work" / "firewall.json").is_file())
+
     def test_a_failed_check_fails_and_prints_no_stacks(self):
         repo = self.starter("governance")
         (repo / "customer.yaml").write_text((repo / "customer.yaml").read_text() + "\nroot_id: NOT VALID\n")

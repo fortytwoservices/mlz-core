@@ -57,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     ck.add_argument("--repo", type=Path, default=Path("."), help="a governance, platform or vending repo (default: here)")
     ck.add_argument("--out", type=Path, help="where to write the configs the roots read (default: a temporary folder; CI: .mlz)")
     ck.add_argument("--json", action="store_true", help="print only the stacks, as JSON (tools/ci/check.sh)")
+    ck.add_argument("--github-meta", type=Path, help="platform: a saved copy of api.github.com/meta for the firewall step, read instead of fetching it")
     gv = roles.add_parser("governance", help="customer.yaml, merged with Fortytwo's defaults and checked, into the governance root's library and config")
     gv.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
     gv.add_argument("--defaults", type=Path, default=renderer.DEFAULTS, help="Fortytwo's defaults (default: governance/defaults.yaml in mlz-core)")
@@ -159,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.role == "check":
-        return check(args.repo, args.out, args.json)
+        return check(args.repo, args.out, args.json, args.github_meta)
 
     if args.role == "governance":
         try:
@@ -423,12 +424,12 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def check(repo: Path, out: Path | None, as_json: bool) -> int:
+def check(repo: Path, out: Path | None, as_json: bool, github_meta: Path | None = None) -> int:
     """Every check the repo's pipeline makes before it plans (tools/ci/check.sh calls this), with the configs the roots
     read written to out, and the stacks a run would plan: all of them, as on the daily check (check.sh then keeps those
     a change touches). The role is the one the repo's workflow names."""
     with tempfile.TemporaryDirectory() as scratch:
-        found = every_stack(repo, out or Path(scratch))
+        found = every_stack(repo, out or Path(scratch), github_meta)
     if found is None:
         return 1
     if as_json:
@@ -438,7 +439,7 @@ def check(repo: Path, out: Path | None, as_json: bool) -> int:
     return 0
 
 
-def every_stack(repo: Path, out: Path) -> list[str] | None:
+def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[str] | None:
     """The stacks the repo's settings make, in the order they apply, with their configs written to out; None when a
     check fails (the command that failed has said why). Each step is the command a person can run on its own."""
     def run(*argv: object) -> bool:
@@ -459,7 +460,8 @@ def every_stack(repo: Path, out: Path) -> list[str] | None:
             return []
         # The rules stack runs with or without firewall-rules/: every hub's platform group holds the rules mlz-core
         # requires, and deleting the last rules file must take its rules out of Azure, not leave them behind.
-        if not run("firewall", "--repo", repo, "--platform-config", out / "platform.json", "--out", out / "firewall.json"):
+        meta = ["--github-meta", github_meta] if github_meta else []
+        if not run("firewall", "--repo", repo, "--platform-config", out / "platform.json", "--out", out / "firewall.json", *meta):
             return None
         # Management's and identity's networks run every time, built or not, so turning one off takes it out of Azure.
         # They apply after the hub, which they peer with, and before the rules, which need the hub's policy: the
