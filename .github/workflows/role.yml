@@ -465,8 +465,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Vending's runs on main do not queue: main's latest commit too, so that apply.sh leaves a landing zone that a newer
-      # commit changed (or changed back) to that commit's run.
+      # main's latest commit too, so that apply.sh leaves a landing zone that a commit merged while this run waited for its
+      # reviewer changed (or changed back) to that commit's run.
       - if: inputs.role == 'vending'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -9,9 +9,9 @@ role=$1 stack=$2
 root=$(root_of "$role" "$stack")
 reviewed=$WORK/reviewed/changes-$stack.txt
 [[ -f $reviewed ]] || { echo "::error::No reviewed plan for $stack in this run; nothing is applied."; exit 1; }
-# Vending's runs on main do not queue (docs/pipelines.md). When main has moved on and its latest commit renders this
-# landing zone otherwise than this run did, a newer change, or one taken back, supersedes this one: that commit's run
-# plans it, and applies it if anything is left to change. So this one stands down rather than apply what main no longer
+# When main has moved on while this run waited for its reviewer, and its latest commit renders this landing zone
+# otherwise than this run did, a newer change, or one taken back, supersedes this one: that commit's run, queued behind
+# this one, plans it and applies what is left to change. So this one stands down rather than apply what main no longer
 # says. MLZ_MAIN is a checkout of main's latest commit (role.yml).
 if [[ $role == vending && -n ${MLZ_MAIN:-} && -d ${MLZ_MAIN:-} && $(git -C "$MLZ_MAIN" rev-parse HEAD) != "${GITHUB_SHA:-}" ]]; then
   latest=$WORK/main-vending
@@ -27,9 +27,8 @@ terraform -chdir="$root" init -reconfigure -input=false -no-color \
 # shellcheck disable=SC2046
 terraform -chdir="$root" plan -input=false -no-color $(vars_for "$role" "$stack") -out="$WORK/plans/$stack.tfplan" >/dev/null
 # The state must still be the one the reviewed plan started from, read after this plan was made: a change before or
-# during it shows here, and Terraform refuses to apply a saved plan whose state changed after it. Another run that
-# applied this stack in between (vending's runs on main do not queue: docs/pipelines.md) would otherwise let an older
-# plan's values, whose fingerprints may still match, undo the newer change.
+# during it shows here, and Terraform refuses to apply a saved plan whose state changed after it. An apply made in
+# between (by hand, say) would otherwise let this plan's values, whose fingerprints may still match, undo it.
 reviewed_version=$(cat "$WORK/reviewed/version-$stack.txt" 2>/dev/null || echo "not recorded")
 now_version=$(terraform -chdir="$root" state pull | python3 "$CORE/tools/ci/state_version.py")
 if [[ $now_version != "$reviewed_version" ]]; then
