@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.12.0](https://github.com/fortytwoservices/mlz-core/compare/v0.11.5...v0.12.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* .github/CODEOWNERS may no longer hand a folder to another team. Every run's check fails on any rule but the installer's two (* @<org>/<platform team> and /_generated/), naming the rule. Remove such lines; since the push ruleset, a member of the bypass team makes that change. mlz owners is gone.
+* bootstrap.yaml needs github.bypass_team, the slug of a small, visible team of the organization that is not the platform team. Only its members may change .github/ in the three repos, so whoever runs mlz upgrade or changes CODEOWNERS must be in it. mlz install repos and check refuse a bootstrap.yaml without it. Make the team, set github.bypass_team, then run mlz install repos (it adds the push ruleset pipeline-files) and mlz install check, and delete branches you do not know.
+
+### Features
+
+* changes under .github/ only from the bypass team (finding 17) ([#120](https://github.com/fortytwoservices/mlz-core/issues/120)) ([6ae286c](https://github.com/fortytwoservices/mlz-core/commit/6ae286c8704f6f5a57b6b2c49306e98e63bc6765))
+* **naming:** without {purpose} in a template, mlz-core numbers its own resources of a type in {nn} ([#125](https://github.com/fortytwoservices/mlz-core/issues/125)) ([b2fd6bb](https://github.com/fortytwoservices/mlz-core/commit/b2fd6bb9ee23e69c1609883220b6b8bc09710cb0))
+
+
+### Bug Fixes
+
+* **vending:** a new landing zone's state account without a purpose ([#124](https://github.com/fortytwoservices/mlz-core/issues/124)) ([9f231a7](https://github.com/fortytwoservices/mlz-core/commit/9f231a7de1ce29f3fd50cb4d4f5cab653295d111))
+
+
+### Code Refactoring
+
+* code owners without the handover ([#123](https://github.com/fortytwoservices/mlz-core/issues/123)) ([f64208d](https://github.com/fortytwoservices/mlz-core/commit/f64208dc6195450577f94285a94d10237e0f2024))
+
 ## [0.11.5](https://github.com/fortytwoservices/mlz-core/compare/v0.11.4...v0.11.5) (2026-11-19)
 
 
