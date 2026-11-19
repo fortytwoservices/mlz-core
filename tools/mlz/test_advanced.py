@@ -13,9 +13,13 @@ from mlz.merge import ConfigError
 from mlz.test_platform import GOVERNANCE
 
 HUB = "platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\nbastion: true\n"
-# What the Terraform test (platform/terraform/tests/advanced.tftest.hcl) gives the platform root.
+# What the Terraform test (platform/terraform/tests/advanced.tftest.hcl) gives the platform root: a hub without
+# advanced:, one with it, and one for each component a hub file can turn off (Bastion, off unless asked for; the DNS
+# resolver).
 FIXTURE = {
     "norwayeast": HUB,
+    "westeurope": "platform_address_space: 10.50.0.0/21\nlanding_zone_ranges: 10.50.0.0/16\n",
+    "northeurope": "platform_address_space: 10.60.0.0/21\nlanding_zone_ranges: 10.60.0.0/16\nbastion: true\ndns_resolver: false\n",
     "swedencentral": "platform_address_space: 10.200.0.0/21\nlanding_zone_ranges: 10.200.0.0/16\nbastion: true\n"
                      "advanced:\n  virtual_network_dns_servers: [10.200.1.68]\n  bastion:\n    sku: Premium\n    tunneling_enabled: true\n"
                      "  firewall:\n    zones: ['1', '2', '3']\n    firewall_policy:\n      threat_intelligence_mode: Deny\n",

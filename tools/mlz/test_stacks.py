@@ -22,14 +22,13 @@ class StacksTest(unittest.TestCase):
         self.assertEqual([s.name for s in stacks.STACKS if s.role == "platform"], ["connectivity", "management", "identity", "firewall-rules"])
 
     def test_a_contract_is_read_from_the_state_of_the_stack_whose_root_outputs_it(self):
-        # publish.sh reads the contract from a state blob, <stack>.tfstate: the stack is not always named after its role.
+        # publish.py reads the contract from a state blob, <stack>.tfstate: the stack is not always named after its role.
         # (The bootstrap's contract is published by mlz install, from its own state.)
-        publish = (stacks.CORE / "tools" / "ci" / "publish.sh").read_text()
+        from ci import publish
         for role in ("governance", "platform"):
             [stack] = [s for s in stacks.STACKS if s.role == role and s.name != "bootstrap" and 'output "contract"' in "".join(
                 tf.read_text() for tf in (stacks.CORE / s.root).glob("*.tf"))]
-            expected = "*) key=$role.tfstate" if stack.name == role else f"{role}) key={stack.name}.tfstate"
-            self.assertIn(expected, publish, role)
+            self.assertEqual(publish.state_key(role), f"{stack.name}.tfstate", role)
 
     def test_every_root_is_there_and_names_its_modules(self):
         for stack in stacks.STACKS:

@@ -28,8 +28,11 @@ locals {
         firewall_policy                  = merge(try(hub.advanced.firewall.firewall_policy, {}), { name = hub.names.firewall_policy })
       })
       # Names in, from mlz platform; null when the hub file turns the component off, which advanced: cannot turn on.
-      dns_resolver = hub.dns_resolver == null ? null : merge(try(hub.advanced.dns_resolver, {}), hub.dns_resolver)
-      bastion      = hub.bastion == null ? null : merge(try(hub.advanced.bastion, {}), hub.bastion)
+      # A filter, not a conditional: Terraform types both branches of a conditional, merge({}, null) is an empty
+      # object, and the null it gives is then typed as one, which the module's object, with its required subnet,
+      # refuses (abc's hub without Bastion, v0.11.3). one() of nothing is a null without a type.
+      dns_resolver = one([for resolver in [hub.dns_resolver] : merge(try(hub.advanced.dns_resolver, {}), resolver) if resolver != null])
+      bastion      = one([for bastion in [hub.bastion] : merge(try(hub.advanced.bastion, {}), bastion) if bastion != null])
     })
   }
 }
