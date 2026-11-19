@@ -44,21 +44,22 @@ def rules(text: str) -> list[list[str]]:
 
 def offline_problems(folder: Path, org: str | None = None, team: str | None = None) -> list[str]:
     """What makes the repo's CODEOWNERS other than the installer's: one owner, a team, for everything, and no owner
-    for _generated/. With org and team (in the governance repo, from bootstrap.yaml), that team. A repo without the
-    file has none: mlz install repos offers it, and mlz install check says so."""
-    path = folder / PATH
-    if not path.is_file():
+    for _generated/. The file GitHub reads, the first of LOCATIONS there, so an adopted repo's own CODEOWNERS at the top
+    or in docs/ is checked too. With org and team (in the governance repo, from bootstrap.yaml), that team. A repo
+    without one has none: mlz install repos offers it, and mlz install check says so."""
+    path = next((folder / location for location in LOCATIONS if (folder / location).is_file()), None)
+    if path is None:
         return []
     found = rules(path.read_text())
     owner = found[0][1] if found and len(found[0]) == 2 and found[0][0] == "*" else None
     if len(found) != 2 or owner is None or not TEAM.fullmatch(owner) or found[1] != ["/_generated/"]:
         extra = [" ".join(rule) for rule in found if rule[0] not in ("*", "/_generated/")]
-        return [f"{PATH} is not what mlz install repos writes: exactly `* @<org>/<platform team>` and `/_generated/`. The platform team "
+        return [f"{path.relative_to(folder)} is not what mlz install repos writes: exactly `* @<org>/<platform team>` and `/_generated/`. The platform team "
                 "owns everything; handing a path to another team is gone (decision D8)."
                 + (f" Remove {', '.join(f'`{rule}`' for rule in extra)}." if extra else "")
                 + " Its rules: " + "; ".join(f"`{' '.join(rule)}`" for rule in found)]
     if org and team and owner.lower() != f"@{org}/{team}".lower():
-        return [f"{PATH} names {owner} as the owner, but bootstrap.yaml's platform team is @{org}/{team}."]
+        return [f"{path.relative_to(folder)} names {owner} as the owner, but bootstrap.yaml's platform team is @{org}/{team}."]
     return []
 
 

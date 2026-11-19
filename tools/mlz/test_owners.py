@@ -63,6 +63,20 @@ class OwnersTest(unittest.TestCase):
         self.assertEqual(owners.offline_problems(self.repo, "acme", "network"),
                          [".github/CODEOWNERS names @acme/platform as the owner, but bootstrap.yaml's platform team is @acme/network."])
 
+    def test_the_file_github_reads_is_checked_wherever_it_is(self):
+        # An adopted repo's own file at the top, or in docs/, which GitHub reads when .github/ has none.
+        for location in ("CODEOWNERS", "docs/CODEOWNERS"):
+            (self.repo / location).parent.mkdir(exist_ok=True)
+            (self.repo / location).write_text("* @acme/platform\n/connectivity/ @acme/network\n/_generated/\n")
+            found = owners.offline_problems(self.repo)
+            self.assertEqual(len(found), 1, location)
+            self.assertTrue(found[0].startswith(f"{location} is not what mlz install repos writes"), found[0])
+            (self.repo / location).unlink()
+        # .github/'s comes first, as on GitHub: a stray one elsewhere is not read.
+        self.owned(owners.render("acme", "platform"))
+        (self.repo / "CODEOWNERS").write_text("* @acme/other\n")
+        self.assertEqual(owners.offline_problems(self.repo), [])
+
     def test_a_repo_without_the_file_has_no_problem_here(self):
         # mlz install repos offers it, and mlz install check says it is missing.
         self.assertEqual(owners.offline_problems(self.repo), [])
