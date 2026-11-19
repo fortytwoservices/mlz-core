@@ -55,7 +55,7 @@ vending:
     network_security_groups.security_rules: open
     resource_group_creation_enabled: {class: fixed, why: "off: vending makes the landing zone's resource groups itself, named from the template"}
     resource_groups: {class: fixed, why: "vending makes the landing zone's resource groups itself, named from the template"}
-    role_assignment_enabled: open
+    role_assignment_enabled: {class: derived, by: "on when advanced: sets role_assignments"}
     role_assignments: open
     route_table_enabled: {class: fixed, why: "off: the route table is module.route_table's"}
     route_tables: {class: fixed, why: "the route table is module.route_table's"}

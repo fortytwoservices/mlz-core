@@ -110,6 +110,7 @@ def landing_zone() -> dict:
             "network_security_groups": or_empty({"description": "An explicit name for a subnet's NSG, by the subnet's name.", "type": "object", "additionalProperties": {"type": "string"}}),
         }, "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.")),
         "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},
+        "advanced": advanced.schema("landing-zone"),
         "tags": or_empty({
             "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
             "type": "object",

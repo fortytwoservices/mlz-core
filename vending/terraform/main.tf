@@ -347,6 +347,70 @@ resource "time_sleep" "subscription" {
 # Budgets start on the first of the month the landing zone was vended, and stay there.
 resource "time_static" "budget_start" {}
 
+# What sub-vending is given beside its own inputs, as locals so tests/ can check it. The landing zone's advanced: goes
+# in first in each object and mlz-core's values over it, so it only adds (tools/mlz/advanced.py).
+locals {
+  network_security_groups = local.decommission ? {} : {
+    for name, _ in local.lz.network.subnets : name => merge(try(local.lz.advanced.network_security_groups[name], {}), {
+      name                         = local.names.network_security_groups[name]
+      resource_group_name_existing = azapi_resource.resource_group["network"].name
+      location                     = local.lz.location
+      tags                         = local.lz.tags
+    })
+  }
+  virtual_networks = local.decommission ? {} : {
+    spoke = merge(try(local.lz.advanced.virtual_networks.spoke, {}), {
+      name                         = local.names.virtual_network
+      address_space                = [local.lz.network.address_space]
+      resource_group_name_existing = azapi_resource.resource_group["network"].name
+      location                     = local.lz.location
+      dns_servers                  = local.lz.network.dns_servers
+      tags                         = local.lz.tags
+
+      subnets = {
+        for name, prefix in local.lz.network.subnets : name => merge(try(local.lz.advanced.virtual_networks.spoke.subnets[name], {}), {
+          name                   = format(local.names.subnet, name)
+          address_prefix         = prefix
+          network_security_group = { key_reference = name }
+          route_table            = { id = module.route_table["live"].resource_id }
+        })
+      }
+
+      hub_network_resource_id  = local.lz.network.hub_virtual_network_id
+      hub_peering_enabled      = true
+      hub_peering_name_tohub   = local.names.peering_to_hub
+      hub_peering_name_fromhub = local.names.peering_from_hub
+      # The hubs have no VPN or ExpressRoute gateway yet, so neither side uses one.
+      hub_peering_options_tohub   = { use_remote_gateways = false }
+      hub_peering_options_fromhub = { allow_gateway_transit = false }
+    })
+  }
+  budgets = local.decommission || try(local.lz.budget.monthly, null) == null ? {} : {
+    monthly = merge(try(local.lz.advanced.budgets.monthly, {}), {
+      name              = local.names.budget
+      amount            = local.lz.budget.monthly
+      time_grain        = "Monthly"
+      time_period_start = formatdate("YYYY-MM-01'T'00:00:00Z", time_static.budget_start.rfc3339)
+      time_period_end   = "2099-12-31T00:00:00Z"
+      notifications = {
+        actual_80 = merge(try(local.lz.advanced.budgets.monthly.notifications.actual_80, {}), {
+          enabled        = true
+          operator       = "GreaterThan"
+          threshold      = 80
+          contact_emails = local.lz.budget.contacts
+        })
+        forecast_100 = merge(try(local.lz.advanced.budgets.monthly.notifications.forecast_100, {}), {
+          enabled        = true
+          operator       = "GreaterThan"
+          threshold      = 100
+          threshold_type = "Forecasted"
+          contact_emails = local.lz.budget.contacts
+        })
+      }
+    })
+  }
+}
+
 module "vending" {
   source  = "Azure/avm-ptn-alz-sub-vending/azure"
   version = "0.3.4"
@@ -365,44 +429,19 @@ module "vending" {
   subscription_tags                                 = local.lz.tags
   subscription_register_resource_providers_enabled  = true
 
+  # The landing zone's advanced: (tools/mlz/advanced.py: only inputs the input map calls open, checked against the
+  # module's types). Its own inputs: null, or the module's default, when it sets none, so a landing zone without
+  # advanced: is planned as it always was (two are nullable = false at 0.3.4: null is their default).
+  subscription_register_resource_providers_and_features = try(local.lz.advanced.subscription_register_resource_providers_and_features, null)
+  wait_for_subscription_before_subscription_operations  = try(local.lz.advanced.wait_for_subscription_before_subscription_operations, {})
+  role_assignment_enabled                               = length(try(local.lz.advanced.role_assignments, {})) > 0
+  role_assignments                                      = try(local.lz.advanced.role_assignments, null)
+
   network_security_group_enabled = !local.decommission
-  network_security_groups = local.decommission ? {} : {
-    for name, _ in local.lz.network.subnets : name => {
-      name                         = local.names.network_security_groups[name]
-      resource_group_name_existing = azapi_resource.resource_group["network"].name
-      location                     = local.lz.location
-      tags                         = local.lz.tags
-    }
-  }
+  network_security_groups        = local.network_security_groups
 
   virtual_network_enabled = !local.decommission
-  virtual_networks = local.decommission ? {} : {
-    spoke = {
-      name                         = local.names.virtual_network
-      address_space                = [local.lz.network.address_space]
-      resource_group_name_existing = azapi_resource.resource_group["network"].name
-      location                     = local.lz.location
-      dns_servers                  = local.lz.network.dns_servers
-      tags                         = local.lz.tags
-
-      subnets = {
-        for name, prefix in local.lz.network.subnets : name => {
-          name                   = format(local.names.subnet, name)
-          address_prefix         = prefix
-          network_security_group = { key_reference = name }
-          route_table            = { id = module.route_table["live"].resource_id }
-        }
-      }
-
-      hub_network_resource_id  = local.lz.network.hub_virtual_network_id
-      hub_peering_enabled      = true
-      hub_peering_name_tohub   = local.names.peering_to_hub
-      hub_peering_name_fromhub = local.names.peering_from_hub
-      # The hubs have no VPN or ExpressRoute gateway yet, so neither side uses one.
-      hub_peering_options_tohub   = { use_remote_gateways = false }
-      hub_peering_options_fromhub = { allow_gateway_transit = false }
-    }
-  }
+  virtual_networks        = local.virtual_networks
 
   # The landing zone's own identities for its repo: deploy, Contributor on its subscription, signed in from its repo's
   # apply environment; plan, Reader, for its pull requests' plans.
@@ -451,28 +490,5 @@ module "vending" {
   })
 
   budget_enabled = !local.decommission && try(local.lz.budget.monthly, null) != null
-  budgets = local.decommission || try(local.lz.budget.monthly, null) == null ? {} : {
-    monthly = {
-      name              = local.names.budget
-      amount            = local.lz.budget.monthly
-      time_grain        = "Monthly"
-      time_period_start = formatdate("YYYY-MM-01'T'00:00:00Z", time_static.budget_start.rfc3339)
-      time_period_end   = "2099-12-31T00:00:00Z"
-      notifications = {
-        actual_80 = {
-          enabled        = true
-          operator       = "GreaterThan"
-          threshold      = 80
-          contact_emails = local.lz.budget.contacts
-        }
-        forecast_100 = {
-          enabled        = true
-          operator       = "GreaterThan"
-          threshold      = 100
-          threshold_type = "Forecasted"
-          contact_emails = local.lz.budget.contacts
-        }
-      }
-    }
-  }
+  budgets        = local.budgets
 }
