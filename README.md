@@ -25,7 +25,8 @@ tools/mlz/             the loader: customer YAML in, checked config out; the IP 
                        mlz install, which sets a new customer up step by step; mlz schema (below);
                        mlz explain, which shows where each of a landing zone's values comes from;
                        mlz new landing-zone, which starts a landing zone's files;
-                       mlz map, which says what each settings file feeds: its stack, root and modules
+                       mlz map, which says what each settings file feeds: its stack, root and modules;
+                       mlz reference (below)
 tools/ci/              the pipeline steps, run by .github/workflows/role.yml in each customer repo
 modules/
   naming/              the names of everything mlz-core creates, shared by every root
@@ -33,7 +34,25 @@ starter/
   mlz-<role>/          what each template repo starts with: its pipeline, its editor settings, and
                        example settings, commented out or in examples/, which the loader does not read
 schemas/               JSON Schemas of the customer YAML, for editors (below)
-docs/                  one page per part
+docs/                  one page per part; reference/, who owns each module input (below)
+```
+
+## Who owns each module input
+
+`docs/reference/` has a page per Terraform root: every module call the root makes, every input of each module
+at its pin, and who owns it. An input is a `setting` (a key in the customer's YAML, named), `derived` (worked out
+by mlz-core: the layout, the IP allocator, a contract, the naming), `fixed` (Fortytwo's decision, with its value
+and reason), `open` (mlz-core leaves it at the module's default) or `closed` (not supported yet, with the reason).
+Start at [docs/reference/README.md](docs/reference/README.md).
+
+The pages are written from the input map beside each root (`<root>/inputs.yaml`) and a snapshot of what each
+pinned module declares (`tools/mlz/module-variables.json`). A test fails when an input of a module has no entry
+or two, when a setting names a key no loader takes, and when the committed pages are out of date; CI fails when
+the snapshot is not what the pinned modules declare. After moving a pin or editing a map:
+
+```sh
+PYTHONPATH=tools python3 -m mlz inputs --refresh            # the snapshot, from the modules at their new pins
+PYTHONPATH=tools python3 -m mlz reference --out docs/reference
 ```
 
 ## Editor help in customer repos

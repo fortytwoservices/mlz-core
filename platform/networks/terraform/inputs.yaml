@@ -1,0 +1,117 @@
+# Who owns each input of this root's module calls (tools/mlz/inputs.py says how to read it); the page
+# docs/reference/platform-networks.md is written from it. An input mlz-core does not set is `open`.
+# module.network is mlz-core's own (modules/platform-network), so its calls are listed too.
+
+network:
+  builds: management's network in the primary region, or identity's in each region with a file in identity/, as a spoke of the region's hub
+  notes:
+    names: a network's names override will go in its own file, management/<region>.yaml or identity/<region>.yaml; not built yet
+  inputs:
+    names: {class: derived, by: "the naming template (customer.yaml's naming, through the governance contract)"}
+    location: {class: derived, by: "the region: the primary region for management, the file's name for identity"}
+    parent_id: {class: derived, by: "the network's resource group, which the bootstrap made"}
+    address_space: {class: derived, by: "the fifth /24 of the region's platform_address_space for management, the sixth for identity"}
+    subnets: {class: derived, by: "a fixed layout in that /24 (tools/mlz/platform.py, NETWORKS)"}
+    dns_servers: {class: derived, by: "the hub firewall's address, or the resolver's inbound address behind a Basic firewall"}
+    firewall: {class: derived, by: "the fifth address of the hub's firewall subnet"}
+    hub_virtual_network_id: {class: derived, by: "the region's hub, from its names"}
+    github_runners: {class: derived, by: "management's network where GitHub's hosted runners can join it (tools/mlz/platform.py, GITHUB_RUNNER_REGIONS), with the organization's ID from the pipeline"}
+    tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
+
+network.route_table:
+  builds: the network's route table, whose one route sends everything to the hub's firewall
+  inputs:
+    name: {class: derived, by: "the naming template"}
+    parent_id: {class: derived, by: "the network's resource group"}
+    location: {class: derived, by: "the network's region"}
+    bgp_route_propagation_enabled: {class: fixed, value: false, why: "a route learned from a gateway would go round the firewall"}
+    routes: {class: derived, by: "one route, default: 0.0.0.0/0 to the hub firewall's address"}
+    azure_managed_routes_enabled: open
+    tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
+    lock: open
+    role_assignments: open
+    retry: open
+    timeouts: open
+    resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}
+
+network.virtual_network:
+  builds: the network and its subnets, each with its own NSG and the network's route table
+  inputs:
+    name: {class: derived, by: "the naming template"}
+    parent_id: {class: derived, by: "the network's resource group"}
+    location: {class: derived, by: "the network's region"}
+    address_space: {class: derived, by: "the network's /24"}
+    dns_servers: {class: derived, by: "the hub firewall's address, or the resolver's inbound address behind a Basic firewall"}
+    enable_telemetry: {class: fixed, value: false, why: "no module mlz-core calls sends telemetry"}
+    subnets.name: {class: derived, by: "snet-<subnet>"}
+    subnets.address_prefix: {class: derived, by: "the subnet's place in the layout"}
+    subnets.address_prefixes: {class: closed, why: "one prefix per subnet, from the layout"}
+    subnets.ipam_pools: {class: closed, why: "addresses come from the layout"}
+    subnets.network_security_group: {class: derived, by: "the subnet's own NSG: Azure's default rules, and on the GitHub runners' subnet one more that refuses every connection in"}
+    subnets.route_table: {class: derived, by: "the network's route table"}
+    subnets.delegations: {class: derived, by: "GitHub.Network/networkSettings on github-runners where GitHub's hosted runners can join, else none"}
+    subnets.nat_gateway: {class: closed, why: "everything leaves through the hub's firewall"}
+    subnets.default_outbound_access_enabled: {class: fixed, why: "off: everything leaves through the hub's firewall"}
+    subnets.ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}
+    subnets.private_endpoint_network_policies: open
+    subnets.private_endpoint_network_policies_enabled: open
+    subnets.private_link_service_network_policies_enabled: open
+    subnets.service_endpoints: open
+    subnets.service_endpoints_with_location: open
+    subnets.service_endpoint_policies: open
+    subnets.sharing_scope: open
+    subnets.role_assignments: open
+    subnets.retry: open
+    subnets.timeouts: open
+    peerings: {class: closed, why: "the network's peering with its hub is module.peering's"}
+    ipam_pools: {class: closed, why: "addresses come from the layout"}
+    extended_location: {class: closed, why: "edge zones are not supported"}
+    bgp_community: open
+    ddos_protection_plan: open
+    diagnostic_settings: open
+    enable_vm_protection: open
+    encryption: open
+    flow_timeout_in_minutes: open
+    lock: open
+    role_assignments: open
+    tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
+    retry: open
+    timeouts: open
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}
+
+network.peering:
+  builds: the network's peering with its hub, both ends, as a landing zone's
+  inputs:
+    name: {class: derived, by: "peer-<network>-to-hub"}
+    reverse_name: {class: derived, by: "peer-hub-to-<network>"}
+    parent_id: {class: derived, by: "the network"}
+    remote_virtual_network_id: {class: derived, by: "the region's hub, from its names"}
+    create_reverse_peering: {class: fixed, value: true, why: "the platform owns both networks, so it makes both ends"}
+    allow_virtual_network_access: {class: fixed, value: true, why: "the network and its hub reach each other"}
+    reverse_allow_virtual_network_access: {class: fixed, value: true, why: "the network and its hub reach each other"}
+    allow_forwarded_traffic: {class: fixed, value: true, why: "traffic the hub's firewall forwards comes in"}
+    reverse_allow_forwarded_traffic: {class: fixed, value: true, why: "traffic the hub's firewall forwards comes in"}
+    allow_gateway_transit: {class: fixed, value: false, why: "the hubs have no gateway yet"}
+    reverse_allow_gateway_transit: {class: fixed, value: false, why: "the hubs have no gateway yet"}
+    use_remote_gateways: {class: fixed, value: false, why: "the hubs have no gateway yet"}
+    reverse_use_remote_gateways: {class: fixed, value: false, why: "the hubs have no gateway yet"}
+    do_not_verify_remote_gateways: {class: fixed, why: "the hubs have no gateway yet"}
+    reverse_do_not_verify_remote_gateways: {class: fixed, why: "the hubs have no gateway yet"}
+    enable_only_ipv6_peering: {class: fixed, why: "MLZ's networks are IPv4"}
+    reverse_enable_only_ipv6_peering: {class: fixed, why: "MLZ's networks are IPv4"}
+    peer_complete_vnets: {class: fixed, why: "whole networks peer"}
+    reverse_peer_complete_vnets: {class: fixed, why: "whole networks peer"}
+    local_peered_address_spaces: {class: fixed, why: "whole networks peer"}
+    local_peered_subnets: {class: fixed, why: "whole networks peer"}
+    remote_peered_address_spaces: {class: fixed, why: "whole networks peer"}
+    remote_peered_subnets: {class: fixed, why: "whole networks peer"}
+    reverse_local_peered_address_spaces: {class: fixed, why: "whole networks peer"}
+    reverse_local_peered_subnets: {class: fixed, why: "whole networks peer"}
+    reverse_remote_peered_address_spaces: {class: fixed, why: "whole networks peer"}
+    reverse_remote_peered_subnets: {class: fixed, why: "whole networks peer"}
+    sync_remote_address_space_enabled: {class: fixed, why: "a platform network's range never changes once built"}
+    sync_remote_address_space_triggers: {class: fixed, why: "a platform network's range never changes once built"}
+    retry: open
+    timeouts: open
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}

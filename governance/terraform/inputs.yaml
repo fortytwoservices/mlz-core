@@ -1,0 +1,67 @@
+# Who owns each input of this root's module calls (tools/mlz/inputs.py says how to read it); the page
+# docs/reference/governance.md is written from it. An input mlz-core does not set is `open`.
+
+alz:
+  builds: the management group tree, ALZ's policies and their assignments, and the platform subscriptions' places in the tree
+  file: customer
+  notes:
+    subscription_placement: one per platform subscription in customer.yaml; security only when management_groups.security is true
+  inputs:
+    architecture_name: {class: setting, key: root_id, by: "the rendered architecture is named after it"}
+    parent_resource_id: {class: setting, key: parent_management_group_id, by: "the tenant root group when it is not set"}
+    location: {class: setting, key: primary_region}
+    enable_telemetry: {class: fixed, value: false, why: "no module mlz-core calls sends telemetry"}
+    telemetry_additional_content: {class: fixed, why: "no telemetry"}
+    policy_default_values: {class: derived, by: "management's resource IDs, built from names; where the Private Link DNS zones are; allowed_regions and security_contact from customer.yaml"}
+    policy_assignments_dependencies: {class: derived, by: "management's workspace, identity and data collection rules, which the policies point at"}
+    override_policy_definition_parameter_assign_permissions_unset: {class: fixed, from: governance/terraform/private-dns-zone-parameters.json, why: "no role on each Private Link zone, which fails before the zones exist; Deploy-Private-DNS-Zones' identity gets Private DNS Zone Contributor on the zones' subscription instead"}
+    override_policy_definition_parameter_assign_permissions_set: {class: fixed, why: "ALZ's own list"}
+    subscription_placement.subscription_id: {class: setting, key: subscriptions}
+    subscription_placement.management_group_name: {class: derived, by: "<root_id>-<role>, the group of the subscription's role"}
+    management_group_role_assignments: open
+    management_group_hierarchy_settings: open
+    role_assignment_definition_lookup_enabled: open
+    role_assignment_name_use_random_uuid: {class: fixed, why: "off: an assignment keeps its name, so no plan replaces it"}
+    management_groups_dependencies: {class: fixed, why: "the tree waits for nothing outside governance"}
+    policy_role_assignments_dependencies: {class: fixed, why: "the policies' role assignments wait for nothing outside governance"}
+    parent_id_overrides: {class: closed, why: "definitions stay where ALZ's library puts them, where the assignments look for them"}
+    policy_assignment_non_compliance_message_settings: open
+    policy_assignments_to_modify: open
+    subscription_placement_destroy_behavior: open
+    subscription_placement_destroy_custom_target_management_group_id: open
+    delays: open
+    retries: open
+    timeouts: open
+    resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
+    schema_validation_enabled: {class: fixed, why: "Azure's schema checks every body before it is sent"}
+
+management:
+  builds: management's Log Analytics workspace, the Azure Monitor Agent's identity, and the data collection rules ALZ's policies point machines at
+  file: customer
+  inputs:
+    name: {class: derived, by: "the naming template (customer.yaml's naming)"}
+    parent_id: {class: derived, by: "management's resource group, made by this root, named by the template"}
+    location: {class: setting, key: primary_region}
+    data_collection_rules.change_tracking.name: {class: derived, by: "the naming template"}
+    data_collection_rules.vm_insights.name: {class: derived, by: "the naming template"}
+    data_collection_rules.vm_insights.processes_and_dependencies_enabled: open
+    data_collection_rules.defender_sql.name: {class: derived, by: "the naming template"}
+    data_collection_rules.defender_sql.sql_queries_collection_enabled: open
+    user_assigned_identity.name: {class: derived, by: "the naming template"}
+    tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
+    daily_quota_gb: open
+    retention_in_days: open
+    local_authentication_enabled: {class: fixed, why: "off: Entra ID only"}
+    public_network_access_for_ingestion: open
+    public_network_access_for_query: open
+    resource_permissions_enabled: open
+    permanently_delete_on_destroy: open
+    defender_plans: {class: closed, why: "Defender for Cloud plans per subscription are not offered yet"}
+    sentinel_onboarding: open
+    diagnostic_settings: open
+    lock: open
+    role_assignments: open
+    retry: open
+    timeouts: open
+    resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
+    ignore_body_changes: {class: fixed, why: "every difference Azure shows is planned, and the daily check reports drift"}
