@@ -165,6 +165,13 @@ class ProblemTest(unittest.TestCase):
                                                 "hub_virtual_networks.name: names must be a key under names:, or a list of them",
                                                 "naming: why must be text"])
 
+    def test_an_empty_section_or_one_that_is_not_a_mapping(self):
+        self.maps["platform/terraform"]["connectivity"] = None
+        self.maps["vending/terraform"]["route_table"]["notes"] = ["routes"]
+        self.assertEqual(inputs.problems(self.snapshot, self.maps), [
+            "platform/terraform/inputs.yaml: connectivity: a section maps builds, file, notes and inputs; this one is empty or not a mapping",
+            "vending/terraform/inputs.yaml: route_table: notes maps an input's path to a note"])
+
     def test_a_module_call_without_a_section_and_a_section_without_a_call(self):
         self.maps["platform/terraform"]["hub"] = self.maps["platform/terraform"].pop("connectivity")
         self.assertEqual(inputs.problems(self.snapshot, self.maps), [
