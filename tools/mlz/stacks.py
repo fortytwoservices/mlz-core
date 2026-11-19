@@ -2,14 +2,16 @@
 
     python3 -m mlz map --repo <a customer repo>
 
-One table, STACKS, says it for every role; the pipeline's own list of stacks (tools/ci/check.sh) must agree with
-it, which a test checks. A folder is named after its stack, so the table is short: the folder's files feed the stack
+One table, STACKS, says it for every role; the pipeline's own list of stacks (mlz check, tools/ci/check.py) must
+agree with it, which a test checks. The pipeline also plans and applies each stack in the table's root, with the
+variables terraform_vars gives (tools/ci/plan.py, apply.py). A folder is named after its stack, so the table is short: the folder's files feed the stack
 of the same name. The modules are read from the roots, so they are always the ones this release pins.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -141,9 +143,54 @@ def render(repo: Path) -> str:
     return "\n".join(lines) + "\n"
 
 
+def row(role: str, stack: str) -> Stack:
+    """A stack's row in the table, by the name the pipeline gives it: vending's stacks, its landing zones, share one."""
+    name = "<workload>-<env>" if role == "vending" else stack
+    for candidate in STACKS:
+        if candidate.role == role and candidate.name == name:
+            return candidate
+    raise ValueError(f"unknown {role} stack {stack}")
+
+
+def root(role: str, stack: str, core: Path = CORE, repo: Path | None = None) -> Path:
+    """The Terraform root that plans and applies a stack: its row's, in mlz-core, or a workload repo's own, at the top
+    of the repo (repo: the working folder when None)."""
+    if role == "workload":
+        return repo or Path.cwd()
+    return core / row(role, stack).root
+
+
+def terraform_vars(role: str, stack: str, repo: Path | None = None, env=os.environ) -> list[str]:
+    """The -var arguments a stack's root takes, with the files it reads (inputs, below) at their paths in the repo
+    (repo: the working folder when None). A workload repo's root reads mlz.auto.tfvars.json, which vending writes, by
+    itself."""
+    repo = repo or Path.cwd()
+    work = repo / ".mlz"
+    if role == "governance":
+        found = [f"rendered_library_path={work}/rendered"]
+        if (repo / "_generated" / "bootstrap.yaml").is_file():
+            found.append(f"bootstrap_contract_file={repo}/_generated/bootstrap.yaml")
+    elif role == "platform" and stack == "firewall-rules":
+        found = [f"config_file={work}/firewall.json"]
+    elif role == "platform" and stack in ("management", "identity"):
+        found = [f"config_file={work}/platform.json", f"network={stack}"]
+        # The organization's ID, which GitHub's network settings resource names (GitHub Actions sets it).
+        if stack == "management" and env.get("GITHUB_REPOSITORY_OWNER_ID"):
+            found.append(f"github_business_id={env['GITHUB_REPOSITORY_OWNER_ID']}")
+    elif role == "platform" and stack == "connectivity":
+        found = [f"config_file={work}/platform.json"]
+    elif role == "vending":
+        found = [f"config_file={work}/vending/{stack}.json"]
+    elif role == "workload":
+        found = []
+    else:
+        raise ValueError(f"unknown {role} stack {stack}")
+    return [argument for item in found for argument in ("-var", item)]
+
+
 def inputs(role: str, stack: str) -> list[str]:
-    """What a stack's root reads, relative to the repo: the config tools/ci/check.sh writes for it under .mlz/, and the
-    files passed to it as they are (tools/ci/lib.sh's vars_for)."""
+    """What a stack's root reads, relative to the repo: the config mlz check writes for it under .mlz/, and the files
+    passed to it as they are (terraform_vars, above)."""
     if role == "governance":
         return [".mlz/rendered", "_generated/bootstrap.yaml"]
     if role == "platform":
@@ -153,7 +200,7 @@ def inputs(role: str, stack: str) -> list[str]:
     raise ValueError(f"no role {role}")
 
 
-# Where check.sh keeps the base commit's configs, for a pull request's plan comments (difference, below).
+# Where check.py keeps the base commit's configs, for a pull request's plan comments (difference, below).
 BASE = ".mlz/base"
 ROWS = 50  # a plan comment lists at most this many changed settings
 MISSING = object()
@@ -161,7 +208,7 @@ MISSING = object()
 
 def settings_file(role: str, stack: str) -> str:
     """The JSON a stack's root reads its settings from, relative to the repo: governance's is its rendered config.json,
-    every other stack's the config check.sh writes for it (inputs, above)."""
+    every other stack's the config mlz check writes for it (inputs, above)."""
     return ".mlz/rendered/config.json" if role == "governance" else inputs(role, stack)[0]
 
 
@@ -184,7 +231,7 @@ def shown(value) -> str:
 def difference(role: str, stack: str, repo: Path) -> str:
     """The first part of a stack's plan comment on a pull request: each setting of its config that differs from the
     base branch's, so a reviewer sees what a YAML change turned into before reading the plan. Empty without a base
-    copy, when check.sh planned every stack without comparing (a pipeline change, a base that does not check)."""
+    copy, when check.py planned every stack without comparing (a pipeline change, a base that does not check)."""
     name = settings_file(role, stack)
     head, base = repo / name, repo / BASE / Path(name).relative_to(".mlz")
     if not (repo / BASE).is_dir() or not head.is_file():

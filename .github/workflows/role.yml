@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2 # the commit before too: check.sh plans only the stacks a change touches, against it
+          fetch-depth: 2 # the commit before too: check.py plans only the stacks a change touches, against it
 
       # The caller pins mlz-core with uses: ...@<release>; job.workflow_sha is the commit that release points
       # at, and every job checks out mlz-core there, so the code is always exactly the workflow's own. An
@@ -202,9 +202,9 @@ jobs:
         id: check
         env:
           EVENT_BEFORE: ${{ github.event.before }} # a push's: where main was, to plan only what the push touches
-          MLZ_GITHUB_META: ${{ steps.meta.outputs.file }} # the platform's: the meta read above (tools/ci/check.sh)
+          MLZ_GITHUB_META: ${{ steps.meta.outputs.file }} # the platform's: the meta read above (tools/ci/check.py)
         run: |
-          stacks=$(.mlz-core/tools/ci/check.sh "$ROLE")  # its own assignment, so that a failed check fails the step
+          stacks=$(python3 .mlz-core/tools/ci/check.py "$ROLE")  # its own assignment, so that a failed check fails the step
           echo "stacks=$stacks" >> "$GITHUB_OUTPUT"
           # The plan jobs: one stack each, or groups on the daily check and when many stacks are planned.
           batches=$(python3 -I .mlz-core/tools/ci/run_mlz.py batches --stacks "$stacks" ${{ github.event_name == 'schedule' && '--daily' || '' }})
@@ -474,7 +474,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # main's latest commit too, so that apply.sh leaves a landing zone that a commit merged while this run waited for its
+      # main's latest commit too, so that apply.py leaves a landing zone that a commit merged while this run waited for its
       # reviewer changed (or changed back) to that commit's run.
       - if: inputs.role == 'vending'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -547,7 +547,7 @@ jobs:
           GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |
           for stack in $STACKS; do
-            .mlz-core/tools/ci/apply.sh "$ROLE" "$stack"
+            python3 .mlz-core/tools/ci/apply.py "$ROLE" "$stack"
           done
 
 

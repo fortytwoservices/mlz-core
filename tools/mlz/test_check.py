@@ -1,5 +1,5 @@
 """Tests for mlz check (tools/mlz/__main__.py): every check a repo's pipeline makes before it plans, which
-tools/ci/check.sh runs and a person runs with ./mlz check."""
+tools/ci/check.py runs and a person runs with ./mlz check."""
 
 from __future__ import annotations
 

@@ -1,5 +1,6 @@
 """Tests for plans.py: a group of stacks planned one after the other in one job, each as one job per stack did. plans.sh's
-tests, unchanged but for the script they run and the comment step's fake, which is Python as comment.py is."""
+tests, unchanged but for the script they run and the fakes of the plan and comment steps, which are Python as plan.py
+and comment.py are."""
 
 from __future__ import annotations
 
@@ -12,14 +13,19 @@ from pathlib import Path
 
 PLANS = Path(__file__).resolve().parent / "plans.py"
 
-# plan.sh as plans.py calls it: exits with the code .fake/<stack> holds, after writing the stack's summary unless the
+# plan.py as plans.py calls it: exits with the code .fake/<stack> holds, after writing the stack's summary unless the
 # plan failed. comment.py records its call, and fails for a stack named in .fake/comment-fails.
-FAKE_PLAN = """#!/usr/bin/env bash
-code=$(cat ".fake/$2")
-echo "planned $2" >> .fake/calls
-[[ $code == early-* ]] && exit "${code#early-}"  # stopped before planning: no summary
-[[ $code != 1 ]] && echo "**$2**: summary" > ".mlz/summary-$2.md"
-exit "$code"
+FAKE_PLAN = """import sys
+from pathlib import Path
+stack = sys.argv[2]
+code = Path(".fake", stack).read_text().strip()
+with open(".fake/calls", "a") as calls:
+    calls.write(f"planned {stack}\\n")
+if code.startswith("early-"):  # stopped before planning: no summary
+    sys.exit(int(code[len("early-"):]))
+if code != "1":
+    Path(".mlz", f"summary-{stack}.md").write_text(f"**{stack}**: summary\\n")
+sys.exit(int(code))
 """
 FAKE_COMMENT = """import sys
 from pathlib import Path
@@ -36,7 +42,7 @@ class PlansTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         ci = self.dir / ".mlz-core" / "tools" / "ci"
         ci.mkdir(parents=True)
-        for name, text in (("plan.sh", FAKE_PLAN), ("comment.py", FAKE_COMMENT)):
+        for name, text in (("plan.py", FAKE_PLAN), ("comment.py", FAKE_COMMENT)):
             (ci / name).write_text(text)
             (ci / name).chmod(0o755)
         (self.dir / ".fake").mkdir()
