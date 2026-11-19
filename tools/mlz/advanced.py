@@ -264,10 +264,10 @@ def json_type(paths: dict, path: str, kind: str | None = None) -> dict:
         element = json_type(paths, path, inner)
         return {"type": "object", "additionalProperties": element} if outer == "map" else {"type": "array", "items": element}
     if kind == "object":
+        # No required: a schema checks one file, and a layer may give part of an object another completes; the loader
+        # checks what the module requires once the layers are merged.
         named = {p.removeprefix(path + "."): p for p in children(paths, path)}
-        required = sorted(name for name, p in named.items() if paths[p]["required"])
-        return {"type": "object", "properties": {k: nullable(paths, p) for k, p in named.items()}, "additionalProperties": False,
-                **({"required": required} if required else {})}
+        return {"type": "object", "properties": {k: nullable(paths, p) for k, p in named.items()}, "additionalProperties": False}
     return {"type": {"string": "string", "number": "number", "bool": "boolean"}[kind]} if kind in ("string", "number", "bool") else {}
 
 

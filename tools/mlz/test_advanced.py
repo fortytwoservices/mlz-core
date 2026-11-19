@@ -191,8 +191,13 @@ class LandingZoneTest(unittest.TestCase):
                                               "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          delegations: [{name: web}]\n")), [
             f"{where}: advanced.role_assignments.readers needs principal_id, which the module requires.",
             f"{where}: advanced.virtual_networks.spoke.subnets.app.delegations[0] needs service_delegation, which the module requires."])
+        # The schema checks one layer, which may give part of an assignment another completes: no required there.
         assignments = schema.landing_zone()["properties"]["advanced"]["properties"]["role_assignments"]
-        self.assertEqual(assignments["additionalProperties"]["required"], ["definition", "principal_id"])
+        self.assertNotIn("required", assignments["additionalProperties"])
+        self.write("defaults/landing-zone-defaults.yaml", self.read("defaults/landing-zone-defaults.yaml") +
+                   "advanced:\n  role_assignments:\n    readers: {definition: Reader}\n")
+        merged = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa}\n")
+        self.assertEqual(merged["advanced"]["role_assignments"]["readers"], {"definition": "Reader", "principal_id": "00000000-0000-0000-0000-0000000000aa"})
 
     def test_a_null_is_the_module_s_default_and_takes_an_upper_layer_s_value_away(self):
         self.write("defaults/landing-zone-defaults.yaml", self.read("defaults/landing-zone-defaults.yaml") +

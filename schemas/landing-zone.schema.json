@@ -368,14 +368,7 @@
                       }
                     }
                   },
-                  "additionalProperties": false,
-                  "required": [
-                    "access",
-                    "direction",
-                    "name",
-                    "priority",
-                    "protocol"
-                  ]
+                  "additionalProperties": false
                 }
               }
             },
@@ -451,11 +444,7 @@
                 ]
               }
             },
-            "additionalProperties": false,
-            "required": [
-              "definition",
-              "principal_id"
-            ]
+            "additionalProperties": false
           }
         },
         "wait_for_subscription_before_subscription_operations": {
@@ -542,10 +531,7 @@
                             "type": "string"
                           }
                         },
-                        "additionalProperties": false,
-                        "required": [
-                          "id"
-                        ]
+                        "additionalProperties": false
                       }
                     },
                     "delegations": {
@@ -566,17 +552,10 @@
                                 "type": "string"
                               }
                             },
-                            "additionalProperties": false,
-                            "required": [
-                              "name"
-                            ]
+                            "additionalProperties": false
                           }
                         },
-                        "additionalProperties": false,
-                        "required": [
-                          "name",
-                          "service_delegation"
-                        ]
+                        "additionalProperties": false
                       }
                     }
                   },
