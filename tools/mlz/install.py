@@ -107,6 +107,7 @@ MAXIMUM_INSTANCES = 2 ** (32 - platform.NETWORKS["management"][1]["runners"][1])
 CODE_OWNERS_BRANCH = "mlz/code-owners"
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
+EXECUTABLE_BRANCH = "mlz/executable"  # the pull request that makes ./mlz executable, when a run stopped before it did
 
 
 def settings(folder: Path) -> tuple[dict, dict]:
@@ -221,6 +222,23 @@ def starter_text(text: str, core: str) -> str:
     return RELEASE_PLEASE_MARKER.sub("", text).replace(f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
 
 
+def offer_executable(github, repo: str, branch: str, out: Callable[[str], None]) -> None:
+    """A starter file a person runs, on the branch without its mode, as a run that stopped between the starter's
+    commit and the one after it leaves it: the mode comes as a pull request, which a person merges (main may take
+    nothing else once its ruleset is there)."""
+    stale = github.not_executable(repo, branch, list(EXECUTABLE))
+    if not stale:
+        return
+    names = ", ".join(stale)
+    url = github.open_pull(repo, EXECUTABLE_BRANCH)
+    if not url:
+        github.reset_branch(repo, EXECUTABLE_BRANCH, branch)
+        github.make_executable(repo, EXECUTABLE_BRANCH, stale, f"chore: {names} executable")
+        url = github.create_pull(repo, EXECUTABLE_BRANCH, branch, f"chore: {names} executable",
+                                 f"`{names}` came without its mode from an earlier `mlz install repos` that stopped; this makes it executable.\n")
+    out(f"{repo}: {names} is not executable; the fix is offered in {url}")
+
+
 def make_executable(github, repo: str, branch: str, files: dict[str, str], message: str) -> None:
     """The starter files a person runs (./mlz), made executable after the commit that wrote them, which cannot set a
     mode (GitHub.make_executable). A new repo's: before its ruleset, as its first commit is."""
@@ -296,11 +314,13 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             url = github.open_pull(repo, STARTER_BRANCH)
             if not url:
                 github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
-                make_executable(github, repo, STARTER_BRANCH, missing, message)
+            make_executable(github, repo, STARTER_BRANCH, missing, message)  # also on an offer an earlier run left without it
+            if not url:
                 url = github.create_pull(repo, STARTER_BRANCH, branch, message, f"The {role} starter's files this repo does not have yet, from `mlz install repos`. Files already here are left as they are.\n")
             out(f"{repo}: the {role} starter's missing files are offered in {url}")
         else:
             out(f"{repo}: exists, files left as they are")
+            offer_executable(github, repo, branch, out)
             if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
                 # A repo set up before code owners: the file comes as a pull request, which a person merges.
                 url = github.open_pull(repo, CODE_OWNERS_BRANCH)

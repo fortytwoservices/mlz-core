@@ -47,7 +47,7 @@ class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True, strict=True, core=True):
+                 required_check=True, strict=True, core=True, not_executable=()):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -76,6 +76,7 @@ class FakeGitHub:
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
         self.created, self.commits, self.rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
+        self.unexecutable = set(not_executable)  # (repo, path): on main without its mode, as a stopped run left it
         self.ruleset_bodies = {}
 
     def repo(self, repo):
@@ -116,6 +117,9 @@ class FakeGitHub:
 
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, head, files, message))
+
+    def not_executable(self, repo, ref, paths):
+        return sorted(path for path in paths if (repo, path) in self.unexecutable)
 
     def make_executable(self, repo, branch, paths, message):
         self.executable.append((repo, branch, tuple(paths)))
@@ -606,6 +610,14 @@ class InstallTest(unittest.TestCase):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
         with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
+
+    def test_a_wrapper_left_without_its_mode_is_offered_the_mode(self):
+        # An earlier run made the repo and its starter commit, and stopped before the commit that makes ./mlz executable.
+        github = FakeGitHub(existing=REPOS.values(), not_executable=[("acme/mlz-vending", "mlz")])
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.executable, [("acme/mlz-vending", "mlz/executable", ("mlz",))])
+        self.assertEqual([(repo, branch) for repo, branch, *_ in github.pulls], [("acme/mlz-vending", "mlz/executable")])
+        self.assertIn("acme/mlz-vending: mlz is not executable; the fix is offered in https://github.com/acme/mlz-vending/pull/1", self.printed)
 
     def test_a_repo_set_up_before_code_owners_is_offered_the_file(self):
         github = FakeGitHub(existing=REPOS.values(), owned=False)

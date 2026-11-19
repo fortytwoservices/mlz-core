@@ -263,6 +263,15 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(github.writes, [])
         self.assertIn("already open", printed)
 
+    def test_an_open_upgrade_with_the_wrapper_gets_its_mode_on_a_rerun(self):
+        # A run that stopped after the files and before the mode: the rerun finds the pull request and gives the mode.
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": "", "v0.1.8": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3", wrapper_from="v0.1.8")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.8")] = (caller("governance", "v0.1.8"), "sha")
+        url, printed = self.run_upgrade(github)
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
+        self.assertEqual([w[:4] for w in github.writes], [("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,))])
+        self.assertIn("already open", printed)
+
     def test_a_dry_run_shows_the_change_and_writes_nothing(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
         url, printed = self.run_upgrade(github, dry_run=True)

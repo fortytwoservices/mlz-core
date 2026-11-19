@@ -239,6 +239,9 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         # repo whose upgrade is open already, its branch is made again with this one's files.
         pinned = github.file(repo, WORKFLOW, branch)[0]
         if pinned is not None and pin_of(pinned) == (core, target):
+            # Its files are in; their mode too, which a run that stopped after the files did not give.
+            if executable:
+                github.make_executable(repo, branch, executable, f"{title}: {', '.join(executable)} executable")
             out(f"{repo}: the upgrade to {target} is already open: {existing}")
             return existing
         github.commit_files(repo, branch, github.reset_branch(repo, branch, base), changes, title)

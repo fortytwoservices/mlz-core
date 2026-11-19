@@ -128,6 +128,12 @@ class GitHub:
             "fileChanges": {"additions": additions, **({"deletions": deletions} if deletions else {})},
         }}})
 
+    def not_executable(self, repo: str, ref: str, paths: list[str]) -> list[str]:
+        """Of the paths, those on ref that are there and not executable. Only paths at the repo's top: the root tree is
+        read (a branch name gives its commit's)."""
+        return sorted(item["path"] for item in self._api(f"repos/{repo}/git/trees/{ref}")["tree"]
+                      if item["path"] in paths and item["mode"] != "100755")
+
     def make_executable(self, repo: str, branch: str, paths: list[str], message: str) -> bool:
         """One commit that makes the paths executable (mode 100755), only if one is not yet; returns whether it made
         one. createCommitOnBranch cannot set a mode, and keeps the one a file has (checked 19 November 2026), so a file

@@ -29,17 +29,19 @@ cache=${XDG_CACHE_HOME:-$HOME/.cache}/mlz-core/$core/$release
 if [ ! -f "$cache/tools/mlz/__main__.py" ]; then
   command -v gh >/dev/null 2>&1 || fail "gh, the GitHub CLI, is not on the PATH: install it (https://cli.github.com), then run gh auth login."
   gh auth status --hostname github.com >/dev/null 2>&1 || fail "gh is not signed in to github.com: run gh auth login, with an account that can read $core."
-  download=$(mktemp -d)
+  mkdir -p "$(dirname "$cache")"
+  download=$(mktemp -d "$(dirname "$cache")/.download.XXXXXX") # beside the cache, so the rename below is atomic
   trap 'rm -rf "$download"' EXIT
   gh api "repos/$core/tarball/$release" > "$download/core.tar.gz" ||
     fail "$core at $release could not be fetched with your gh sign-in: can your account read $core, and does it have $release?"
   mkdir "$download/core"
   tar -xzf "$download/core.tar.gz" -C "$download/core" --strip-components 1
-  mkdir -p "$(dirname "$cache")"
-  rm -rf "$cache"
-  mv "$download/core" "$cache"
+  # One rename puts the whole release in place, and never over a folder that is there: when another ./mlz fetched
+  # it meanwhile, that one stays, in use or not, and this copy goes.
+  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$download/core" "$cache" 2>/dev/null || true
   rm -rf "$download"
   trap - EXIT
+  [ -f "$cache/tools/mlz/__main__.py" ] || fail "$cache is there without mlz-core's tools; delete it and run ./mlz again."
 fi
 
 cd "$here"
