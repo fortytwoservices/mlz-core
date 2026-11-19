@@ -6,12 +6,12 @@ route_table:
   builds: the landing zone's route table, whose routes send everything to its hub's firewall
   file: landing-zone
   inputs:
-    name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: route_table}
+    name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: route_table, config: names.route_table}
     parent_id: {class: derived, by: "the landing zone's network resource group"}
-    location: {class: setting, key: location}
+    location: {class: setting, key: location, config: location}
     bgp_route_propagation_enabled: {class: fixed, value: false, why: "a route learned from a gateway would go round the firewall"}
-    routes: {class: derived, by: "the routes the hub module gives its region's spokes, from the platform contract"}
-    tags: {class: setting, key: tags, by: "with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy"}
+    routes: {class: derived, by: "the routes the hub module gives its region's spokes, from the platform contract", config: network.routes}
+    tags: {class: setting, key: tags, by: "with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy", config: tags}
     azure_managed_routes_enabled: open
     lock: {class: closed, why: "a decommission destroys what vending made, and a lock would stop it"}
     role_assignments: open
@@ -30,7 +30,7 @@ vending:
     budgets: one, monthly, when budget.monthly is set
     budgets.notifications: two, at 80 % actual and 100 % forecast
   inputs:
-    location: {class: setting, key: location}
+    location: {class: setting, key: location, config: location}
     enable_telemetry: {class: fixed, value: false, why: "no module mlz-core calls sends telemetry"}
     subscription_alias_enabled: {class: fixed, value: false, why: "vending makes a subscription with one alias PUT of its own, which no plan reads back: reading an alias needs aliases/write, which the plan identity has not"}
     subscription_alias_name: {class: fixed, why: "unused: the module's alias is off"}
@@ -40,17 +40,17 @@ vending:
     subscription_update_existing: {class: derived, by: "true for a subscription vending made, so the module names and tags it"}
     subscription_display_name: {class: derived, by: "the naming template, for a subscription vending makes", names: subscription}
     subscription_management_group_association_enabled: {class: fixed, value: true, why: "every landing zone's subscription goes into its archetype's group"}
-    subscription_management_group_id: {class: derived, by: "archetype's management group, from the governance contract; Decommissioned once decommission is true"}
-    subscription_tags: {class: setting, key: tags, by: "with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy"}
+    subscription_management_group_id: {class: derived, by: "archetype's management group, from the governance contract; Decommissioned once decommission is true", config: management_group_id}
+    subscription_tags: {class: setting, key: tags, by: "with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy", config: tags}
     subscription_register_resource_providers_enabled: {class: fixed, value: true, why: "a new subscription needs its providers before anything is made in it"}
     subscription_register_resource_providers_and_features: open
     wait_for_subscription_before_subscription_operations: open
     network_security_group_enabled: {class: derived, by: "on, until decommission is true"}
-    network_security_groups.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: network_security_groups}
-    network_security_groups.location: {class: setting, key: location}
+    network_security_groups.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: network_security_groups, config: names.network_security_groups}
+    network_security_groups.location: {class: setting, key: location, config: location}
     network_security_groups.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     network_security_groups.resource_group_name_existing: {class: derived, by: "the landing zone's network resource group"}
-    network_security_groups.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy"}
+    network_security_groups.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
     network_security_groups.resource_types: {class: fixed, why: "the API versions the module is tested with; new ones come with a module release"}
     network_security_groups.security_rules: open
     resource_group_creation_enabled: {class: fixed, why: "off: vending makes the landing zone's resource groups itself, named from the template"}
@@ -63,25 +63,25 @@ vending:
     user_managed_identities.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: [plan_identity, deploy_identity]}
     user_managed_identities.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     user_managed_identities.resource_group_name_existing: {class: derived, by: "the landing zone's identity resource group"}
-    user_managed_identities.location: {class: setting, key: location}
-    user_managed_identities.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy"}
+    user_managed_identities.location: {class: setting, key: location, config: location}
+    user_managed_identities.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
     user_managed_identities.role_assignments: {class: fixed, value: {plan: Reader, deploy: Contributor}, why: "on the landing zone's subscription: the platform team runs every pipeline (decision D2)"}
     user_managed_identities.federated_credentials_advanced: {class: derived, by: "the workload repo's GitHub subjects, by ID: its pull requests and main for plan, its apply environment for deploy"}
     user_managed_identities.federated_credentials_github: {class: closed, why: "the identities trust GitHub's immutable subjects, through federated_credentials_advanced"}
     user_managed_identities.federated_credentials_terraform_cloud: {class: closed, why: "the workload repo runs on GitHub"}
     virtual_network_enabled: {class: derived, by: "on, until decommission is true"}
-    virtual_networks.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: virtual_network}
+    virtual_networks.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: virtual_network, config: names.virtual_network}
     virtual_networks.address_space: {class: derived, by: "the landing zone's range in _generated/ip-plan.yaml, whose size network.size asks for"}
     virtual_networks.ipam_pools: {class: closed, why: "addresses come from the IP allocator"}
     virtual_networks.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     virtual_networks.resource_group_name_existing: {class: derived, by: "the landing zone's network resource group"}
-    virtual_networks.location: {class: setting, key: location}
-    virtual_networks.dns_servers: {class: derived, by: "the region's DNS servers, from the platform contract"}
+    virtual_networks.location: {class: setting, key: location, config: location}
+    virtual_networks.dns_servers: {class: derived, by: "the region's DNS servers, from the platform contract", config: network.dns_servers}
     virtual_networks.flow_timeout_in_minutes: open
     virtual_networks.ddos_protection_enabled: open
     virtual_networks.ddos_protection_plan_id: open
     virtual_networks.subnets.name: {class: derived, by: "snet-<subnet>"}
-    virtual_networks.subnets.address_prefix: {class: derived, by: "the subnet's block in _generated/ip-plan.yaml, whose size network.subnets asks for"}
+    virtual_networks.subnets.address_prefix: {class: derived, by: "the subnet's block in _generated/ip-plan.yaml, whose size network.subnets asks for", config: network.subnets}
     virtual_networks.subnets.address_prefixes: {class: closed, why: "one prefix per subnet, from the IP allocator"}
     virtual_networks.subnets.ipam_pools: {class: closed, why: "addresses come from the IP allocator"}
     virtual_networks.subnets.network_security_group: {class: derived, by: "the subnet's own NSG"}
@@ -93,11 +93,11 @@ vending:
     virtual_networks.subnets.service_endpoints: open
     virtual_networks.subnets.service_endpoint_policies: open
     virtual_networks.subnets.delegations: open
-    virtual_networks.hub_network_resource_id: {class: derived, by: "the region's hub, from the platform contract"}
+    virtual_networks.hub_network_resource_id: {class: derived, by: "the region's hub, from the platform contract", config: network.hub_virtual_network_id}
     virtual_networks.hub_peering_enabled: {class: fixed, value: true, why: "every landing zone is a spoke of its region's hub"}
     virtual_networks.hub_peering_direction: {class: fixed, why: "both: vending makes both ends"}
-    virtual_networks.hub_peering_name_tohub: {class: derived, by: "peer-<key>-to-hub"}
-    virtual_networks.hub_peering_name_fromhub: {class: derived, by: "peer-hub-to-<key>"}
+    virtual_networks.hub_peering_name_tohub: {class: derived, by: "peer-<key>-to-hub", config: names.peering_to_hub}
+    virtual_networks.hub_peering_name_fromhub: {class: derived, by: "peer-hub-to-<key>", config: names.peering_from_hub}
     virtual_networks.hub_peering_options_tohub: {class: fixed, value: {use_remote_gateways: false}, why: "the hubs have no gateway yet; the rest is the module's default"}
     virtual_networks.hub_peering_options_fromhub: {class: fixed, value: {allow_gateway_transit: false}, why: "the hubs have no gateway yet; the rest is the module's default"}
     virtual_networks.mesh_peering_enabled: {class: fixed, why: "off: one landing zone reaches another through the firewall, by a rule"}
@@ -109,10 +109,10 @@ vending:
     virtual_networks.vwan_propagated_routetables_labels: {class: closed, why: "MLZ's hubs are virtual networks, not Virtual WAN"}
     virtual_networks.vwan_propagated_routetables_resource_ids: {class: closed, why: "MLZ's hubs are virtual networks, not Virtual WAN"}
     virtual_networks.vwan_security_configuration: {class: closed, why: "MLZ's hubs are virtual networks, not Virtual WAN"}
-    virtual_networks.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy"}
+    virtual_networks.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
     budget_enabled: {class: derived, by: "on when budget.monthly is set, until decommission is true"}
-    budgets.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: budget}
-    budgets.amount: {class: setting, key: budget.monthly}
+    budgets.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: budget, config: names.budget}
+    budgets.amount: {class: setting, key: budget.monthly, config: budget.monthly}
     budgets.time_grain: {class: fixed, value: Monthly, why: "a monthly budget"}
     budgets.time_period_start: {class: derived, by: "the first of the month the landing zone was vended"}
     budgets.time_period_end: {class: fixed, value: "2099-12-31T00:00:00Z", why: "a budget that does not run out"}
@@ -122,7 +122,7 @@ vending:
     budgets.notifications.operator: {class: fixed, value: GreaterThan, why: "an alert when spending passes the threshold"}
     budgets.notifications.threshold: {class: fixed, value: {actual_80: 80, forecast_100: 100}, why: "a warning at 80 % spent, and when the month is forecast to go over"}
     budgets.notifications.threshold_type: {class: fixed, value: {actual_80: Actual, forecast_100: Forecasted}, why: "a warning at 80 % spent, and when the month is forecast to go over"}
-    budgets.notifications.contact_emails: {class: setting, key: budget.contacts, by: "the owner when not set"}
+    budgets.notifications.contact_emails: {class: setting, key: budget.contacts, by: "the owner when not set", config: budget.contacts}
     budgets.notifications.contact_roles: open
     budgets.notifications.contact_groups: open
     budgets.notifications.locale: open

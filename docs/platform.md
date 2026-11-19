@@ -84,6 +84,33 @@ edited by hand could ask for that.
 `python3 -m mlz platform` reads `connectivity/`, `management/`, `identity/` and `_generated/governance.yaml`, checks them, and writes the
 root's config (JSON, for one run, never committed); the Terraform roots only read that file.
 
+## Where a value comes from
+
+`python3 -m mlz explain --repo . <region>` shows a hub's every value and where it comes from: what its
+connectivity file sets, what mlz-core fills in, and every input of the hub module that is worked out, with its value
+as the root is given it. `management`, `identity/<region>` and `firewall-rules` do the same for those stacks.
+
+```
+connectivity/norwayeast (connectivity/norwayeast.yaml)
+
+Set in its file
+  firewall                                            Premium                 <- connectivity/norwayeast.yaml
+  ...
+Filled in by mlz-core
+  dns_resolver                                        true                    <- mlz-core's default
+Worked out
+  hub_virtual_networks.firewall.subnet_address_prefix 10.100.0.0/26           <- the first /26 of the hub's /22
+  hub_virtual_networks.bastion.name                   bas-demo-hub-pd-nwe-01  <- the naming template; names.bastion in connectivity/<region>.yaml sets it
+  diagnostic_settings.workspace_resource_id           /subscriptions/m/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law
+                                                      <- management's workspace, from the governance contract
+Check
+  no problems in the platform's settings (python3 -m mlz platform checks every hub together)
+```
+
+`--inputs` lists every input of the stack's module calls instead, each with its class (a setting, worked out,
+fixed by Fortytwo, open or closed), its value and where it comes from. The same without the values, for every
+root, is in `docs/reference/`.
+
 ## Management and identity networks
 
 The platform builds two more networks, each a spoke of its region's hub as a landing zone is: two

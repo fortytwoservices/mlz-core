@@ -150,8 +150,10 @@ Check
 ```
 
 It reads the contracts in `_generated/` when they are there, and says what waits for them when they are
-not. It shows what mlz-core's loader decides; what the vending root does the same way for every landing
-zone, such as its NSGs, is in `vending/terraform`.
+not. It shows what mlz-core's loader decides. `--inputs` goes on to the module calls: every input of the route
+table's and sub-vending's, with its class (a setting, worked out, fixed by Fortytwo, open or closed), its value in
+the landing zone's config and where it comes from. It needs both contracts. `docs/reference/vending.md` has the
+same without the values.
 
 ## Decommissioning a landing zone
 
