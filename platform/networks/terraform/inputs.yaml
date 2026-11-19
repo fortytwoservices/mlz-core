@@ -7,13 +7,13 @@ network:
   notes:
     names: a network's names override will go in its own file, management/<region>.yaml or identity/<region>.yaml; not built yet
   inputs:
-    names: {class: derived, by: "the naming template (customer.yaml's naming, through the governance contract)"}
+    names: {class: derived, by: "the naming template (customer.yaml's naming, through the governance contract)", config: "networks.{network}.{region}.names"}
     location: {class: derived, by: "the region: the primary region for management, the file's name for identity"}
     parent_id: {class: derived, by: "the network's resource group, which the bootstrap made"}
-    address_space: {class: derived, by: "the fifth /24 of the region's platform_address_space for management, the sixth for identity"}
-    subnets: {class: derived, by: "a fixed layout in that /24 (tools/mlz/platform.py, NETWORKS)"}
-    dns_servers: {class: derived, by: "the hub firewall's address, or the resolver's inbound address behind a Basic firewall"}
-    firewall: {class: derived, by: "the fifth address of the hub's firewall subnet"}
+    address_space: {class: derived, by: "the fifth /24 of the region's platform_address_space for management, the sixth for identity", config: "networks.{network}.{region}.address_space"}
+    subnets: {class: derived, by: "a fixed layout in that /24 (tools/mlz/platform.py, NETWORKS)", config: "networks.{network}.{region}.subnets"}
+    dns_servers: {class: derived, by: "the hub firewall's address, or the resolver's inbound address behind a Basic firewall", config: "networks.{network}.{region}.dns_servers"}
+    firewall: {class: derived, by: "the fifth address of the hub's firewall subnet", config: "networks.{network}.{region}.firewall"}
     hub_virtual_network_id: {class: derived, by: "the region's hub, from its names"}
     github_runners: {class: derived, by: "management's network where GitHub's hosted runners can join it (tools/mlz/platform.py, GITHUB_RUNNER_REGIONS), with the organization's ID from the pipeline"}
     tags: {class: fixed, value: {ManagedBy: mlz-core}, why: "what mlz-core built, at a glance"}
@@ -21,7 +21,7 @@ network:
 network.route_table:
   builds: the network's route table, whose one route sends everything to the hub's firewall
   inputs:
-    name: {class: derived, by: "the naming template"}
+    name: {class: derived, by: "the naming template", config: "networks.{network}.{region}.names.route_table"}
     parent_id: {class: derived, by: "the network's resource group"}
     location: {class: derived, by: "the network's region"}
     bgp_route_propagation_enabled: {class: fixed, value: false, why: "a route learned from a gateway would go round the firewall"}
@@ -38,7 +38,7 @@ network.route_table:
 network.virtual_network:
   builds: the network and its subnets, each with its own NSG and the network's route table
   inputs:
-    name: {class: derived, by: "the naming template"}
+    name: {class: derived, by: "the naming template", config: "networks.{network}.{region}.names.virtual_network"}
     parent_id: {class: derived, by: "the network's resource group"}
     location: {class: derived, by: "the network's region"}
     address_space: {class: derived, by: "the network's /24"}
@@ -83,8 +83,8 @@ network.virtual_network:
 network.peering:
   builds: the network's peering with its hub, both ends, as a landing zone's
   inputs:
-    name: {class: derived, by: "peer-<network>-to-hub"}
-    reverse_name: {class: derived, by: "peer-hub-to-<network>"}
+    name: {class: derived, by: "peer-<network>-to-hub", config: "networks.{network}.{region}.names.peering_to_hub"}
+    reverse_name: {class: derived, by: "peer-hub-to-<network>", config: "networks.{network}.{region}.names.peering_from_hub"}
     parent_id: {class: derived, by: "the network"}
     remote_virtual_network_id: {class: derived, by: "the region's hub, from its names"}
     create_reverse_peering: {class: fixed, value: true, why: "the platform owns both networks, so it makes both ends"}

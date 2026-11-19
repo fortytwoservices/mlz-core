@@ -19,6 +19,14 @@ library and a per-customer rendering step.
 4. The top group, `<root>`, comes from the bootstrap (`docs/bootstrap.md`); governance marks it as
    existing and builds everything below it, so its pipeline never needs rights at the tenant root.
 
+## Where a value comes from
+
+`python3 -m mlz explain --repo .` in the governance repo shows every setting and where it comes from: `customer.yaml`
+(naming the default it replaces), `governance/defaults.yaml`, or mlz-core's naming defaults; then the names worked
+out for management's resources, and the check `render_library.py` makes. `--inputs` lists every input of the root's
+two module calls, ALZ's and management's, with its class, value and source (`docs/reference/governance.md` has
+them without the values).
+
 ## What the defaults give (decided by the user, 30 October 2026)
 
 | Topic | Default |

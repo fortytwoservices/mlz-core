@@ -5,7 +5,7 @@
     python3 -m mlz names    --repo <mlz-vending> --renew <key> [<key> ...]
     python3 -m mlz release  --repo <mlz-vending> <key>
     python3 -m mlz vending  --repo <mlz-vending> --out <folder>
-    python3 -m mlz explain  --repo <mlz-vending> <key>
+    python3 -m mlz explain  --repo <mlz-vending> <key> | --repo <mlz-platform> <region> | --repo <mlz-governance> [--inputs]
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>] [--owner <email>] ...
     terraform output -json contract | python3 -m mlz contract governance --out <repo>/_generated/governance.yaml
     python3 -m mlz upgrade  <owner>/<repo> [<owner>/<repo> ...] [--to vX.Y.Z] [--core <owner>/<repo>] [--dry-run]
@@ -69,11 +69,13 @@ def main() -> int:
     v.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
     v.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml)")
     v.add_argument("--out", type=Path, required=True, help="the folder for <key>.json, one per landing zone; mlz owns it")
-    e = roles.add_parser("explain", help="a landing zone's values, and where each one comes from")
+    e = roles.add_parser("explain", help="a stack's values, and where each one comes from: a landing zone, a hub, management's or identity's network, the rules, governance")
     e.add_argument("--repo", type=Path, required=True, help="the customer's mlz-vending checkout")
     e.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml, if there)")
     e.add_argument("--platform", type=Path, help="the platform contract (default: <repo>/_generated/platform.yaml, if there)")
-    e.add_argument("key", help="the landing zone's key, <workload>-<env>")
+    e.add_argument("key", nargs="?", help="vending: a landing zone's key, <workload>-<env>; platform: a region (its connectivity file), "
+                   "management, identity/<region> or firewall-rules; governance: nothing")
+    e.add_argument("--inputs", action="store_true", help="every input of the stack's module calls: its class, value and source (docs/reference/)")
     n = roles.add_parser("new", help="start the files of something new (see tools/mlz/new.py)")
     kinds = n.add_subparsers(dest="kind", required=True)
     nl = kinds.add_parser("landing-zone", help="a landing zone's files, with only what the layers above don't set")
@@ -262,7 +264,8 @@ def main() -> int:
     # Every file the command reads, parsed in one terraform run before anything is read.
     inputs = {
         "platform": ["connectivity", "management", "identity", "_generated"], "firewall": ["firewall-rules", "_generated"],
-        **{role: ["defaults", "landing-zones", "_generated"] for role in ("allocate", "names", "vending", "release", "vending-contract", "explain", "new")},
+        **{role: ["defaults", "landing-zones", "_generated"] for role in ("allocate", "names", "vending", "release", "vending-contract", "new")},
+        "explain": ["defaults", "landing-zones", "connectivity", "management", "identity", "_generated"],
     }
     try:
         if args.role != "contract":
@@ -287,12 +290,27 @@ def main() -> int:
                 args.out.parent.mkdir(parents=True, exist_ok=True)
                 args.out.write_text(json.dumps(config, indent=2) + "\n")
                 print(f"mlz firewall: wrote {args.out}")
+        elif args.role == "explain" and explain.role_of(args.repo) != "vending":
+            governance, _ = optional_contracts(args)
+            path = args.repo / "_generated" / "vending.yaml"
+            if explain.role_of(args.repo) == "platform":
+                print(explain.platform_explain(args.repo, args.key, governance, read_yaml(path) if path.is_file() else None, args.inputs), end="")
+            else:
+                print(explain.governance_explain(args.repo, args.inputs), end="")
         elif args.role == "explain":
+            if args.key is None:
+                raise ConfigError("explain in a vending repo takes a landing zone's key, <workload>-<env>.")
             zones = vending.landing_zones(args.repo)
             if args.key not in zones:
                 raise ConfigError(f"no landing zone {args.key}; the landing zones are {', '.join(sorted(zones)) or 'none yet'}.")
             governance, platform_contract = optional_contracts(args)
             lz, plan = zones[args.key], vending.ip_plan(args.repo)
+            if args.inputs:
+                if None in (governance, platform_contract):
+                    raise ConfigError("explain --inputs needs governance's and the platform's contracts in _generated/: the config it shows is made from them.")
+                config = vending.build(args.repo, governance, platform_contract)[args.key]
+                print(explain.render_parts(f"{args.key} ({explain.file_of(args.repo, lz['where'])})", explain.module_inputs("vending/terraform", config, {}), None), end="")
+                return 0
             parts = explain.explain(args.repo, args.key, lz, plan, governance, platform_contract)
             found = explain.problems(args.key, lz, plan, governance, platform_contract, vending.recorded_names(args.repo))
             print(explain.render(args.repo, args.key, lz, parts, found, None not in (governance, platform_contract)), end="")

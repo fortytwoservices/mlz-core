@@ -10,6 +10,10 @@ module of mlz-core's own that the root calls), every input of the module, by its
   setting   from a key in the customer's YAML, which `key` names (`file` says which file, if not the call's)
   derived   worked out by mlz-core: from the layout, the allocator, a contract or the naming; `by` says how, and
             `names` the key under names: that overrides a name
+
+A setting or a derived entry may name its value's place in the stack's config, the JSON its loader writes and the
+root reads: `config: hubs.{region}.firewall.sku_tier`, with {region} and {network} for the stack's own. mlz explain
+reads values from there, so it shows what the root is given, not a second working-out of it.
   fixed     Fortytwo's decision for every customer: `value` and `why`
   open      mlz-core does not set it, so the module's default applies
   closed    not supported yet: `why`
@@ -336,13 +340,25 @@ FILES = {
 NAMES_IN = {"landing-zone": "the landing zone's own file, `landing-zones/<workload>/<env>.yaml`"}
 # Each class: the fields it needs, and those it may have.
 CLASSES = {
-    "setting": ({"key"}, {"file", "by"}),
-    "derived": ({"by"}, {"names"}),
+    "setting": ({"key"}, {"file", "by", "config"}),
+    "derived": ({"by"}, {"names", "config"}),
     "fixed": ({"why"}, {"value", "from"}),
     "open": (set(), {"why"}),
     "closed": ({"why"}, set()),
 }
 CALL_FIELDS = {"builds", "file", "notes", "inputs"}
+# What a config path may name of the stack it is for: its region, and management's or identity's network.
+PLACES = ("region", "network")
+
+
+def value_at(config: dict, path: str, places: dict[str, str]):
+    """The value at a config path, with the stack's places filled in; KeyError when it is not there."""
+    value = config
+    for part in path.format(**places).split("."):
+        if not isinstance(value, dict) or part not in value:
+            raise KeyError(path)
+        value = value[part]
+    return value
 
 
 def load_maps() -> dict[str, dict]:
@@ -433,7 +449,9 @@ def entry_problems(path: str, item: dict, paths: dict, default_file: str | None,
     needed, allowed = CLASSES[kind]
     found = [f"{kind} needs {field}" for field in sorted(needed - set(item))]
     found += [f"{kind} takes no {field}" for field in sorted(set(item) - needed - allowed - {"class"})]
-    found += [f"{field} must be text" for field in ("key", "by", "why", "file", "from") if field in item and not (isinstance(item[field], str) and item[field].strip())]
+    found += [f"{field} must be text" for field in ("key", "by", "why", "file", "from", "config") if field in item and not (isinstance(item[field], str) and item[field].strip())]
+    if isinstance(item.get("config"), str) and set(re.findall(r"\{([^}]*)\}", item["config"])) - set(PLACES):
+        found.append(f"config: {item['config']} takes only {', '.join('{' + p + '}' for p in PLACES)}")
     names = item.get("names")
     if "names" in item and not (isinstance(names, str) or isinstance(names, list) and names and all(isinstance(n, str) for n in names)):
         found.append("names must be a key under names:, or a list of them")

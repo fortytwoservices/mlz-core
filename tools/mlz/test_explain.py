@@ -10,9 +10,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from mlz import explain, vending
+from mlz import explain, platform, vending
 from mlz.__main__ import main
 from mlz.contract import render
+from mlz.test_platform import GOVERNANCE as PLATFORM_GOVERNANCE_BASE
 from mlz.test_vending import DEFAULTS, GOVERNANCE, PLATFORM, PROD, WORKLOAD
 
 
@@ -205,6 +206,216 @@ class ExplainTest(unittest.TestCase):
         status, _, err = self.run_main("explain", "--repo", str(self.repo), "payments-test")
         self.assertEqual(status, 1)
         self.assertIn("no landing zone payments-test; the landing zones are payments-prod.", err)
+
+
+    def test_inputs_shows_every_input_of_both_module_calls_with_the_config_s_values(self):
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        status, out, _ = self.run_main("explain", "--repo", str(self.repo), "payments-prod", "--inputs")
+        self.assertEqual(status, 0)
+        self.assertIn("module.route_table: az-tf-mlz-route-table v0.1.1", out)
+        self.assertIn("module.vending: Azure/avm-ptn-alz-sub-vending/azure 0.3.4", out)
+        self.assertRegex(out, r"budgets.amount +2000 +<- setting: budget.monthly in a landing zone's file")
+        self.assertRegex(out, r"virtual_networks.dns_servers +\[10.100.0.4\] +<- derived")
+        self.assertRegex(out, r"enable_telemetry +false +<- fixed by Fortytwo")
+        self.assertNotIn("none: not built here", out)
+
+    def test_inputs_needs_both_contracts(self):
+        status, _, err = self.run_main("explain", "--repo", str(self.repo), "payments-prod", "--inputs")
+        self.assertEqual(status, 1)
+        self.assertIn("needs governance's and the platform's contracts", err)
+
+    def test_the_vending_starter_s_example_names_a_source_for_every_value(self):
+        starter = Path(explain.inputs.CORE / "starter" / "mlz-vending")
+        for path in (starter / "defaults").glob("*.yaml"):
+            self.write(f"defaults/{path.name}", path.read_text())
+        for path in (starter / "examples" / "payments").glob("*.yaml"):
+            self.write(f"landing-zones/payments/{path.name}", path.read_text())
+        self.allocate()
+        parts = sources(self.rows())
+        self.assertTrue(parts, "the example gave no rows")
+        self.assertEqual([row for row, source in parts if not source], [])
+
+
+def sources(rows: dict) -> list[tuple[str, str]]:
+    return [(setting, source) for setting, (_, source) in rows.items()]
+
+
+def rows_of(text: str) -> list[str]:
+    """The rows of explain's output, under a part's title, the check excepted; a long value's source, on the line
+    after it, joined to it."""
+    found, part = [], None
+    for line in text.splitlines():
+        if line and not line.startswith(" "):
+            part = line
+        elif line.strip().startswith("<-") and found:
+            found[-1] += " " + line.strip()
+        elif line.startswith("  ") and part not in (None, "Check"):
+            found.append(line)
+    return found
+
+
+HUB = "platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\nbastion: true\nfirewall: Premium\n"
+PLATFORM_GOVERNANCE = {**PLATFORM_GOVERNANCE_BASE, "platform_subscriptions": {"management": "m", "connectivity": "c", "identity": "i"}}
+
+
+class PlatformExplainTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.write("connectivity/norwayeast.yaml", HUB)
+        self.write("identity/norwayeast.yaml", "")
+        self.write("_generated/governance.yaml", render("governance", PLATFORM_GOVERNANCE))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, relative: str, text: str) -> None:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def run_main(self, *argv: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "explain", "--repo", str(self.repo), *argv]), redirect_stdout(out), redirect_stderr(err):
+            status = main()
+        return status, out.getvalue(), err.getvalue()
+
+    def test_a_hub_s_settings_its_defaults_and_what_is_worked_out_each_with_its_source(self):
+        status, out, _ = self.run_main("norwayeast")
+        self.assertEqual(status, 0)
+        self.assertTrue(out.startswith("connectivity/norwayeast (connectivity/norwayeast.yaml)\n"))
+        self.assertRegex(out, r"firewall +Premium +<- connectivity/norwayeast.yaml")
+        self.assertRegex(out, r"dns_resolver +true +<- mlz-core's default")
+        self.assertRegex(out, r"hub_virtual_networks.firewall.subnet_address_prefix +10.100.0.0/26 +<- the first /26 of the hub's /22")
+        self.assertRegex(out, r"hub_virtual_networks.bastion.name +bas-demo-hub-pd-nwe-01 +<- the naming template; names.bastion in connectivity/<region>.yaml sets it")
+        self.assertIn("no problems in the platform's settings", out)
+        self.assertEqual([row for row in rows_of(out) if "<-" not in row], [])
+        self.assertEqual(self.run_main("connectivity/norwayeast")[1], out)
+
+    def test_a_component_turned_off_is_said_not_to_be_built(self):
+        self.write("connectivity/norwayeast.yaml", HUB + "dns_resolver: false\n")
+        self.assertRegex(self.run_main("norwayeast")[1], r"hub_virtual_networks.dns_resolver.name +none: not built here")
+
+    def test_management_identity_and_the_rules(self):
+        status, out, _ = self.run_main("management")
+        self.assertEqual(status, 0)
+        self.assertTrue(out.startswith("management/norwayeast\n"))
+        self.assertRegex(out, r"network.address_space +10.100.4.0/24")
+        self.assertRegex(out, r"network.route_table.name +rt-demo-mgt-pd-nwe-01")
+        self.assertRegex(self.run_main("identity/norwayeast")[1], r"network.address_space +10.100.5.0/24")
+        status, out, _ = self.run_main("firewall-rules")
+        self.assertEqual(status, 0)
+        self.assertIn("module.rule_collection_group:", out)
+        self.assertRegex(out, r"nat_rule_collections +- +<- closed: outbound rules only")
+
+    def test_without_governance_s_contract_what_is_worked_out_waits(self):
+        (self.repo / "_generated" / "governance.yaml").unlink()
+        self.assertRegex(self.run_main("norwayeast")[1], r"everything else +not known yet +<- waits for governance's contract")
+
+    def test_settings_that_do_not_check_are_reported(self):
+        self.write("connectivity/norwayeast.yaml", HUB.replace("Premium", "Gold"))
+        status, out, _ = self.run_main("norwayeast")
+        self.assertEqual(status, 0)
+        self.assertIn("connectivity/norwayeast: firewall 'Gold' must be one of Standard, Premium, Basic.", out)
+        self.assertIn("the platform's settings must check first", out)
+
+    def test_the_platform_starter_says_it_waits(self):
+        self.write("connectivity/norwayeast.yaml", (explain.inputs.CORE / "starter/mlz-platform/connectivity/norwayeast.yaml").read_text())
+        self.assertIn("no file in connectivity/ has a setting yet: the platform waits", self.run_main("norwayeast")[1])
+
+    def test_an_unknown_target_lists_what_explain_takes(self):
+        status, _, err = self.run_main("westeurope")
+        self.assertEqual(status, 1)
+        self.assertIn("explain takes a region with a file in connectivity/ (norwayeast), management, identity/<region> or firewall-rules", err)
+
+    def test_inputs_shows_every_input_of_the_hub_with_the_config_s_values(self):
+        status, out, _ = self.run_main("norwayeast", "--inputs")
+        self.assertEqual(status, 0)
+        self.assertNotIn("Check", out)
+        self.assertRegex(out, r"hub_virtual_networks.firewall.sku_tier +Premium +<- setting: firewall in connectivity/<region>.yaml")
+        self.assertRegex(out, r"hub_virtual_networks.bastion.sku +\"Standard\" +<- open: the module's default")
+        self.assertRegex(out, r"hub_virtual_networks.vpn_gateway +- +<- closed:")
+        mapped = explain.inputs.load_maps()["platform/terraform"]["connectivity"]["inputs"]
+        self.assertEqual(len(rows_of(out)), len(mapped))
+
+
+class GovernanceExplainTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def explain(self, customer: str, show_inputs: bool = False) -> str:
+        (self.repo / "customer.yaml").write_text(customer)
+        return explain.governance_explain(self.repo, show_inputs)
+
+    def test_the_starter_names_a_source_for_every_value(self):
+        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text())
+        self.assertRegex(out, r"root_id +demo +<- customer.yaml")
+        self.assertRegex(out, r"tags.required +\[Owner, CostCenter\] +<- mlz-core's governance/defaults.yaml")
+        self.assertRegex(out, r"management.name +log-demo-mgt-pd-nwe-01 +<- the naming template")
+        self.assertIn("no problems in customer.yaml", out)
+        self.assertEqual([row for row in rows_of(out) if "<-" not in row], [])
+
+    def test_a_value_that_replaces_a_default_names_it(self):
+        customer = (explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text()
+        out = self.explain(customer + "allowed_regions: [norwayeast]\ntags:\n  required: [Owner]\n")
+        self.assertRegex(out, r"allowed_regions +\[norwayeast\] +<- customer.yaml, replacing mlz-core's governance/defaults.yaml: \[norwayeast, norwaywest")
+        self.assertRegex(out, r"tags.required +\[Owner\] +<- customer.yaml, replacing mlz-core's governance/defaults.yaml: \[Owner, CostCenter\]")
+        self.assertRegex(out, r"tags.inherited +\[Owner, CostCenter, Environment, Workload\] +<- mlz-core's governance/defaults.yaml")
+
+    def test_a_customer_file_that_does_not_check_is_reported(self):
+        out = self.explain("root_id: Demo\n")
+        self.assertIn("root_id 'Demo'", out)
+        self.assertIn("customer.yaml must check first", out)
+
+    def test_inputs_shows_both_module_calls(self):
+        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text(), show_inputs=True)
+        self.assertIn("module.alz: Azure/avm-ptn-alz/azurerm 0.22.0", out)
+        self.assertIn("module.management: az-tf-mlz-management v0.2.0", out)
+        self.assertRegex(out, r"architecture_name +demo +<- setting: root_id in customer.yaml")
+
+
+class ConfigPathTest(unittest.TestCase):
+    """Every config path in the maps is a place in its stack's config, on a config with every component built."""
+
+    def test_every_config_path_resolves(self):
+        maps = explain.inputs.load_maps()
+        with tempfile.TemporaryDirectory() as folder:
+            repo = Path(folder)
+            (repo / "connectivity").mkdir()
+            (repo / "connectivity" / "norwayeast.yaml").write_text(HUB)
+            (repo / "identity").mkdir()
+            (repo / "identity" / "norwayeast.yaml").write_text("")
+            configs = {"platform/terraform": (platform.build(repo, PLATFORM_GOVERNANCE), [{"region": "norwayeast"}]),
+                       "platform/networks/terraform": (platform.build(repo, PLATFORM_GOVERNANCE),
+                                                       [{"network": n, "region": "norwayeast"} for n in ("management", "identity")])}
+        case = ExplainTest("run")
+        case.setUp()
+        try:
+            configs["vending/terraform"] = (vending.build(case.repo, GOVERNANCE, PLATFORM)["payments-prod"], [{}])
+        finally:
+            case.tearDown()
+        with tempfile.TemporaryDirectory() as folder:
+            rules = explain.schema.governance_rules()
+            customer = rules.load_yaml(explain.inputs.CORE / "starter/mlz-governance/customer.yaml")
+            merged = rules.merge(rules.load_yaml(explain.inputs.CORE / "governance/defaults.yaml"), customer)
+            configs["governance/terraform"] = (rules.normalize(merged), [{}])
+        checked = 0
+        for root, (config, instances) in configs.items():
+            for key, section in maps[root].items():
+                for path, item in (section.get("inputs") or {}).items():
+                    if isinstance(item, dict) and "config" in item:
+                        for places in instances:
+                            with self.subTest(root=root, input=f"{key}.{path}", places=places):
+                                explain.inputs.value_at(config, item["config"], places)
+                                checked += 1
+        self.assertGreater(checked, 60)
+        self.assertEqual({root for root, sections in maps.items() for s in sections.values()
+                          for item in (s.get("inputs") or {}).values() if isinstance(item, dict) and "config" in item}, set(configs))
 
 
 if __name__ == "__main__":

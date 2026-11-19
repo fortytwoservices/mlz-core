@@ -1,21 +1,28 @@
-"""What a landing zone ends up with, and where each value comes from.
+"""What a stack ends up with, and where each value comes from.
 
-    python3 -m mlz explain --repo <mlz-vending> <key>
+    python3 -m mlz explain --repo <mlz-vending> <key>                  a landing zone
+    python3 -m mlz explain --repo <mlz-platform> <region>              a hub: connectivity/<region>.yaml
+    python3 -m mlz explain --repo <mlz-platform> management|identity/<region>|firewall-rules
+    python3 -m mlz explain --repo <mlz-governance>                     governance: customer.yaml
+    ... --inputs                                                       every input of the stack's module calls
 
-Three parts: every setting its four layers set, with the file that set it and any value it replaced there;
-what mlz-core fills in where nothing is set; and what is worked out: the management group (from
-governance's contract), the tags, the addresses (from the IP plan) and the hub, DNS servers and routes
-(from the platform's contract). Then the landing zone's own check. It covers what mlz-core's loader
-decides; what the vending root does the same for every landing zone, such as the NSGs, is in
-vending/terraform, not here.
+Three parts: every setting the stack's files set, with the file that set it and any value it replaced there; what
+mlz-core fills in where nothing is set; and what is worked out. Then the stack's check. A landing zone's worked-out
+part is its own (the management group, the tags, the addresses, the hub, DNS servers and routes, the names); every
+other stack's comes from its root's input map (tools/mlz/inputs.py): each worked-out input of its module calls, with
+its value as the stack's config gives it to the root.
+
+--inputs shows the module calls as the root makes them: every input, its class (setting, derived, fixed, open,
+closed), its value where the config or the map holds it, and where it comes from. docs/reference/ has the same
+without the values.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from . import naming, vending
-from .files import SUFFIXES
+from . import inputs, naming, platform, schema, vending
+from .files import SUFFIXES, read_setting, setting_names
 from .merge import ConfigError
 
 ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags")
@@ -47,6 +54,8 @@ def show(value) -> str:
     """A value as it is written in YAML."""
     if isinstance(value, list):
         return "[" + ", ".join(show(v) for v in value) + "]"
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{k}: {show(v)}" for k, v in value.items()) + "}"
     if isinstance(value, bool):
         return "true" if value else "false"
     return "null" if value is None else str(value)
@@ -195,9 +204,16 @@ def clean(complete: bool) -> str:
 
 
 def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str, str]]], found: list[str], complete: bool = True) -> str:
+    return render_parts(f"{key} ({file_of(repo, lz['where'])})", parts, found, complete)
+
+
+def render_parts(heading: str, parts: dict[str, list[tuple[str, str, str]]], found: list[str] | None, complete: bool = True,
+                 nothing: str | None = None) -> str:
+    """The parts as aligned rows, then the check (nothing: what it says when it finds nothing); no check at all with
+    found None (--inputs)."""
     rows = [row for part in parts.values() for row in part]
-    first = max(len(setting) for setting, _, _ in rows) + 2
-    lines = [f"{key} ({file_of(repo, lz['where'])})"]
+    first = max([len(setting) for setting, _, _ in rows] + [10]) + 2
+    lines = [heading]
     for title, part in parts.items():
         if not part:
             continue
@@ -207,6 +223,186 @@ def render(repo: Path, key: str, lz: dict, parts: dict[str, list[tuple[str, str,
                 lines += [f"  {setting:<{first}}{value}", f"  {'':<{first}}<- {source}"]
             else:
                 lines.append(f"  {setting:<{first}}{value:<{WIDTH}}  <- {source}")
-    lines += ["", "Check"]
-    lines += [f"  {problem}" for problem in found] or [f"  {clean(complete)}"]
+    if found is not None:
+        lines += ["", "Check"]
+        lines += [f"  {problem}" for problem in found] or [f"  {nothing or clean(complete)}"]
     return "\n".join(line.rstrip() for line in lines) + "\n"
+
+
+# --- Every other stack: its settings, and what its root is given, from the input maps (tools/mlz/inputs.py) ----------
+
+LONG = 80  # a module default longer than this is cut: the reference page and the module have it whole
+WAITS = "waits for governance's contract (_generated/governance.yaml)"
+
+
+def role_of(repo: Path) -> str:
+    """The repo's role, by what is in it."""
+    if (repo / "landing-zones").is_dir() or (repo / vending.DEFAULTS).is_dir():
+        return "vending"
+    if (repo / platform.CONNECTIVITY).is_dir():
+        return "platform"
+    if (repo / "customer.yaml").is_file():
+        return "governance"
+    raise ConfigError(f"{repo}: neither landing-zones/, {platform.CONNECTIVITY}/ nor customer.yaml; run explain in a vending, platform or governance repo.")
+
+
+def plain(text: str) -> str:
+    return text.replace("`", "")
+
+
+def default_of(info: dict) -> str:
+    text = "required" if info["required"] else info.get("default") or "null"
+    return text if len(text) <= LONG else text[:LONG - 3] + "..."
+
+
+def input_value(item: dict, info: dict, config: dict | None, places: dict[str, str]) -> str | None:
+    """What the root gives a module input, where the config or the map says it; None where neither does."""
+    kind = item["class"]
+    if kind in ("setting", "derived"):
+        if config is None or "config" not in item:
+            return None
+        try:
+            return show(inputs.value_at(config, item["config"], places))
+        except KeyError:
+            return "none: not built here"
+    if kind == "fixed":
+        return show(item["value"]) if "value" in item else f"the list in {item['from']}" if "from" in item else default_of(info)
+    return default_of(info) if kind == "open" else None
+
+
+def input_source(item: dict, file: str | None) -> str:
+    kind = item["class"]
+    if kind == "setting":
+        return f"setting: {item['key']} in {plain(inputs.FILES[item.get('file', file)])}" + (f", {item['by']}" if item.get("by") else "")
+    if kind == "derived":
+        names = [item["names"]] if isinstance(item.get("names"), str) else item.get("names") or []
+        where = plain(inputs.NAMES_IN.get(file, inputs.FILES.get(file, "")))
+        return f"derived: {item['by']}" + (f"; names.{' or names.'.join(names)} in {where} sets it" if names else "")
+    if kind == "fixed":
+        return f"fixed by Fortytwo: {item['why']}"
+    if kind == "open":
+        return "open: the module's default; mlz-core does not set it" + (f" ({item['why']})" if item.get("why") else "")
+    return f"closed: {item['why']}"
+
+
+def module_inputs(root: str, config: dict | None, places: dict[str, str], worked_out: bool = False) -> dict[str, list[tuple[str, str, str]]]:
+    """Each module call of a root, with a row per entry of its map: (input, value, source). worked_out: one part, of the
+    derived inputs whose value the config holds, named by their call where the root makes several."""
+    snapshot, maps = inputs.load_snapshot(), inputs.load_maps()
+    calls, parts = snapshot[root], {}
+    for key, call in calls.items():
+        section = maps[root][key]
+        entries = {path: inputs.entry(value) for path, value in (section.get("inputs") or {}).items()}
+        rows = []
+        for path, info in call["inputs"].items():
+            if path not in entries:
+                continue
+            item, value = entries[path], input_value(entries[path], info, config, places)
+            if worked_out and (item["class"] != "derived" or value is None):
+                continue
+            label = f"{key}.{path}" if worked_out and len(calls) > 1 else path
+            source = input_source(item, section.get("file"))
+            rows.append((label, "-" if value is None else value, source.removeprefix("derived: ") if worked_out else source))
+        title = "Worked out" if worked_out else f"module.{key.replace('.', '.module.')}: {inputs.module_label(call)}"
+        parts.setdefault(title, []).extend(rows)
+    return parts
+
+
+def problems_of(error: ConfigError) -> list[str]:
+    """A loader's ConfigError as its problems, one per line, without the heading."""
+    lines = [line.strip() for line in str(error).splitlines() if line.strip()]
+    return lines[1:] if len(lines) > 1 and lines[0].endswith(":") else lines
+
+
+def platform_target(repo: Path, target: str | None, governance: dict | None) -> tuple[str, str, dict[str, str]]:
+    """A platform target as (stack, root, places): a region or connectivity/<region>, management[/<region>],
+    identity/<region>, or firewall-rules."""
+    regions = setting_names(repo / platform.CONNECTIVITY)
+    name, _, region = (target or "").partition("/")
+    if name == "firewall-rules":
+        return "firewall-rules", "platform/rules/terraform", {}
+    if name in ("management", "identity"):
+        region = region or (governance or {}).get("primary_region", "")
+        if not region:
+            raise ConfigError(f"{name}: give its region, {name}/<region>, or let governance's contract say the primary region.")
+        return name, "platform/networks/terraform", {"network": name, "region": region}
+    region = region if name == platform.CONNECTIVITY else name
+    if region not in regions:
+        raise ConfigError(f"{target or 'nothing'}: explain takes a region with a file in {platform.CONNECTIVITY}/ ({', '.join(regions) or 'none yet'}), "
+                          "management, identity/<region> or firewall-rules.")
+    return platform.CONNECTIVITY, "platform/terraform", {"region": region}
+
+
+def platform_explain(repo: Path, target: str | None, governance: dict | None, vending_contract: dict | None, show_inputs: bool) -> str:
+    stack, root, places = platform_target(repo, target, governance)
+    config, found = None, []
+    if platform.unset(repo):
+        found = [f"no file in {platform.CONNECTIVITY}/ has a setting yet: the platform waits, and builds nothing until one does"]
+    elif governance is not None:
+        try:
+            config = platform.build(repo, governance, vending_contract)
+        except ConfigError as error:
+            found = problems_of(error)
+    where = f"{stack}/{places['region']}" if "region" in places else stack
+    heading = f"{stack} ({stack}/)" if stack == "firewall-rules" else f"{where} ({file_of(repo, where)})" if file_of(repo, where) != where else where
+    if show_inputs:
+        return render_parts(heading, module_inputs(root, config, places), None)
+    if stack == "firewall-rules":  # rules are listed one by one in their files; their inputs are what explain has to say
+        return render_parts(heading, module_inputs(root, None, places), found, nothing="no problems in the platform's settings")
+    layered, filled = [], []
+    if stack == platform.CONNECTIVITY:
+        settings = read_setting(repo / platform.CONNECTIVITY / places["region"]) or {}
+        layered = [(dotted(path), show(value), file_of(repo, where)) for path, value in leaves(settings).items()]
+        properties = schema.connectivity()["properties"]
+        filled = [(key, show(spec["default"]), "mlz-core's default") for key, spec in properties.items() if "default" in spec and key not in settings]
+        filled += [(key, "none", what) for key, what in (("reserved", "no range is reserved"), ("names", "every name from the naming template (docs/naming.md)"))
+                   if key not in settings]
+    else:
+        filled = [(stack, "no settings", f"{stack}/<region>.yaml takes none yet; {'its being there builds' if stack == 'identity' else 'management builds'} the network")]
+    worked = module_inputs(root, config, places, worked_out=True).get("Worked out", []) if config else \
+        [("everything else", "not known yet", WAITS if governance is None else "the platform's settings must check first (below)")]
+    return render_parts(heading, {"Set in its file": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found,
+                        nothing="no problems in the platform's settings (python3 -m mlz platform checks every hub together)")
+
+
+def governance_explain(repo: Path, show_inputs: bool) -> str:
+    rules = schema.governance_rules()
+    defaults_file = inputs.CORE / "governance" / "defaults.yaml"
+    try:
+        defaults, customer = rules.load_yaml(defaults_file), rules.load_yaml(repo / "customer.yaml")
+    except rules.RenderError as error:
+        raise ConfigError(str(error)) from None
+    merged, config, found = rules.merge(defaults, customer), None, []
+    try:
+        rules.validate(merged)
+        config = rules.normalize(merged)
+    except (rules.RenderError, ConfigError) as error:
+        found = problems_of(ConfigError(str(error)))
+    heading = "governance (customer.yaml)"
+    if show_inputs:
+        return render_parts(heading, module_inputs("governance/terraform", config, {}), None)
+    defaults_name = "mlz-core's governance/defaults.yaml"
+    mine, theirs = leaves(customer), leaves(defaults)
+    layered = []
+    for path, value in mine.items():
+        if path in theirs and theirs[path] != value:
+            source = f"customer.yaml, replacing {defaults_name}: {show(theirs[path])}"
+        elif path[0] in defaults and path[0] not in rules.MERGED_KEY_BY_KEY and path not in theirs and path == next(p for p in mine if p[0] == path[0]):
+            source = f"customer.yaml, replacing {defaults_name}'s {path[0]} whole"
+        else:
+            source = "customer.yaml"
+        layered.append((dotted(path), show(value), source))
+    filled = [(dotted(path), show(value), defaults_name) for path, value in leaves(merged).items() if path not in mine]
+    given = customer.get("naming") if isinstance(customer.get("naming"), dict) else {}
+    if "template" not in given:
+        filled.append(("naming.template", naming.TEMPLATE, "mlz-core's default (docs/naming.md)"))
+    if "org" not in given:
+        filled.append(("naming.org", show(customer.get("root_id")), "the root ID"))
+    worked = module_inputs("governance/terraform", config, {}, worked_out=True).get("Worked out", []) if config else \
+        [("everything else", "not known yet", "customer.yaml must check first (below)")]
+    return render_parts(heading, {"Set in customer.yaml": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found,
+                        nothing="no problems in customer.yaml")
+
+
+def dotted(path: tuple) -> str:
+    return ".".join(map(str, path))
