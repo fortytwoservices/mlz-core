@@ -1,15 +1,17 @@
-"""Tests for drift.sh: the daily check's one issue, against a gh that records what it is asked to do."""
+"""Tests for drift.py: the daily check's one issue, against a gh that records what it is asked to do. drift.sh's tests,
+unchanged but for the script they run: the port keeps its calls to gh as they were."""
 
 from __future__ import annotations
 
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-DRIFT = Path(__file__).resolve().parent / "drift.sh"
+DRIFT = Path(__file__).resolve().parent / "drift.py"
 TITLE = "Daily check: Azure differs from main"
 
 # Answers `gh issue list` with $FAKE_OPEN (an issue number, or nothing) and records every call, with the body
@@ -46,7 +48,7 @@ class DriftTest(unittest.TestCase):
         env = {**os.environ, "PATH": f"{self.dir / 'bin'}:{os.environ['PATH']}", "FAKE_LOG": str(self.log), "FAKE_OPEN": open_issue,
                "STACKS": json.dumps(list(statuses)), "GH_REPO": "acme/mlz-platform", "RUN_URL": "https://example/run/1",
                "RUNNER_TEMP": str(self.dir), "ROLE": "platform", "CHECK": check}
-        subprocess.run(["bash", str(DRIFT)], cwd=self.dir, env=env, check=True, capture_output=True, text=True)
+        subprocess.run([sys.executable, str(DRIFT)], cwd=self.dir, env=env, check=True, capture_output=True, text=True)
         return self.log.read_text() if self.log.exists() else ""
 
     def test_drift_opens_one_issue_naming_the_stacks(self):

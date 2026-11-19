@@ -105,7 +105,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           STATUS: ${{ steps.plan.outputs.status }}
-        run: .mlz-core/tools/ci/comment.sh workload "$STATUS"
+        run: python3 .mlz-core/tools/ci/comment.py workload "$STATUS"
 
       - name: Result
         env:

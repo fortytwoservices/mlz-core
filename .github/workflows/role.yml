@@ -61,7 +61,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      pull-requests: write # marks the plan comment of a stack a pull request no longer changes (stale-comments.sh)
+      pull-requests: write # marks the plan comment of a stack a pull request no longer changes (stale_comments.py)
     outputs:
       core-repository: ${{ steps.core.outputs.repository }}
       core-name: ${{ steps.core.outputs.name }}
@@ -182,17 +182,8 @@ jobs:
           NEW_TEAMS: ${{ steps.owners-granter.outputs.token && 'grant' || steps.owners-reader.outputs.token && 'note' || '' }}
           BASE: ${{ github.event.pull_request.base.sha }} # a pull request's: which teams main names already
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-        run: |
-          # A fork's run gets none of the repo's secrets, so it cannot read teams as the MLZ App, nor see that main
-          # waits for a team's access: it would pass a pull request that must wait.
-          if [[ $GITHUB_EVENT_NAME == pull_request && $HEAD_REPO != "$GITHUB_REPOSITORY" ]]; then
-            echo "::error::$HEAD_REPO is a fork, whose run cannot check the code owners as the MLZ App. Push the branch to $GITHUB_REPOSITORY and open the pull request from there."
-            exit 1
-          fi
-          args=()
-          if [[ -n $NEW_TEAMS ]]; then args+=(--new-teams "$NEW_TEAMS"); fi
-          if [[ $NEW_TEAMS == note ]]; then args+=(--base "$BASE"); fi
-          PYTHONPATH="$PWD/.mlz-core/tools" python3 -m mlz owners --repo "$GITHUB_REPOSITORY" --ref "$REF" "${args[@]}"
+        # A fork's pull request is refused first (tools/ci/code_owners.py).
+        run: python3 .mlz-core/tools/ci/code_owners.py
 
       - name: Check the YAML
         id: check
@@ -212,7 +203,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           STACKS: ${{ steps.check.outputs.stacks }}
-        run: .mlz-core/tools/ci/stale-comments.sh
+        run: python3 .mlz-core/tools/ci/stale_comments.py
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -294,7 +285,7 @@ jobs:
           permission-members: read
 
       # Each stack of the batch in turn: its plan, its summary on the run page, its comment on a pull request, and on
-      # the daily check its status for the drift job (tools/ci/plans.sh). Fails when a plan failed or was refused, or
+      # the daily check its status for the drift job (tools/ci/plans.py). Fails when a plan failed or was refused, or
       # the daily check found drift, once every stack is planned.
       - name: Plan
         env:
@@ -303,9 +294,7 @@ jobs:
           GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
           GH_TOKEN: ${{ github.token }} # the plan comments
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          read -ra stacks <<< "$STACKS"
-          .mlz-core/tools/ci/plans.sh "$ROLE" "${stacks[@]}"
+        run: python3 .mlz-core/tools/ci/plans.py "$ROLE" $STACKS # one argument per stack
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -327,11 +316,7 @@ jobs:
         if: always() && github.event_name == 'schedule'
         env:
           STACKS: ${{ matrix.batch.stacks }}
-        run: |
-          mkdir -p .mlz
-          for stack in $STACKS; do
-            [[ -f .mlz/status-$stack.txt ]] || echo none > ".mlz/status-$stack.txt"
-          done
+        run: python3 .mlz-core/tools/ci/statuses.py
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && github.event_name == 'schedule'
@@ -342,9 +327,9 @@ jobs:
           overwrite: true # a re-run's plans replace the failed one's
           retention-days: 7
 
-  # The daily check's result as one issue in the repo (tools/ci/drift.sh): opened or commented on while the
+  # The daily check's result as one issue in the repo (tools/ci/drift.py): opened or commented on while the
   # check fails or a stack differs from main or its plan did not finish, closed by the first daily check that
-  # finds none. Only once check has found mlz-core's commit, which it does first: drift.sh comes from there.
+  # finds none. Only once check has found mlz-core's commit, which it does first: drift.py comes from there.
   drift:
     if: always() && github.event_name == 'schedule' && needs.check.outputs.core-ref != ''
     needs: [check, plan]
@@ -378,7 +363,7 @@ jobs:
           token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
-      # None when no plan job got to plan: drift.sh then reports every stack as not planned.
+      # None when no plan job got to plan: drift.py then reports every stack as not planned.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
@@ -393,7 +378,7 @@ jobs:
           CHECK: ${{ needs.check.result }}
           STACKS: ${{ needs.check.outputs.stacks }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: .mlz-core/tools/ci/drift.sh
+        run: python3 .mlz-core/tools/ci/drift.py
 
   # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
   # reviewer and apply; a stack with nothing to change asks for no approval. Its output is one apply job
@@ -415,27 +400,31 @@ jobs:
           path: .mlz/reviewed/
           merge-multiple: true
 
+      # changed.py, from the same mlz-core as the run's other jobs. The organization's copy of mlz-core is private
+      # (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own, which a repo set up before the copy calls, is public.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
+          persist-credentials: false
+
       - id: changed
         env:
           STACKS: ${{ needs.check.outputs.stacks }}
           BATCHES: ${{ needs.check.outputs.batches }}
-        run: |
-          python3 - <<'EOF'
-          import json, os, pathlib
-          stacks = json.loads(os.environ["STACKS"])
-          batch_of = {stack: batch["id"] for batch in json.loads(os.environ["BATCHES"]) for stack in batch["stacks"].split()}
-          def changes(stack):  # a missing list counts as changes: the apply then stops on it
-              path = pathlib.Path(f".mlz/reviewed/changes-{stack}.txt")
-              return not path.exists() or path.read_text().strip() != ""
-          changed = [stack for stack in stacks if changes(stack)]
-          unchanged = [stack for stack in stacks if stack not in changed]
-          jobs = [" ".join(changed)] if os.environ["ROLE"] == "platform" and changed else changed
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write(f"stacks={json.dumps(jobs)}\n")
-              out.write(f"batch_of={json.dumps(batch_of)}\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
-              out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
-          EOF
+        run: python3 .mlz-core/tools/ci/changed.py
 
   apply:
     if: needs.changed.result == 'success' && needs.changed.outputs.stacks != '[]'
