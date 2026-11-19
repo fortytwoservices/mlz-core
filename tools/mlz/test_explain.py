@@ -95,7 +95,7 @@ class ExplainTest(unittest.TestCase):
         rows = self.rows()
         self.assertEqual(rows["github.repo"], ("made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
         self.assertEqual(rows["name repository"], ("payments-prod", "recorded in _generated/names.yaml"))
-        self.assertEqual(rows["name state_account"], ("stdemopaystatepdnwe01", "recorded in _generated/names.yaml"))
+        self.assertEqual(rows["name state_account"], ("stdemopaypdnwe01", "recorded in _generated/names.yaml"))
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  create: false\n")
         self.assertEqual(self.rows()["github"], ("no repo", "github.create is false"))
 
