@@ -248,8 +248,11 @@ From `snet-github-runners` and `snet-runners`, in the primary hub's `platform` g
   script when they boot, pinned to a commit and checked against its hash. GitHub does not list it for Actions.
 
 The platform's check reads GitHub's list on every run, and stops if it cannot: the rule is never planned
-without it. GitHub lists a name at least a week before using it. When the list changes, the next plan
-changes the `platform` group, and the daily drift check fails until it is applied: run the workflow on
+without it. The pipeline reads it in a step before the check, with the job's token, whose rate limit is the
+repository's own (1,000 requests an hour, 15,000 on GitHub Enterprise Cloud). `./mlz check` on a laptop reads
+it anonymously, which GitHub allows 60 times an hour per address; once that is used up, the check says until
+when, and tries no more. GitHub lists a name at least a week before using it. When the list changes, the next
+plan changes the `platform` group, and the daily drift check fails until it is applied: run the workflow on
 `main` and approve the apply, as for any other change. Anything else the runners reach, such as systems in
 landing zones or on-premises, goes in `firewall-rules/management.yaml`.
 

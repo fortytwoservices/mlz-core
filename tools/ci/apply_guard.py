@@ -17,7 +17,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-TOOLS = str(Path(__file__).resolve().parents[1])
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
+
+from ci.run_mlz import mlz  # noqa: E402
+
 GO, REFUSE, STAND_DOWN = 0, 1, 2
 
 
@@ -40,8 +43,7 @@ def before(role: str, stack: str, say=print) -> int:
         return GO
     latest = work() / "main-vending"
     with open(work() / "main-vending.log", "w") as log:
-        rendered = subprocess.run([sys.executable, "-m", "mlz", "vending", "--repo", main, "--out", str(latest)],
-                                  stdout=log, stderr=subprocess.STDOUT, env={**os.environ, "PYTHONPATH": TOOLS}).returncode == 0
+        rendered = subprocess.run(mlz("vending", "--repo", main, "--out", str(latest)), stdout=log, stderr=subprocess.STDOUT).returncode == 0
     ours, theirs = work() / "vending" / f"{stack}.json", latest / f"{stack}.json"
     if rendered and ours.is_file() and theirs.is_file() and filecmp.cmp(ours, theirs, shallow=False):
         return GO

@@ -27,11 +27,13 @@ must never change once rules exist.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 from ipaddress import IPv4Network
 from pathlib import Path
@@ -104,6 +106,17 @@ NETWORK_PRIORITIES = {"management": 300, "identity": 400}
 GITHUB_META = "https://api.github.com/meta"
 
 
+def rate_limit_reset(status: int, headers) -> str | None:
+    """When GitHub's answer says its API rate limit is used up: the time the limit resets, in UTC; None for any other
+    answer. headers: a mapping whose get() finds the lower-case names (an HTTP message's, or gh api --include's)."""
+    if status not in (403, 429) or headers.get("x-ratelimit-remaining") != "0":
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(int(headers.get("x-ratelimit-reset")), datetime.timezone.utc).strftime("%H:%M UTC")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "it resets (within the hour)"
+
+
 def github_actions_domains(saved: Path | None = None) -> list[str]:
     """The names GitHub's runners reach, from GitHub's meta endpoint (or a saved copy of it): domains.actions,
     the list GitHub keeps between the exact names and the wildcards. GitHub lists a name there at least a week
@@ -120,7 +133,15 @@ def github_actions_domains(saved: Path | None = None) -> list[str]:
                     with urllib.request.urlopen(request, timeout=30) as response:
                         meta = json.load(response)
                     break
-                except OSError:
+                except OSError as error:
+                    # Anonymous, the limit is 60 requests an hour per address, which a runner may share: once it is used
+                    # up, nothing helps until it resets, so it is not retried. The pipeline reads a saved copy instead,
+                    # fetched with the job's token (tools/ci/github_meta.py).
+                    reset = rate_limit_reset(error.code, error.headers) if isinstance(error, urllib.error.HTTPError) else None
+                    if reset:
+                        raise ConfigError(f"GitHub's API rate limit for anonymous requests from this address is used up until {reset}, "
+                                          f"so {GITHUB_META} could not be read: the runners' rule is never planned without it. Run again "
+                                          "then, or give a saved copy with --github-meta.") from error
                     if attempt == 2:
                         raise
                     time.sleep(5 * (attempt + 1))

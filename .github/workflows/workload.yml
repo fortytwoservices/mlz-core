@@ -19,7 +19,7 @@ env:
   TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
   CHECKPOINT_DISABLE: "1"
   # Python runs from the repo's checkout, which a pull request controls: mlz-core's code and the standard library
-  # come first. Python 3.11 and later honour it.
+  # come first. mlz runs isolated, on every Python (tools/ci/run_mlz.py); this covers the rest on Python 3.11 and later.
   PYTHONSAFEPATH: "1"
 
 jobs:

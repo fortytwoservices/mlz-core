@@ -117,6 +117,11 @@ request adds to `mlz.yml` gets none. Until then, and once it is deleted again, t
 GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
 runners.
 
+Every step runs in the repo's checkout, which a pull request controls, and some hold a token or an Azure sign-in.
+So no file of the checkout ever runs as code: the pipeline runs mlz isolated (`python3 -I`,
+`tools/ci/run_mlz.py`), from mlz-core's own code and the standard library only, and a folder `mlz/` or a file such
+as `json.py` in the repo is never imported in their place, whatever the runner's Python version.
+
 ## What a run plans
 
 A pull request or a push to `main` plans only the stacks its change touches: those whose rendered config (what

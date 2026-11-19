@@ -8,10 +8,12 @@ role=$1
 mkdir -p "$WORK"
 
 # Every stack the settings make, as JSON, with the configs the roots read written to .mlz/: the checks a person runs
-# with ./mlz check (python3 -m mlz check, in tools/mlz/__main__.py), for the role the repo's workflow names.
-# MLZ_GITHUB_META, a saved copy of api.github.com/meta, is for tests: a run fetches it.
+# with ./mlz check (mlz check, in tools/mlz/__main__.py), for the role the repo's workflow names. mlz runs from
+# mlz-core's own code only, whatever the checkout holds (tools/ci/run_mlz.py).
+# MLZ_GITHUB_META: a saved copy of api.github.com/meta, which role.yml's check job reads with the job's token for the
+# platform (tools/ci/github_meta.py). Unset, mlz firewall fetches it anonymously, as ./mlz check does.
 every_stack() {
-  python3 -m mlz check --repo . --out "$WORK" --json ${MLZ_GITHUB_META:+--github-meta "$MLZ_GITHUB_META"}
+  python3 -I "$CORE/tools/ci/run_mlz.py" check --repo . --out "$WORK" --json ${MLZ_GITHUB_META:+--github-meta "$MLZ_GITHUB_META"}
 }
 
 stacks=$(every_stack) # its own assignment, so that a failed check fails the script
@@ -45,7 +47,7 @@ ln -s "$CORE" "$copy/.mlz-core"
 if ! (cd "$copy" && GITHUB_EVENT_NAME='' "$CORE/tools/ci/check.sh" "$role" > "$WORK/base-stacks.json" 2> "$WORK/base-check.log"); then
   every "the base ${base:0:7} does not check with this release ($WORK/base-check.log)"
 fi
-python3 -m mlz stacks --role "$role" --stacks "$stacks" --base "$copy"
+python3 -I "$CORE/tools/ci/run_mlz.py" stacks --role "$role" --stacks "$stacks" --base "$copy"
 # The base's configs, which the plan comments compare each stack's settings with (comment.sh, mlz diff). In .mlz/,
 # so the run's artifact takes them to the plan jobs. The folder is made even when the base has none (the platform
 # starter, before its first hub): then every stack is new. Its marker keeps it through the artifact, which drops an

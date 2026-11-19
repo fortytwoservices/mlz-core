@@ -6,7 +6,6 @@ CORE=$PWD/.mlz-core
 WORK=$PWD/.mlz                       # everything a run works out; never committed
 # Plans live apart from the configs the roots read (.mlz/platform.json is the platform's config).
 mkdir -p "$WORK/plans"
-export PYTHONPATH=$CORE/tools
 
 # The Terraform root of a role's stack: the platform's firewall rules have a root of their own, and
 # management's and identity's networks share one.
