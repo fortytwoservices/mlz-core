@@ -56,6 +56,13 @@ class ExplainTest(unittest.TestCase):
                          "(deploy_identity, plan_identity)")
         self.assertTrue(rows["name NSG of default"][1].endswith("; NSGs are numbered: the lowest number no NSG of the landing zone held when it was first named"))
         self.assertEqual(rows["name virtual_network"][1], "recorded in _generated/names.yaml")  # alone of its type: nothing to say
+        # A recorded NSG whose number a fresh count would not repeat is no change; another short name is one.
+        self.write(vending.NAMES, (self.repo / vending.NAMES).read_text().replace("nsg-demo-pay-pd-nwe-01", "nsg-demo-pay-pd-nwe-02"))
+        self.assertEqual(self.rows(flat)["name NSG of default"][0:1], ("nsg-demo-pay-pd-nwe-02",))
+        self.assertNotIn("the template now gives", self.rows(flat)["name NSG of default"][1])
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.assertIn("the template now gives nsg-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)", self.rows(flat)["name NSG of default"][1])
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         # With {purpose}, nothing is numbered and nothing is said.
         self.assertEqual(self.rows()["name identity_resource_group"][1], "recorded in _generated/names.yaml; the template now gives rg-demo-pay-id-pd-nwe-01 "
                          "(./mlz names --repo . --renew payments-prod)")

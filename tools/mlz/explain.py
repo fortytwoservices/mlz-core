@@ -155,14 +155,24 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
                 source = f"names: in {file_of(repo, lz['where'])}"
             elif item in recorded:
                 source = f"recorded in {vending.NAMES}"
-                # A counted NSG keeps the number it was first given, which a fresh count need not repeat.
-                if fresh.get(item) not in (None, value) and not number_origin(item, settings).startswith("; NSG"):
+                # A counted NSG keeps the number it was first given, which a fresh count need not repeat: only a name
+                # the template no longer gives, with any number, is a change to report.
+                if fresh.get(item) not in (None, value) and not (item.startswith("network_security_groups.") and numbered_alike(value, lz, settings)):
                     source += f"; the template now gives {fresh[item]} (./mlz names --repo . --renew {key})"
                 source += number_origin(item, settings)
             else:
                 source = "the naming template (docs/naming.md), recorded by the IP allocator on the pull request" + number_origin(item, settings)
             worked.append((label, value, source))
     return {"Set in its layers": layered, "Filled in by mlz-core": filled, "Worked out": worked}
+
+
+def numbered_alike(value: str, lz: dict, settings: naming.Naming | None) -> bool:
+    """Whether a recorded NSG name is the one the template gives now with some number: the number is the only
+    difference a fresh count can show for it."""
+    if settings is None or not naming.counts(settings, "network_security_group"):
+        return False
+    app, env, region = vending.short_name(lz), lz["environment"], lz["settings"].get("location")
+    return any(vending.nsg_name(settings, app, env, region, n).lower() == value.lower() for n in range(1, 100))
 
 
 def number_origin(item: str, settings: naming.Naming | None) -> str:

@@ -196,7 +196,8 @@ A landing zone's NSGs, one per subnet, are numbered when they are first named: a
 number no NSG of the landing zone holds in `_generated/names.yaml`, and NSGs named in the same pull request take
 theirs in the order of their subnets' names. A recorded name never changes. A removed subnet's NSG keeps its name in
 the record for as long as the IP plan holds its block, until `./mlz release`, so its number is not given again while
-that NSG may still be there.
+that NSG may still be there. An NSG named under `names:` is the landing zone's own and stays out of the record: its name
+holds a number only while it is named there, so give it one the template does not give, such as `nsg-pay-web`.
 
 The platform's networks keep no such record, so management's and identity's NSGs cannot be numbered in a way that
 holds when a subnet is added or removed. Their template keeps `{purpose}`, which is the subnet's name: with a general
