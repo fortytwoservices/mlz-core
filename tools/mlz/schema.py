@@ -213,6 +213,7 @@ def bootstrap() -> dict:
                                  "core": text("The organization's own copy of mlz-core, which the three repos' pipelines call.", default="mlz-core")},
                                 "The three repos, by role, and the organization's copy of mlz-core."),
         "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
+        "bypass_team": text("The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. Its members can therefore reach the MLZ App's key. Visible, and not the platform team.", pattern="^[a-z0-9][a-z0-9-]*$"),
         "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "runners": or_empty(mapping({
             "kind": text("self-hosted: Fortytwo's runner image on a scale set in management's network (the default). github-hosted: GitHub's own runners, joined to that network.",

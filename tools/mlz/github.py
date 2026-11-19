@@ -192,6 +192,12 @@ class GitHub:
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True
 
+    def rulesets(self, repo: str) -> list[dict]:
+        """Every ruleset that applies to the repo, the organization's too, each in full (rules, bypass actors), with
+        current_user_can_bypass as GitHub answers it for whoever is signed in: always, never or exempt."""
+        return [self._api(f"repos/{repo}/rulesets/{listed['id']}?includes_parents=true")
+                for listed in self._pages(f"repos/{repo}/rulesets?includes_parents=true")]
+
     def branch_rules(self, repo: str, branch: str) -> list[dict]:
         """Every rule GitHub enforces on the branch, from the active rulesets that apply to it, the organization's too."""
         return self._pages(f"repos/{repo}/rules/branches/{branch}")

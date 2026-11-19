@@ -42,6 +42,11 @@
           "description": "The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.",
           "pattern": "^[a-z0-9][a-z0-9-]*$"
         },
+        "bypass_team": {
+          "type": "string",
+          "description": "The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. Its members can therefore reach the MLZ App's key. Visible, and not the platform team.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
         "reviewers": {
           "description": "GitHub users who approve every apply.",
           "type": "array",

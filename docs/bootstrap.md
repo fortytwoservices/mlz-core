@@ -3,7 +3,7 @@
 The one-time setup a customer's pipelines run on. A person at Fortytwo runs it once per customer, before
 the first pipeline run; running it again changes only what differs. It is `bootstrap/terraform`, and it
 reads two files from the customer's governance repo: `customer.yaml` (root ID, display name, primary
-region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, platform team, reviewers, state operators).
+region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, platform team, bypass team, reviewers, state operators).
 
 ```yaml
 # bootstrap.yaml
@@ -14,6 +14,7 @@ github:
     platform: mlz-platform
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
+  bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
   reviewers: [demo-platform-lead]  # GitHub users who approve every apply
   runners:                         # where the pipelines' Azure jobs run (mlz install runners)
     kind: self-hosted              # self-hosted (the default) or github-hosted
@@ -177,17 +178,22 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, the pipeline's
      check passed (`platform / check` in the platform repo) on a branch up to date with `main`, no force push, no
      deletion.
+   - Each gets the push ruleset `pipeline-files`, after its first commit: changes under `.github/` are refused on every
+     branch, but from `bypass_team` ([pipelines](pipelines.md#changes-to-github)). The team must exist first, be
+     visible, and not be the platform team. Whoever runs `mlz install repos` again, or `mlz upgrade`, must be in it.
    - Each gets `.github/CODEOWNERS`, with `platform_team` owning every file but `_generated/`, and that team gets
      write access, which a code owner needs; a team with more keeps it. The team must exist first, and be visible:
      `CODEOWNERS` skips a secret team. It can take its members from an Entra ID group
      ([pipelines](pipelines.md#code-owners)).
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
-     request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` is left as it is.
+     request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` or `pipeline-files` is left
+     as it is.
 2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
    and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
-   GitHub Actions on a branch up to date with it. Making the App needs a browser, so that step stays manual.
+   GitHub Actions on a branch up to date with it. It also confirms that an active push ruleset refuses changes under
+   `.github/` with the bypass team as its bypass. Making the App needs a browser, so that step stays manual.
    Install it on **all the organization's repos**, not selected ones: the check cannot see its installations
    (GitHub shows them only to the App and the organization's owners). A repo without it, the copy of mlz-core
    included, stops its run at the App's token step with Not Found; and an App on selected repos cannot reach a
