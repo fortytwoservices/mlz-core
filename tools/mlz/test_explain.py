@@ -63,6 +63,10 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertIn("the template now gives nsg-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)", self.rows(flat)["name NSG of default"][1])
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
+        # A location that is no single region: explain still runs, and problems() says what it must be.
+        self.write("landing-zones/payments/prod.yaml", PROD + "location: [norwayeast]\n")
+        self.assertEqual(self.rows(flat)["name NSG of default"][0], "nsg-demo-pay-pd-nwe-02")  # the recorded one
+        self.write("landing-zones/payments/prod.yaml", PROD)
         # Named under another template, a recorded name keeps its name and has no number to explain: only the change.
         (self.repo / vending.NAMES).unlink()
         self.allocate()

@@ -175,6 +175,8 @@ def numbered_alike(value: str, lz: dict, settings: naming.Naming | None) -> bool
     if settings is None or not naming.counts(settings, "network_security_group"):
         return False
     app, env, region = vending.short_name(lz), lz["environment"], lz["settings"].get("location")
+    if not all(isinstance(part, str) for part in (app, env, region)):
+        return False  # a location that is a list, say: problems() says what it must be
     return any(vending.nsg_name(settings, app, env, region, n).lower() == value.lower() for n in range(1, 100))
 
 

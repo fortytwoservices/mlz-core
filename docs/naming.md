@@ -192,6 +192,10 @@ A resource not listed is alone of its type where it is, and is `01`.
 | The bootstrap | identities | governance's plan `01` and apply `02`, the platform's `03` and `04`, vending's `05` and `06`, the runners' `07` |
 | The bootstrap | private endpoints, and their network interfaces | the state account's `01`, the vault's `02` |
 
+A hub whose public IP template had no `{purpose}` worked before only with all but one of its public IPs named under
+the hub file's `names:`, and that one was `01`. It now takes its fixed number, which replaces the IP and changes its
+address: pin it under `names:` with its current name before upgrading.
+
 A landing zone's NSGs, one per subnet, are numbered when they are first named: a new subnet's NSG takes the lowest
 number no NSG of the landing zone holds in `_generated/names.yaml`, and NSGs named in the same pull request take
 theirs in the order of their subnets' names. A recorded name never changes. A removed subnet's NSG keeps its name in
