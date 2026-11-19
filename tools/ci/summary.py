@@ -96,6 +96,9 @@ def known_difference(before, after, unknown) -> bool:
         return False
     if isinstance(before, dict) and isinstance(after, dict):
         unknown = unknown if isinstance(unknown, dict) else {}
+        # A key added whose value is unknown is only in after_unknown: that the key is there is known all the same.
+        if any(key not in before and unknown[key] is not False for key in unknown):
+            return True
         return any(known_difference(before.get(key, MISSING), after.get(key, MISSING), unknown.get(key)) for key in set(before) | set(after))
     if isinstance(before, list) and isinstance(after, list) and len(before) == len(after):
         unknown = unknown if isinstance(unknown, list) else [None] * len(after)

@@ -206,6 +206,8 @@ class SummaryTest(unittest.TestCase):
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"tags": {"k": None}, "c": 1}, "after": {"tags": {}}, "after_unknown": {"c": True}}))
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"f": True, "c": 1}, "after": {"f": 1}, "after_unknown": {"c": True}}))
         self.assertTrue(unknown_only({"actions": ["update"], "before": {"n": 1, "c": 1}, "after": {"n": 1.0}, "after_unknown": {"c": True}}))
+        # A map's key added with a value unknown until apply: it is only in after_unknown, and the key is a known change.
+        self.assertFalse(unknown_only({"actions": ["update"], "before": {"input": {}}, "after": {"input": {}}, "after_unknown": {"input": {"new_key": True}}}))
 
     def test_a_long_list_of_state_only_changes_is_cut_short(self):
         # A module moved wholesale: the summary stays short enough for a pull request comment, as the rest of it does.
