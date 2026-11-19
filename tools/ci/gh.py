@@ -34,10 +34,11 @@ def work() -> Path:
 
 
 class Pipeline:
-    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False):
-        """gh api, with a JSON body; None for HTTP 404 where missing_ok; a ConfigError with gh's answer otherwise."""
+    def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False, timeout: float | None = None):
+        """gh api, with a JSON body; None for HTTP 404 where missing_ok; a ConfigError with gh's answer otherwise. With a
+        timeout, subprocess.TimeoutExpired once it passes."""
         command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else [])
-        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True)
+        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True, timeout=timeout)
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
                 return None
@@ -103,10 +104,18 @@ class Pipeline:
         owner = repo.split("/")[0]
         return [pull["number"] for pull in self._api(f"repos/{repo}/pulls?state=open&base=main&head={owner}:{branch}") or []]
 
+    def comment(self, repo: str, number: int, body: str, timeout: float | None = None) -> None:
+        """A comment on an issue or a pull request."""
+        self._api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": body}, timeout=timeout)
+
+    def commit_pulls(self, repo: str, sha: str, timeout: float | None = None) -> list[dict]:
+        """The pull requests a commit belongs to: for a merge's commit on main, the one it merged."""
+        return self._api(f"repos/{repo}/commits/{sha}/pulls", timeout=timeout) or []
+
     def close_pull(self, repo: str, number: int, comment: str) -> None:
         """Closes a pull request with a comment, and deletes its branch, as gh pr close --delete-branch does."""
         pull = self._api(f"repos/{repo}/pulls/{number}")
-        self._api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": comment})
+        self.comment(repo, number, comment)
         self._api(f"repos/{repo}/pulls/{number}", "PATCH", {"state": "closed"})
         self._api(f"repos/{repo}/git/refs/heads/{pull['head']['ref']}", "DELETE", missing_ok=True)
 
