@@ -169,7 +169,10 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
     elif not github.team_can_write(organization, bypass, repo):
         github.grant_team(organization, bypass, repo)
         out(f"{repo}: {organization}/{bypass} may write, for its bypass of main's approval")
-    wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id, approvals=1), install.checks_ruleset("workload", app_id, CHECK)]
+    # A push after an approval needs a new one: else an approved change could become another, and its author approve
+    # its apply alone (the apply environment lets a reviewer approve their own run).
+    wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id, approvals=1, dismiss_stale=True),
+              install.checks_ruleset("workload", app_id, CHECK)]
     found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
     for ruleset in wanted:
         if ruleset["name"] not in found:

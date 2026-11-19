@@ -341,6 +341,8 @@ changes in Azure.
   as it is. Where the platform team owns the workload repos, that is `team: platform` in `workload-defaults.yaml`. The
   team must be visible: GitHub reads no secret team in CODEOWNERS, and each run warns while it is, so that until then
   any other writer's approval is the one that counts.
+  A push after an approval needs a new one (stale approvals are dismissed), so an approved change cannot become
+  another before it merges.
 - The ruleset `main-checks`: the pipeline's plan, `workload / plan`, must pass on a branch up to date with `main`
   before any merge into `main`.
 - **Nobody but the MLZ App may bypass the check**, and the App only for its own commits of `mlz.auto.tfvars.json` and

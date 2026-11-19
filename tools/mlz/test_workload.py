@@ -255,7 +255,7 @@ class UpgradeTest(SyncTest):
     def github(self, files: dict[str, str], **kwargs) -> FakeGitHub:
         self.config("payments-prod")
         core = {(f"starter/mlz-workload/{name}", OLD): text for name, text in old_starter().items()}
-        ruled = {self.REPO: [install.main_ruleset("workload", 7, 99, approvals=1), install.checks_ruleset("workload", 99, workload.CHECK)]}
+        ruled = {self.REPO: [install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True), install.checks_ruleset("workload", 99, workload.CHECK)]}
         return FakeGitHub({self.REPO: files}, core=core, releases=kwargs.pop("releases", NOTES), rulesets=ruled,
                           writers={self.REPO: {"acme-admins"}}, **kwargs)
 
@@ -410,11 +410,14 @@ class RuleTest(SyncTest):
         github = self.made()
         out = self.sync(github)
         main, checks = github.made_rulesets[self.REPO]
-        self.assertEqual(main, install.main_ruleset("workload", 7, 99, approvals=1))
+        self.assertEqual(main, install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True))
         self.assertEqual(main["bypass_actors"], [{"actor_id": 7, "actor_type": "Team", "bypass_mode": "pull_request"},
                                                  {"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
         self.assertTrue(main["rules"][2]["parameters"]["require_code_owner_review"])
         self.assertEqual(main["rules"][2]["parameters"]["required_approving_review_count"], 1)  # one besides the author's
+        self.assertTrue(main["rules"][2]["parameters"]["dismiss_stale_reviews_on_push"])  # a push after it needs a new one
+        self.assertFalse(main["rules"][2]["parameters"]["require_last_push_approval"])
+        self.assertFalse(install.main_ruleset("platform", 7)["rules"][2]["parameters"]["dismiss_stale_reviews_on_push"])  # role repos as before
         self.assertEqual(checks["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
         self.assertEqual(checks["rules"][0]["parameters"]["required_status_checks"], [{"context": "workload / plan", "integration_id": 15368}])
         self.assertTrue(checks["rules"][0]["parameters"]["strict_required_status_checks_policy"])
@@ -469,9 +472,9 @@ class RuleTest(SyncTest):
         self.assertEqual([repo for repo, *_ in github.commits], ["acme-org/website-prod"])  # and the next repo still served
 
     def test_a_ruleset_with_a_deploy_key_is_compared_not_crashed_on(self):
-        own = {**install.main_ruleset("workload", 7, 99, approvals=1)}
+        own = {**install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True)}
         own["bypass_actors"] = own["bypass_actors"] + [{"actor_id": None, "actor_type": "DeployKey", "bypass_mode": "always"}]
-        self.assertFalse(workload.same_ruleset(own, install.main_ruleset("workload", 7, 99, approvals=1)))
+        self.assertFalse(workload.same_ruleset(own, install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True)))
 
     def test_the_code_owners_file_is_vending_s(self):
         github = self.made()
