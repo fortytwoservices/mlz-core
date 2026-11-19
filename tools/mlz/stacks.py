@@ -87,7 +87,7 @@ def role(repo: Path) -> str:
     """The repo's role, from its pipeline: the starter's workflow names it."""
     workflow = repo / WORKFLOW
     if not workflow.is_file():
-        raise SystemExit(f"mlz map: {workflow} is not there; run it in a governance, platform or vending repo.")
+        raise SystemExit(f"mlz: {workflow} is not there; run mlz in a governance, platform or vending repo.")
     return role_of(workflow.read_text())
 
 

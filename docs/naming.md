@@ -72,7 +72,7 @@ so they keep that pattern.
 
 - **`short_name`**, in `workload-defaults.yaml`: the workload's short name, 2 to 5 lower-case letters and digits, one
   per workload. A workload whose folder name fits (`web`) needs none: that is its short name. Two workloads may
-  not share one. `python3 -m mlz new landing-zone` writes it for a new workload (`--short-name`), or leaves it to
+  not share one. `./mlz new landing-zone` writes it for a new workload (`--short-name`), or leaves it to
   fill in.
 - **`names:`**, in the landing zone's own file only: an explicit name for any of these, which wins over the
   template and is checked against the same rules.
@@ -88,7 +88,7 @@ so they keep that pattern.
   exception: only its display name changes, as it is made by an alias that never does.
 - Both resource groups, and every NSG, need names of their own. A template without `{purpose}` gives them one
   each, so the check refuses it until `{purpose}` is back or one of them is named under `names:`.
-- `python3 -m mlz explain <key>` shows every name and where it came from.
+- `./mlz explain --repo . <key>` shows every name and where it came from.
 
 ### A name, once given, stays
 
@@ -114,13 +114,13 @@ To rename:
 
 - **one resource**: set its name under `names:` in the landing zone's file. The file's name wins and the record
   drops that resource; take the name out again and the template gives it a new one.
-- **a whole landing zone**: `python3 -m mlz names --repo . --renew <key>` gives what it has now the template's names
+- **a whole landing zone**: `./mlz names --repo . --renew <key>` gives what it has now the template's names
   again and writes the record. Commit it in a pull request: its plan shows each renamed resource replaced, and nothing is
   changed until the reviewer approves the apply. `mlz explain <key>` shows, beside each recorded name, what the
   template would give now.
 
 **A removed landing zone or subnet keeps its names while it holds its addresses** in the IP plan: asked for again
-before it is released, it is the same resource under the same name. `python3 -m mlz release` frees both, and a
+before it is released, it is the same resource under the same name. `./mlz release` frees both, and a
 decommissioned landing zone's names go with its file and range, in the same pull request.
 
 ### In a workload repo
@@ -154,7 +154,7 @@ code is `acme`, with its primary region Norway East):
 | `idn`, identity | `rg-acme-idn-net-pd-nwe-01`, and in each region with identity's network `vnet-acme-idn-pd-sdc-01` and the rest |
 | `mlz`, the bootstrap | `rg-acme-mlz-pd-nwe-01`, `stacmemlzstatepdnwe01`, `id-acme-mlz-govplan-pd-nwe-01` (`govapply`, `platplan`, `platapply`, `vendplan`, `vendapply`), `pep-` and `nic-acme-mlz-state-pd-nwe-01`; the self-hosted runners' `kv-acme-mlz-pd-nwe-01` with `pep-` and `nic-acme-mlz-vault-pd-nwe-01`, `vmss-acme-mlz-pd-nwe-01`, `id-` and `nsg-acme-mlz-runners-pd-nwe-01` |
 
-`tools/mlz/names.py` works them all out, and each root's loader puts its own in its config (`render_library.py`
+`tools/mlz/names.py` works them all out, and each root's loader puts its own in its config (`mlz governance`
 for governance, `mlz platform` for the platform's roots, `mlz install` for the bootstrap). A name two roots share,
 such as the DNS zones' group or management's network, comes from one place, so they always agree.
 
@@ -193,7 +193,7 @@ The platform's parts are each named as an app of their own, in `prod`: `hub`, `d
 `id-acme-mlz-govplan-pd-nwe-01`. `naming.platform` gives a part another short name, 2 to 5, each its own. A workload
 may not take one of them as its short name: a landing zone named `hub` would name its network as the hub's is named.
 
-The section is checked where it is written, in governance's run (`governance/scripts/render_library.py`), and
+The section is checked where it is written, in governance's run (`mlz governance`, `tools/mlz/governance.py`), and
 governance's contract carries it as written to the repos that name things with it. A root ID longer than four
 characters, or with a hyphen, cannot be the customer's code, so it needs `naming.org`, with or without the section:
 every root names things with it.

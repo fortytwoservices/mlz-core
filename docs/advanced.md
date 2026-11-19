@@ -51,7 +51,7 @@ advanced:
 ```
 
 Which keys a file takes is on its root's page in `docs/reference/` ("set it with `advanced.bastion.sku`"), in the
-editor through the file's schema, and in `python3 -m mlz explain --repo . <region> --inputs`, which shows what
+editor through the file's schema, and in `./mlz explain --repo . <region> --inputs`, which shows what
 `advanced:` set beside everything else the module is given.
 
 ## What it refuses

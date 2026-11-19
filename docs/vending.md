@@ -21,7 +21,7 @@ landing-zones/
 `<env>` is any name the customer uses (dev, test, uat, prod); mlz-core gives none a meaning, and refuses only
 `landing-zone` and `workload-defaults`, which would be another file's name. A file in
 `defaults/` that is neither kind is refused, so a misnamed one never applies to nothing unnoticed.
-`python3 -m mlz map` prints which landing zones each file reaches.
+`./mlz map` prints which landing zones each file reaches.
 
 ```yaml
 # landing-zones/payments/workload-defaults.yaml: the payments workload, all environments
@@ -74,7 +74,7 @@ Any layer can be a folder of chunks.
   the others where they are; a range or subnet never changes size (give a bigger subnet a new name, then
   remove the old one). **Nothing removed is given out again until it is released**: a removed subnet
   moves to `removed_subnets` and a removed landing zone keeps its range, marked in the file, until it is
-  destroyed and someone runs `python3 -m mlz release --repo . <key>`. A removed subnet asked for again at
+  destroyed and someone runs `./mlz release --repo . <key>`. A removed subnet asked for again at
   the same size gets its block back. Every run checks what was given against the platform as it is now
   (inside the region's ranges, clear of every hub and every other landing zone) and reports a conflict
   rather than moving anything. It writes nothing when anything is wrong.
@@ -87,7 +87,7 @@ Any layer can be a folder of chunks.
   out twice. If `main` changed the plan since the branch was made, the pipeline first brings the branch up
   to date with `main` (a merge commit from the same App), so the plan it commits next never conflicts with
   `main`'s. The commit is made only if the branch has not moved in the meantime; a newer push has a run of
-  its own. You can still run `python3 -m mlz allocate --repo .` yourself, for example to see the
+  its own. You can still run `./mlz allocate --repo .` yourself, for example to see the
   addresses before pushing.
 
   `python3 -m mlz allocate --check` writes nothing and fails when the plan or the names in the repo are not what
@@ -98,7 +98,7 @@ Any layer can be a folder of chunks.
 - **Names** from the customer's template, with the workload's `short_name`: for example `vnet-acme-pay-pd-nwe-01`,
   or an explicit one under `names:` in the landing zone's file. The allocator gives them with the addresses
   and records them in `_generated/names.yaml`, where they stay when the template or a short name changes;
-  `python3 -m mlz names --renew <key>` gives a landing zone the template's names again (`docs/naming.md`).
+  `./mlz names --repo . --renew <key>` gives a landing zone the template's names again (`docs/naming.md`).
 
 `python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
 the value (a mistake in `defaults/landing-zone-defaults.yaml` is reported once, against that file, not once per landing zone),
@@ -108,11 +108,11 @@ folder holding anything else is refused.
 
 ## Starting a landing zone
 
-`python3 -m mlz new landing-zone --repo . <workload> <env>` writes `landing-zones/<workload>/<env>.yaml`,
+`./mlz new landing-zone --repo . <workload> <env>` writes `landing-zones/<workload>/<env>.yaml`,
 and `workload-defaults.yaml` for a new workload, with only what no layer above sets:
 
 ```sh
-python3 -m mlz new landing-zone --repo . billing prod --subscription <id> --owner billing@demo.example
+./mlz new landing-zone --repo . billing prod --subscription <id> --owner billing@demo.example
 ```
 
 - **Given or not:** a required setting given on the command line (`--subscription`, `--owner`,
@@ -130,7 +130,7 @@ first (`docs/bootstrap.md`), unless vending makes it, and the pull request's run
 ## Where a value comes from
 
 With four layers, a value can come from any of them, from mlz-core, or from another repo's contract.
-`python3 -m mlz explain --repo . <key>` shows a landing zone's every value and where it comes from:
+`./mlz explain --repo . <key>` shows a landing zone's every value and where it comes from:
 
 ```
 payments-prod (landing-zones/payments/prod.yaml)
