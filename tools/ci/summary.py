@@ -175,8 +175,9 @@ def main(plan_file: str, stack: str, summary_file: str, changes_file: str) -> in
         out.writelines(f"{kind} {name} {print_}\n" for kind, name, print_ in outputs)
     applyable = plan.get("applyable")
     if applyable is not None and bool(applyable) != bool(records or outputs):
-        print(f"::error::{stack}: Terraform says this plan is {'' if applyable else 'not '}applyable, but its list of changes is "
-              f"{'empty' if applyable else 'not'}: a kind of change tools/ci/summary.py does not know. Nothing is applied from it.", file=sys.stderr)
+        found = "has nothing to apply" if applyable else f"has {len(records) + len(outputs)} change(s) to apply"
+        print(f"::error::{stack}: Terraform says this plan is {'' if applyable else 'not '}applyable, but tools/ci/summary.py's list of its "
+              f"changes {found}: a kind of change the list does not know yet. Nothing is applied from it.", file=sys.stderr)
         return 1
 
     resources = [(kind, address, label, print_) for kind, address, label, print_ in records if kind not in STATE_ONLY and kind != "deferred"]

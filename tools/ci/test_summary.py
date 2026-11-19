@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -230,7 +232,15 @@ class SummaryTest(unittest.TestCase):
         plan = json.loads((PLANS / "g-noop.json").read_text())
         plan["applyable"] = True
         (self.dir / "odd.json").write_text(json.dumps(plan))
-        self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
+        self.assertIn("::error::odd: Terraform says this plan is applyable, but tools/ci/summary.py's list of its changes has nothing to apply", said.getvalue())
+        moved = json.loads((PLANS / "b-moved.json").read_text())
+        moved["applyable"] = False
+        (self.dir / "odd.json").write_text(json.dumps(moved))
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
+        self.assertIn("this plan is not applyable, but tools/ci/summary.py's list of its changes has 1 change(s) to apply", said.getvalue())
         plan.update(applyable=False, errored=True)
         (self.dir / "odd.json").write_text(json.dumps(plan))
         self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
