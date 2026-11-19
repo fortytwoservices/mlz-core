@@ -22,6 +22,13 @@ variable "name" {
   EOT
 }
 
+variable "script" {
+  type    = string
+  default = <<-EOT
+    echo one
+  EOT
+}
+
 variable "hub" {
   type = map(object({
     location = string # a comment } inside the type
@@ -60,9 +67,10 @@ class ReadTest(unittest.TestCase):
     def test_a_module_s_variables_become_paths_with_their_type_and_default(self):
         found = self.read(MODULE)
         self.assertEqual(list(found), [
-            "name", "hub", "hub.location", "hub.firewall", "hub.firewall.sku_tier", "hub.firewall.zones",
+            "name", "script", "hub", "hub.location", "hub.firewall", "hub.firewall.sku_tier", "hub.firewall.zones",
             "hub.firewall.policy", "hub.firewall.policy.dns_servers", "hub.pair", "hub.quoted", "tags", "anything", "pair"])
         self.assertEqual(found["name"], {"type": "string", "required": True})
+        self.assertEqual(found["script"]["default"], "<<-EOT\n    echo one\n  EOT")  # whole, so a change to it shows
         self.assertEqual(found["hub"], {"type": "map(object)", "required": True})
         self.assertEqual(found["hub.firewall"], {"type": "object", "required": False, "default": None})
         self.assertEqual(found["hub.firewall.sku_tier"], {"type": "string", "required": False, "default": '"Standard"'})
@@ -148,6 +156,14 @@ class ProblemTest(unittest.TestCase):
         self.hub["ddos_protection_plan_id"] = {"class": "optional"}
         self.assertEqual(sorted(self.found()), ["ddos_protection_plan_id: class 'optional' is not one of setting, derived, fixed, open, closed",
                                                 "naming: fixed needs why", "retry: open takes no key"])
+
+    def test_a_field_of_the_wrong_type(self):
+        self.hub["hub_virtual_networks.firewall.sku_tier"] = {"class": "setting", "key": None}
+        self.hub["hub_virtual_networks.name"] = {"class": "derived", "by": "the template", "names": 7}
+        self.hub["naming"] = {"class": "fixed", "why": ""}
+        self.assertEqual(sorted(self.found()), ["hub_virtual_networks.firewall.sku_tier: key must be text",
+                                                "hub_virtual_networks.name: names must be a key under names:, or a list of them",
+                                                "naming: why must be text"])
 
     def test_a_module_call_without_a_section_and_a_section_without_a_call(self):
         self.maps["platform/terraform"]["hub"] = self.maps["platform/terraform"].pop("connectivity")

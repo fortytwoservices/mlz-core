@@ -138,11 +138,9 @@ def expression(toks: list[Token], i: int, stop: set[str]) -> tuple[list[Token], 
 
 
 def source(toks: list[Token]) -> str:
-    """An expression's tokens as one line of HCL."""
+    """An expression's tokens as HCL, spaced as one line; a heredoc keeps its lines, which the snapshot's JSON escapes."""
     out = ""
     for kind, text in toks:
-        if kind == "string" and "\n" in text:
-            text = "<<heredoc>>"
         if out and not (out.endswith(("(", "[", "!", ".")) or text in (")", "]", ",", ".", ":") or out.endswith("{") and text == "}"):
             out += " "
         out += text
@@ -279,10 +277,6 @@ def refresh() -> dict:
     return snapshot
 
 
-def snapshot_text(snapshot: dict) -> str:
-    return json.dumps(snapshot, indent=1) + "\n"
-
-
 def pins(folder: Path, prefix: str = "") -> dict[str, tuple[str, str]]:
     """The module calls in a root's .tf files, and in those of a module of mlz-core's own it calls: key to (source,
     version), as the snapshot has them. What the tests hold the snapshot to, with no download."""
@@ -416,6 +410,9 @@ def problems(snapshot: dict, maps: dict[str, dict]) -> list[str]:
             if section.get("file") is not None and section["file"] not in FILES:
                 found.append(f"{at}: file {section['file']!r} is not one of {', '.join(FILES)}")
             paths = call["inputs"]
+            if not isinstance(section.get("inputs") or {}, dict):
+                found.append(f"{at}: inputs maps each input's path to its entry")
+                continue
             entries = {path: entry(value) for path, value in (section.get("inputs") or {}).items()}
             found += [f"{at}: notes.{path} is no input of the module" for path in (section.get("notes") or {}) if path not in paths]
             for path, item in entries.items():
@@ -436,6 +433,12 @@ def entry_problems(path: str, item: dict, paths: dict, default_file: str | None,
     needed, allowed = CLASSES[kind]
     found = [f"{kind} needs {field}" for field in sorted(needed - set(item))]
     found += [f"{kind} takes no {field}" for field in sorted(set(item) - needed - allowed - {"class"})]
+    found += [f"{field} must be text" for field in ("key", "by", "why", "file", "from") if field in item and not (isinstance(item[field], str) and item[field].strip())]
+    names = item.get("names")
+    if "names" in item and not (isinstance(names, str) or isinstance(names, list) and names and all(isinstance(n, str) for n in names)):
+        found.append("names must be a key under names:, or a list of them")
+    if found:
+        return found
     file = item.get("file", default_file)
     if kind == "setting" or "names" in item:
         if file not in FILES:

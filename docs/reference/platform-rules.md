@@ -30,8 +30,8 @@ Settings from a rules file in `firewall-rules/`.
 | `name` | string | derived | platform, or lz-&lt;nn&gt; with nn from the landing zone's key, so a landing zone's rules never move |
 | `parent_id` | string | derived | the region's hub firewall policy, by its name |
 | `priority` | number | derived | 500 for platform, 1000 + 100 × nn for lz-&lt;nn&gt; |
-| `application_rule_collections` | map(object) | | &lt;owner&gt;-application, the rules to names and FQDN tags on https and http |
-| `application_rule_collections.priority` | number | derived | the owner's, plus 5 |
+| `application_rule_collections` | map(object) | | &lt;owner&gt;-application, the rules to names and FQDN tags on https and http. The settings below are a rules file's; mlz-core also adds collections of its own to each hub's platform group, which no rules file sets: required-application (the Azure Monitor Agent that governance's policies install) and, in the primary hub, runners-application (what the pipelines reach from management's runner subnets, GitHub Actions' names from GitHub's meta endpoint), from tools/mlz/firewall.py's REQUIRED and RUNNERS |
+| `application_rule_collections.priority` | number | derived | its network collection's, plus 5 |
 | `application_rule_collections.action` | string | fixed | `"Allow"`: a rule allows; whatever no rule allows is denied |
 | `application_rule_collections.rules` | map(object) | | one per rule, by its name |
 | `application_rule_collections.rules.description` | string | setting | `outbound.description` in a rules file in `firewall-rules/` |
@@ -45,8 +45,8 @@ Settings from a rules file in `firewall-rules/`.
 | `application_rule_collections.rules.web_categories` | list(string) | closed | a rule names what it reaches; web categories are not offered yet |
 | `application_rule_collections.rules.terminate_tls` | bool | closed | TLS inspection is not set up |
 | `application_rule_collections.rules.http_headers` | map(string) | closed | TLS inspection is not set up |
-| `network_rule_collections` | map(object) | | &lt;owner&gt;-network, the rules to addresses, landing zones and service tags, and to names on other ports |
-| `network_rule_collections.priority` | number | derived | the owner's |
+| `network_rule_collections` | map(object) | | &lt;owner&gt;-network, the rules to addresses, landing zones and service tags, and to names on other ports. As with application rules, required-network and runners-network are mlz-core's own, which no rules file sets |
+| `network_rule_collections.priority` | number | derived | by owner: required 100, runners 110, platform.yaml 200, management.yaml 300, identity.yaml 400; a landing zone's 100 + 10 × its place among its group's landing zones |
 | `network_rule_collections.action` | string | fixed | `"Allow"`: a rule allows; whatever no rule allows is denied |
 | `network_rule_collections.rules` | map(object) | | one to three per rule, by its name (&lt;name&gt;, &lt;name&gt;-names, &lt;name&gt;-udp) |
 | `network_rule_collections.rules.description` | string | setting | `outbound.description` in a rules file in `firewall-rules/` |

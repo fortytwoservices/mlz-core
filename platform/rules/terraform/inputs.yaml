@@ -5,15 +5,22 @@ rule_collection_group:
   builds: the rule collection groups in each hub's firewall policy, platform for the shared rules and lz-<nn> for the landing zones' (tools/mlz/firewall.py)
   file: firewall-rules
   notes:
-    application_rule_collections: <owner>-application, the rules to names and FQDN tags on https and http
+    application_rule_collections: >-
+      <owner>-application, the rules to names and FQDN tags on https and http. The settings below are a rules
+      file's; mlz-core also adds collections of its own to each hub's platform group, which no rules file sets:
+      required-application (the Azure Monitor Agent that governance's policies install) and, in the primary hub,
+      runners-application (what the pipelines reach from management's runner subnets, GitHub Actions' names from
+      GitHub's meta endpoint), from tools/mlz/firewall.py's REQUIRED and RUNNERS
     application_rule_collections.rules: one per rule, by its name
-    network_rule_collections: <owner>-network, the rules to addresses, landing zones and service tags, and to names on other ports
+    network_rule_collections: >-
+      <owner>-network, the rules to addresses, landing zones and service tags, and to names on other ports. As
+      with application rules, required-network and runners-network are mlz-core's own, which no rules file sets
     network_rule_collections.rules: one to three per rule, by its name (<name>, <name>-names, <name>-udp)
   inputs:
     name: {class: derived, by: "platform, or lz-<nn> with nn from the landing zone's key, so a landing zone's rules never move"}
     parent_id: {class: derived, by: "the region's hub firewall policy, by its name"}
     priority: {class: derived, by: "500 for platform, 1000 + 100 × nn for lz-<nn>"}
-    application_rule_collections.priority: {class: derived, by: "the owner's, plus 5"}
+    application_rule_collections.priority: {class: derived, by: "its network collection's, plus 5"}
     application_rule_collections.action: {class: fixed, value: Allow, why: "a rule allows; whatever no rule allows is denied"}
     application_rule_collections.rules.description: {class: setting, key: outbound.description}
     application_rule_collections.rules.source_addresses: {class: derived, by: "the landing zone's range (vending contract), every landing zone range of the hub for platform.yaml, or the network's own range"}
@@ -26,7 +33,7 @@ rule_collection_group:
     application_rule_collections.rules.terminate_tls: {class: closed, why: "TLS inspection is not set up"}
     application_rule_collections.rules.http_headers: {class: closed, why: "TLS inspection is not set up"}
     application_rule_collections.rules.web_categories: {class: closed, why: "a rule names what it reaches; web categories are not offered yet"}
-    network_rule_collections.priority: {class: derived, by: "the owner's"}
+    network_rule_collections.priority: {class: derived, by: "by owner: required 100, runners 110, platform.yaml 200, management.yaml 300, identity.yaml 400; a landing zone's 100 + 10 × its place among its group's landing zones"}
     network_rule_collections.action: {class: fixed, value: Allow, why: "a rule allows; whatever no rule allows is denied"}
     network_rule_collections.rules.description: {class: setting, key: outbound.description}
     network_rule_collections.rules.protocols: {class: setting, key: outbound.ports, by: "TCP, or UDP for udp:<port>"}
