@@ -68,19 +68,35 @@ def role_of(workflow: str) -> str:
 
 
 def matches(pattern: str, path: str) -> bool:
-    """Whether a push rule's path pattern takes the path, in GitHub's fnmatch: ** spans folders (and with its slash, no
-    folder at all), * and ? stay within one."""
+    """Whether a push rule's path pattern takes the whole path, in GitHub's fnmatch (File::FNM_PATHNAME): ** spans
+    folders (and with its slash, no folder at all), * and ? stay within one, [set] is one character of the set, ranges
+    included. GitHub takes no backslash quoting, no complemented set and no braces (its docs, "Unsupported fnmatch
+    syntax"), so those stay literal here too."""
     regex = ""
     i = 0
     while i < len(pattern):
+        close = pattern.find("]", i + 2) if pattern[i] == "[" else -1
         if pattern.startswith("**/", i):
             regex, i = regex + "(?:.*/)?", i + 3
         elif pattern.startswith("**", i):
             regex, i = regex + ".*", i + 2
+        elif close != -1:
+            regex, i = regex + "[" + re.sub(r"([\\\]\[^])", r"\\\1", pattern[i + 1:close]) + "]", close + 1
         else:
             regex += {"*": "[^/]*", "?": "[^/]"}.get(pattern[i], re.escape(pattern[i]))
             i += 1
     return re.fullmatch(regex, path) is not None
+
+
+def restricts(ruleset: dict, path: str) -> bool:
+    """Whether the ruleset's file path rules refuse a change to the path: a restricted pattern takes it, and none of
+    that rule's allowed exceptions (ignored_file_paths) does."""
+    for rule in ruleset.get("rules") or []:
+        parameters = rule.get("parameters") or {}
+        if rule.get("type") == "file_path_restriction" and any(matches(p, path) for p in parameters.get("restricted_file_paths") or []) \
+                and not any(matches(p, path) for p in parameters.get("ignored_file_paths") or []):
+            return True
+    return False
 
 
 def push_refused(github, repo: str, paths: list[str]) -> str | None:
@@ -89,9 +105,7 @@ def push_refused(github, repo: str, paths: list[str]) -> str | None:
     for ruleset in github.rulesets(repo):
         if ruleset.get("target") != "push" or ruleset.get("enforcement") != "active" or ruleset.get("current_user_can_bypass") in ("always", "exempt"):
             continue
-        patterns = [p for rule in ruleset.get("rules") or [] if rule.get("type") == "file_path_restriction"
-                    for p in (rule.get("parameters") or {}).get("restricted_file_paths") or []]
-        refused = [path for path in sorted(paths) if any(matches(p, path) for p in patterns)]
+        refused = [path for path in sorted(paths) if restricts(ruleset, path)]
         if refused:
             return (f"{repo}: its ruleset {ruleset['name']} refuses changes to {', '.join(refused)} from you. Only its bypass team "
                     f"(bootstrap.yaml's github.bypass_team) may change them: ask one of its members to run this, or join it (docs/pipelines.md).")

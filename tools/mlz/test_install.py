@@ -655,12 +655,32 @@ class InstallTest(unittest.TestCase):
             install.step_check(FakeGitHub(push_guard=False, **everywhere), self.folder, self.out)
         self.assertIn("acme/mlz-platform: no active push ruleset refuses changes under .github/", str(caught.exception))
 
-        class OthersBypass(FakeGitHub):
-            def rulesets(self, repo):
-                return [{**install.push_ruleset(99), "id": 9, "current_user_can_bypass": "never"}]
-        with self.assertRaises(ConfigError) as caught:
-            install.step_check(OthersBypass(**everywhere), self.folder, self.out)
-        self.assertIn("acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz upgrade", str(caught.exception))
+        def check(*rulesets):
+            class Guarded(FakeGitHub):
+                def rulesets(self, repo):
+                    return [{"id": n, "current_user_can_bypass": "never", **r} for n, r in enumerate(rulesets)]
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(Guarded(**everywhere), self.folder, self.out)
+            return str(caught.exception)
+
+        guard = install.push_ruleset(TEAM_IDS["mlz-admins"])
+        # Another team instead of the bypass team: nobody can run mlz upgrade, and someone else reaches the key.
+        found = check(install.push_ruleset(99))
+        self.assertIn("acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz upgrade", found)
+        self.assertIn("its ruleset pipeline-files also lets the team with ID 99 change .github/", found)
+        # The bypass team and the platform team, or the repository's admins: finding 17 stays open for them.
+        both = {**guard, "bypass_actors": guard["bypass_actors"] + [{"actor_id": TEAM_IDS["platform"], "actor_type": "Team", "bypass_mode": "always"},
+                                                                    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}
+        self.assertIn("also lets the platform team, the repository's admins change .github/", check(both))
+        # Two files only, or the folder with an exception: not the whole folder.
+        files = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/workflows/mlz.yml", ".github/CODEOWNERS"]}}]}
+        self.assertIn("no active push ruleset refuses every change (not .github/workflows/zz-mlz-probe.yml, .github/zz-mlz-probe, "
+                      ".github/actions/zz-mlz-probe/action.yml) under .github/", check(files))
+        excepted = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"], "ignored_file_paths": [".github/workflows/*"]}}]}
+        self.assertIn("(not .github/workflows/mlz.yml, .github/workflows/zz-mlz-probe.yml)", check(excepted))
+        # GitHub applies every ruleset: one more, from the organization, that the team may not bypass refuses its upgrade.
+        org_guard = {**install.push_ruleset(99), "name": "org-pipeline", "bypass_actors": []}
+        self.assertIn("its ruleset org-pipeline refuses changes under .github/, and acme/mlz-admins", check(guard, org_guard))
 
     def test_an_offer_under_github_stops_before_its_branch_when_the_person_may_not_bypass(self):
         github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"], can_bypass="never")
