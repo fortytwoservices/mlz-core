@@ -1380,6 +1380,50 @@ class GitHubTest(unittest.TestCase):
         ])
 
 
+class ModeGitHub(GitHub):
+    """A branch whose top has mlz at the given mode, a README and a folder; writes recorded, each answered with a SHA."""
+
+    def __init__(self, mode):
+        self.sent = []
+        top = [{"path": "mlz", "mode": mode, "type": "blob", "sha": "blob-mlz"},
+               {"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob-readme"},
+               {"path": "tools", "mode": "040000", "type": "tree", "sha": "tree-tools"}]
+        self.answers = {"repos/acme/mlz-vending/git/ref/heads/mlz/upgrade": {"object": {"sha": "head"}},
+                        "repos/acme/mlz-vending/git/commits/head": {"tree": {"sha": "tree"}},
+                        "repos/acme/mlz-vending/git/trees/tree": {"tree": top},
+                        "repos/acme/mlz-vending/git/trees/mlz/upgrade": {"tree": top}}
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method != "GET":
+            self.sent.append((method, path, body))
+            return {"sha": f"made-{len(self.sent)}"}
+        return self.answers[path]
+
+
+class ModeTest(unittest.TestCase):
+    """The real calls that make ./mlz executable, which createCommitOnBranch cannot (GitHub.make_executable)."""
+
+    def test_a_file_without_its_mode_is_found_and_only_it(self):
+        # Only the paths asked about, and only those there: README.md is not asked about, and nothing is named missing.
+        self.assertEqual(ModeGitHub("100644").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz", "missing"]), ["mlz"])
+        self.assertEqual(ModeGitHub("100755").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [])
+
+    def test_one_commit_on_the_branch_s_head_gives_the_same_blob_its_mode(self):
+        github = ModeGitHub("100644")
+        self.assertTrue(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"))
+        self.assertEqual(github.sent, [
+            ("POST", "repos/acme/mlz-vending/git/trees",
+             {"base_tree": "tree", "tree": [{"path": "mlz", "mode": "100755", "type": "blob", "sha": "blob-mlz"}]}),
+            ("POST", "repos/acme/mlz-vending/git/commits", {"message": "chore: mlz executable", "tree": "made-1", "parents": ["head"]}),
+            ("PATCH", "repos/acme/mlz-vending/git/refs/heads/mlz/upgrade", {"sha": "made-2", "force": False}),  # never over a newer push
+        ])
+
+    def test_an_executable_file_makes_no_commit(self):
+        github = ModeGitHub("100755")
+        self.assertFalse(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"))
+        self.assertEqual(github.sent, [])
+
+
 class AnsweringGitHub(GitHub):
     """GitHub with canned answers by path; None is a 404. Writes are recorded, never sent."""
 
