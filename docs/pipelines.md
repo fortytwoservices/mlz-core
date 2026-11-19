@@ -60,8 +60,10 @@ Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrad
 
 - It replaces the files that belong to mlz-core with the release's starter for the repo's role:
   `.github/workflows/mlz.yml`, so changes on the caller's side ship with the release, and the editor
-  settings in `.vscode/`, so the editor reads the schemas of the release the repo runs. Settings go in the
-  YAML. Going back to a release from before the editor settings removes them.
+  settings in `.vscode/` and `.idea/jsonSchemas.xml`, so the editor reads the schemas of the release the repo
+  runs. Settings go in the YAML. Going back to a release from before the editor settings removes them.
+- It adds to `.gitignore` the starter's lines it lacks, which keep JetBrains' other files in `.idea/` out of the
+  repo. The repo's own lines are never changed or removed.
 - Its description carries the release notes between the two releases, breaking changes first.
 
 `--to` defaults to the latest release, an older release is a rollback (the description says so), and

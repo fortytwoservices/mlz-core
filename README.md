@@ -61,12 +61,25 @@ PYTHONPATH=tools python3 -m mlz reference --out docs/reference
 
 ## Editor help in customer repos
 
-Each customer repo's `.vscode/settings.json` points its YAML files at the schemas in `schemas/` of the
-release the repo runs, and `.vscode/extensions.json` recommends Red Hat's YAML extension, which reads them.
-The editor then completes keys, explains them on hover, and marks a mistyped key or value as it is typed.
-Both files belong to mlz-core: they come with the starter, and `mlz upgrade` replaces them with the
-workflow. JetBrains IDEs don't read them; map the schemas once in Languages & Frameworks › Schemas and
-DTDs › JSON Schema Mappings.
+Each customer repo points its YAML files at the schemas in `schemas/` of the release the repo runs, for
+VS Code and for JetBrains IDEs. The editor then completes keys, explains them on hover, and marks a mistyped
+key or value as it is typed.
+
+- **VS Code:** `.vscode/settings.json` maps the files, and `.vscode/extensions.json` recommends Red Hat's
+  YAML extension, which reads them.
+- **JetBrains IDEs** (IntelliJ IDEA, PyCharm and the others): `.idea/jsonSchemas.xml` maps the same files,
+  as Settings › Languages & Frameworks › Schemas and DTDs › JSON Schema Mappings shows. The IDE downloads
+  the schemas from GitHub only while "Allow downloading JSON schemas from remote sources" is on, on the
+  Remote JSON Schemas page beside it. It is on unless someone turned it off. The repo's `.gitignore` keeps
+  the IDE's other files in `.idea/` out of the repo.
+
+The editor files belong to mlz-core: they come with the starter, and `mlz upgrade` replaces them with the
+workflow. `.gitignore` is the repo's own: the installer and `mlz upgrade` only add the starter's lines it
+lacks, and never change or remove one.
+
+The two editors match paths differently: a JetBrains `*` also crosses folders, and VS Code's needs `**/`
+for that. So the files carry different masks, and a test runs each starter's files, and some it does not
+have, through both editors' matching. It fails unless they give each file the same schema.
 
 The schemas are generated from the loaders' own key lists, and a test fails when the committed ones are
 out of date:
