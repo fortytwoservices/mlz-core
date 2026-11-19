@@ -290,6 +290,24 @@ not yet moved. Changing a runner group needs an owner's `admin:org` scope: anyon
 **Cost:** each instance is billed for its compute and for Fortytwo's hourly image fee from the moment it exists,
 whether or not a job runs; `instances: 0` removes them all and stops both.
 
+**How many instances:** each runs one job at a time, and the three repos share them. Measured on GitHub-hosted runners
+on 18 and 19 November 2026 (the test deployment): a landing zone's plan takes about 30 seconds and its job about 50,
+the platform's connectivity plan about 70 seconds, governance's about 110. A pull request or a push plans only the
+stacks it touches, so it waits mainly for a free instance. The daily check plans every stack, in groups of 20 per job
+(about 10 minutes a group of landing zones; [pipelines](pipelines.md#what-a-run-plans)): with `N` landing zones it
+holds `N / 20` jobs. One instance per 40 landing zones keeps the daily check to about 20 minutes, and changes during
+it to that wait at most:
+
+| Landing zones | `instances` | The daily check, about |
+|---|---|---|
+| up to 40 | 1 | 20 minutes |
+| 41 to 80 | 2 | 20 minutes |
+| 81 to 120 | 3 | 20 minutes |
+| more | one per 40 | 20 minutes |
+
+Not measured: the plan times on the self-hosted runners themselves, and how much a group saves by initialising
+Terraform once per job; both would only shorten these.
+
 **Fortytwo's own tests:** `runners.image: dev` runs the dev plan of Fortytwo's Azure DevOps runner offer
 (`self_hosted_runner_ado`, `ubuntu-latest-dev-gen2`) instead, which carries no image fee, so a test tenant such as
 TCAF runs the whole chain end to end without Fortytwo billing itself. Neither image carries a runner: the

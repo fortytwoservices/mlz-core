@@ -101,6 +101,19 @@ class StacksTest(unittest.TestCase):
         self.assertRegex(printed, r"\n  landing-zones/web/prod/network\.yaml +-> web-prod\n")  # a chunk of web-prod
 
 
+class BatchesTest(unittest.TestCase):
+    def test_one_stack_per_job_for_a_change_and_groups_on_the_daily_check(self):
+        self.assertEqual(stacks.batches(["a", "b"], daily=False), [{"id": "a", "stacks": "a"}, {"id": "b", "stacks": "b"}])
+        self.assertEqual(stacks.batches(["a", "b"], daily=True), [{"id": "group-001", "stacks": "a b"}])
+        hundred = [f"lz-{n:03d}" for n in range(100)]
+        daily = stacks.batches(hundred, daily=True)
+        self.assertEqual(len(daily), 100 // stacks.BATCH)  # N stacks, N/20 jobs
+        self.assertEqual(" ".join(b["stacks"] for b in daily).split(), hundred)  # every stack once, in order
+        self.assertEqual(len(stacks.batches(hundred, daily=False)), 5)  # an upgrade plans everything: groups too
+        self.assertEqual(len(stacks.batches(hundred[:20], daily=False)), 20)
+        self.assertEqual(stacks.batches([], daily=True), [])
+
+
 class ChangedTest(unittest.TestCase):
     """What a pull request or a push plans: the stacks whose rendered config differs from the base commit's."""
 

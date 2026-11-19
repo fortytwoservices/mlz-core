@@ -23,10 +23,19 @@ the one the workflow takes.
 Each mlz-core release moves the starters' pin to itself. The starters' workflow also decides which runs
 wait for which:
 
-- **Runs on `main` go one at a time**, first in first out (a concurrency group with `queue: max` on the job
-  that calls `role.yml`). A run starts only when the one before it has finished, review included, so it
-  plans against what that run applied and the plan its reviewer approves is the plan that applies. Two
-  runs therefore never apply at once, not even different stacks of one role.
+- **Governance's and the platform's runs on `main` go one at a time**, first in first out (a concurrency group
+  with `queue: max` on the job that calls `role.yml`). A run starts only when the one before it has finished,
+  review included, so it plans against what that run applied and the plan its reviewer approves is the plan that
+  applies.
+- **Vending's runs on `main` do not queue** (decision D3): a landing zone's change never waits behind another
+  landing zone's. Each run plans only the landing zones it touches ([below](#what-a-run-plans)), and a landing zone
+  applies one run at a time (the apply job's concurrency group, per landing zone). Two changes to the same landing
+  zone merged close together are the one case to know: the later run planned before the earlier one applied, so its
+  apply finds a plan other than its reviewer's and stops, applying nothing; start a manual run, whose plan has both.
+  (A third run's apply of that landing zone, queued behind the second's, takes its place: the third's commit holds
+  the second's change.) What landing zones share is safe without a queue: only a pull request's run writes the IP plan
+  and the names, a pull request merges only up to date with `main` (the ruleset `main`), and only the run of `main`'s
+  latest commit offers vending's contract.
 - **A pull request's newer push cancels its older run**, so an older plan never replaces the newer one's
   comment.
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact
@@ -93,6 +102,12 @@ first time it meets a new key, so a plan runs against a downloaded copy of its s
 backend. Only the apply job uses the backend itself.
 
 Applies of the same stack never run at the same time, and one is never cancelled halfway.
+
+**Plans in groups.** A run planning 20 stacks or fewer plans each in a job of its own, for quick feedback. The daily
+check, and any run planning more (an upgrade plans every stack), plans them in groups of 20, one after the other in
+one job (`tools/ci/plans.sh`, `tools/mlz/stacks.py`'s `batches`), so a hundred landing zones hold a runner for five
+jobs, not a hundred, and stay well under GitHub's limit of 256 jobs a matrix. Each stack still gets its summary on
+the run page, its comment on a pull request and its status for the drift issue.
 
 `plan`, `apply` and `publish` reach Azure and the state. They run on the repo variable `MLZ_RUNS_ON` when it is
 set: the runners in management's network, self-hosted unless `bootstrap.yaml` asks for GitHub-hosted ones,
