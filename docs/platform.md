@@ -8,7 +8,7 @@ alternative, through `az-tf-mlz-connectivity-vwan`).
 
 A folder per stack, each named after it, and in each a file per region (or a folder of chunks,
 `<folder>/<region>/*.yaml`, read as one file; a value set in two chunks is an error that names both files).
-`python3 -m mlz map` prints which stack, Terraform root and modules each file feeds.
+`./mlz map` prints which stack, Terraform root and modules each file feeds.
 
 | Folder | Stack | What a file says |
 |---|---|---|
@@ -92,7 +92,7 @@ its owner; the inputs it takes are on `docs/reference/platform.md`.
 
 ## Where a value comes from
 
-`python3 -m mlz explain --repo . <region>` shows a hub's every value and where it comes from: what its
+`./mlz explain --repo . <region>` shows a hub's every value and where it comes from: what its
 connectivity file sets, what mlz-core fills in, and every input of the hub module that is worked out, with its value
 as the root is given it. `management`, `identity/<region>` and `firewall-rules` do the same for those stacks.
 

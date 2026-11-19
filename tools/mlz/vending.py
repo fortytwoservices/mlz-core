@@ -433,7 +433,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         for name, block in plan.get(key, {}).get("removed_subnets", {}).items():
             length = (wanted[key] or (0, {}))[1].get(name)
             if length is not None and length != block.prefixlen:
-                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (python3 -m mlz release).")
+                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (./mlz release).")
     problems += plan_problems(plan, zones, wanted, platform)
     if problems:
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))
@@ -527,9 +527,9 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         check(key, lz, governance, platform, problems)
         wanted[key] = wanted_network(lz, problems)
         if key not in plan:
-            problems.append(f"{key}: no address range yet; run the IP allocator (python3 -m mlz allocate).")
+            problems.append(f"{key}: no address range yet; run the IP allocator (./mlz allocate --repo .).")
         elif wanted[key] and set(plan[key]["subnets"]) != set(wanted[key][1]):
-            problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (python3 -m mlz allocate).")
+            problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (./mlz allocate --repo .).")
     problems += plan_problems(plan, zones, wanted, platform)
     # One short name per workload: two workloads with the same one would read alike in every name.
     shorts = {}
@@ -550,7 +550,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         if key not in plan:
             continue
         if key not in recorded:
-            problems.append(f"{key}: no names yet; run the IP allocator (python3 -m mlz allocate).")
+            problems.append(f"{key}: no names yet; run the IP allocator (./mlz allocate --repo .).")
             continue
         names[key], _ = landing_zone_names(key, lz, sorted(plan[key]["subnets"]), recorded[key], None, problems)
     # One repo per landing zone that vending makes: a name another landing zone has, made or named under github.repo,
@@ -759,7 +759,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             elif template:
                 return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose)
             elif settings is None and fits:
-                problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (python3 -m mlz allocate).")
+                problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (./mlz allocate --repo .).")
             elif settings is not None:  # the template needs both; check() says the same, so the messages are one
                 problems.extend(short_name_problems(lz) or [f"{where}: location is required (set it here or in a layer above)."])
             return None

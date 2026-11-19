@@ -17,11 +17,9 @@ STARTERS = stacks.CORE / "starter"
 
 class StacksTest(unittest.TestCase):
     def test_the_table_has_the_platform_s_stacks_in_the_order_the_pipeline_applies_them(self):
-        check = (stacks.CORE / "tools" / "ci" / "check.sh").read_text()
-        planned = re.findall(r"""echo '(\[[^']*\])'""", check)
-        full = max((eval(found) for found in planned), key=len)  # the platform's list once vending has published
-        self.assertEqual(full, [s.name for s in stacks.STACKS if s.role == "platform"])
-        self.assertIn('["governance"]', check)
+        # mlz check plans them in the table's order (tools/mlz/__main__.py): the hub, the networks that peer with it,
+        # then the rules, which need the hub's policy.
+        self.assertEqual([s.name for s in stacks.STACKS if s.role == "platform"], ["connectivity", "management", "identity", "firewall-rules"])
 
     def test_a_contract_is_read_from_the_state_of_the_stack_whose_root_outputs_it(self):
         # publish.py reads the contract from a state blob, <stack>.tfstate: the stack is not always named after its role.
@@ -128,6 +126,13 @@ class ChangedTest(unittest.TestCase):
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(text)
 
+    def saved_meta(self) -> str:
+        """A saved copy of api.github.com/meta for check.sh's firewall step (MLZ_GITHUB_META): no fetch, which GitHub
+        allows 60 times an hour without a token."""
+        path = Path(self.tmp.name) / "meta.json"
+        path.write_text(json.dumps({"domains": {"actions": ["*.actions.githubusercontent.com", "github.com"]}}))
+        return str(path)
+
     def test_vending_plans_the_landing_zones_whose_config_changed_and_new_ones(self):
         for root in (self.head, self.base):
             self.write(root, ".mlz/vending/a-prod.json", "{}")
@@ -218,7 +223,7 @@ class ChangedTest(unittest.TestCase):
         git("commit", "-qam", "the change")
         (repo / ".mlz-core").symlink_to(stacks.CORE)
         done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
-                              env={**env, "GITHUB_EVENT_NAME": "pull_request"}, capture_output=True, text=True)
+                              env={**env, "GITHUB_EVENT_NAME": "pull_request", "MLZ_GITHUB_META": self.saved_meta()}, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout.strip().splitlines()[-1]), ["connectivity", "management", "identity"])
         self.assertTrue((repo / ".mlz/base/platform.json").is_file())
@@ -247,7 +252,7 @@ class ChangedTest(unittest.TestCase):
         git("commit", "-qam", "the first hub")
         (repo / ".mlz-core").symlink_to(stacks.CORE)
         done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
-                              env={**env, "GITHUB_EVENT_NAME": "pull_request"}, capture_output=True, text=True)
+                              env={**env, "GITHUB_EVENT_NAME": "pull_request", "MLZ_GITHUB_META": self.saved_meta()}, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue((repo / ".mlz/base/README").is_file())
         self.assertEqual(stacks.difference("platform", "connectivity", repo), "**connectivity** is new: the base branch has no such stack.\n")

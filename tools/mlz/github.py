@@ -1,7 +1,8 @@
 """The GitHub calls mlz upgrade and mlz install make, through the gh CLI and the engineer's own login.
 
 Commits go through createCommitOnBranch, which GitHub signs, so they show as verified; the REST contents API
-leaves a commit made with a person's login unsigned.
+leaves a commit made with a person's login unsigned. The one exception is make_executable: createCommitOnBranch
+cannot set a file's mode.
 """
 
 from __future__ import annotations
@@ -16,6 +17,12 @@ from .merge import ConfigError
 # groups take admin:org, runners manage_runners:org, network configurations read: to list and write: to make
 # (GitHub's REST docs, each endpoint's classic token scope).
 RUNNER_SCOPES = "admin:org,manage_runners:org,read:network_configurations,write:network_configurations"
+
+
+def plain(item: dict) -> bool:
+    """A tree entry that is a plain file, not executable: the one kind make_executable changes. A folder (040000), a
+    symbolic link (120000), a submodule or a file already executable stay as they are."""
+    return item.get("type") == "blob" and item.get("mode") == "100644"
 
 
 class GitHub:
@@ -126,6 +133,29 @@ class GitHub:
             "message": {"headline": message},
             "fileChanges": {"additions": additions, **({"deletions": deletions} if deletions else {})},
         }}})
+
+    def not_executable(self, repo: str, ref: str, paths: list[str]) -> list[str]:
+        """Of the paths, those on ref that are a plain file without the executable mode (100644); a folder or a symbolic
+        link of that name is left alone. Only paths at the repo's top: the root tree is read (a branch name gives its
+        commit's)."""
+        return sorted(item["path"] for item in self._api(f"repos/{repo}/git/trees/{ref}")["tree"] if item["path"] in paths and plain(item))
+
+    def make_executable(self, repo: str, branch: str, paths: list[str], message: str) -> bool:
+        """One commit that makes the paths executable (mode 100755), only if one is not yet; returns whether it made
+        one. createCommitOnBranch cannot set a mode, and keeps the one a file has (checked 19 November 2026), so a file
+        it adds is not executable until this commit. The REST API makes it unsigned: on a pull request's branch the
+        squash merge makes it part of a verified commit; on a new repo's main it stays the one unverified commit. Only
+        paths at the repo's top: the root tree is read."""
+        head = self.head(repo, branch)
+        tree = self._api(f"repos/{repo}/git/commits/{head}")["tree"]["sha"]
+        entries = [{"path": item["path"], "mode": "100755", "type": "blob", "sha": item["sha"]}
+                   for item in self._api(f"repos/{repo}/git/trees/{tree}")["tree"] if item["path"] in paths and plain(item)]
+        if not entries:
+            return False
+        made = self._api(f"repos/{repo}/git/trees", "POST", {"base_tree": tree, "tree": entries})["sha"]
+        commit = self._api(f"repos/{repo}/git/commits", "POST", {"message": message, "tree": made, "parents": [head]})["sha"]
+        self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": commit, "force": False})
+        return True
 
     # Pull requests
 

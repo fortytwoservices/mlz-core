@@ -47,7 +47,7 @@ class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True, strict=True, core=True):
+                 required_check=True, strict=True, core=True, not_executable=()):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -75,7 +75,8 @@ class FakeGitHub:
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
-        self.created, self.commits, self.rulesets, self.pulls, self.branches = [], [], [], [], []
+        self.created, self.commits, self.rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
+        self.unexecutable = set(not_executable)  # (repo, path): on main without its mode, as a stopped run left it
         self.ruleset_bodies = {}
 
     def repo(self, repo):
@@ -116,6 +117,13 @@ class FakeGitHub:
 
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, head, files, message))
+
+    def not_executable(self, repo, ref, paths):
+        return sorted(path for path in paths if (repo, path) in self.unexecutable)
+
+    def make_executable(self, repo, branch, paths, message):
+        self.executable.append((repo, branch, tuple(paths)))
+        return True
 
     def add_ruleset(self, repo, ruleset):
         if (repo, ruleset["name"]) in self.existing_rulesets:
@@ -422,6 +430,9 @@ class InstallTest(unittest.TestCase):
                          "examples/payments/workload-defaults.yaml"} <= set(commits["acme/mlz-vending"]))
         self.assertTrue({"connectivity/norwayeast.yaml", "firewall-rules/platform.yaml"} <= set(install.starter_files("platform", self.folder)))
         self.assertNotIn("x-release-please", workflow)
+        # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
+        self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
+        self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
         self.assertEqual(github.rulesets, [(repo, "main") for repo in REPOS.values()])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
 
@@ -600,6 +611,14 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
 
+    def test_a_wrapper_left_without_its_mode_is_offered_the_mode(self):
+        # An earlier run made the repo and its starter commit, and stopped before the commit that makes ./mlz executable.
+        github = FakeGitHub(existing=REPOS.values(), not_executable=[("acme/mlz-vending", "mlz")])
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.executable, [("acme/mlz-vending", "mlz/executable", ("mlz",))])
+        self.assertEqual([(repo, branch) for repo, branch, *_ in github.pulls], [("acme/mlz-vending", "mlz/executable")])
+        self.assertIn("acme/mlz-vending: mlz is not executable; the fix is offered in https://github.com/acme/mlz-vending/pull/1", self.printed)
+
     def test_a_repo_set_up_before_code_owners_is_offered_the_file(self):
         github = FakeGitHub(existing=REPOS.values(), owned=False)
         install.step_repos(github, self.folder, self.out)
@@ -615,6 +634,7 @@ class InstallTest(unittest.TestCase):
         offered = next(files for repo, branch, _, files, _ in github.commits if repo == "acme/mlz-governance" and branch == "mlz/starter")
         self.assertNotIn(".github/CODEOWNERS", offered)
         self.assertIn(".github/workflows/mlz.yml", offered)
+        self.assertIn(("acme/mlz-governance", "mlz/starter", ("mlz",)), github.executable)  # on the offer's branch
 
     def test_check_lists_what_stops_the_code_owners(self):
         github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=lambda role: [],
@@ -1358,6 +1378,52 @@ class GitHubTest(unittest.TestCase):
             ("POST", "repos/acme/mlz-platform/actions/variables"),
             ("PATCH", "repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON"),
         ])
+
+
+class ModeGitHub(GitHub):
+    """A branch whose top has mlz at the given mode, a README and a folder; writes recorded, each answered with a SHA."""
+
+    def __init__(self, mode, kind="blob"):
+        self.sent = []
+        top = [{"path": "mlz", "mode": mode, "type": kind, "sha": "blob-mlz"},
+               {"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob-readme"},
+               {"path": "tools", "mode": "040000", "type": "tree", "sha": "tree-tools"}]
+        self.answers = {"repos/acme/mlz-vending/git/ref/heads/mlz/upgrade": {"object": {"sha": "head"}},
+                        "repos/acme/mlz-vending/git/commits/head": {"tree": {"sha": "tree"}},
+                        "repos/acme/mlz-vending/git/trees/tree": {"tree": top},
+                        "repos/acme/mlz-vending/git/trees/mlz/upgrade": {"tree": top}}
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method != "GET":
+            self.sent.append((method, path, body))
+            return {"sha": f"made-{len(self.sent)}"}
+        return self.answers[path]
+
+
+class ModeTest(unittest.TestCase):
+    """The real calls that make ./mlz executable, which createCommitOnBranch cannot (GitHub.make_executable)."""
+
+    def test_a_file_without_its_mode_is_found_and_only_it(self):
+        # Only the paths asked about, and only those there: README.md is not asked about, and nothing is named missing.
+        self.assertEqual(ModeGitHub("100644").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz", "missing"]), ["mlz"])
+        self.assertEqual(ModeGitHub("100755").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [])
+
+    def test_one_commit_on_the_branch_s_head_gives_the_same_blob_its_mode(self):
+        github = ModeGitHub("100644")
+        self.assertTrue(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"))
+        self.assertEqual(github.sent, [
+            ("POST", "repos/acme/mlz-vending/git/trees",
+             {"base_tree": "tree", "tree": [{"path": "mlz", "mode": "100755", "type": "blob", "sha": "blob-mlz"}]}),
+            ("POST", "repos/acme/mlz-vending/git/commits", {"message": "chore: mlz executable", "tree": "made-1", "parents": ["head"]}),
+            ("PATCH", "repos/acme/mlz-vending/git/refs/heads/mlz/upgrade", {"sha": "made-2", "force": False}),  # never over a newer push
+        ])
+
+    def test_an_executable_file_a_folder_or_a_link_makes_no_commit(self):
+        for mode, kind in (("100755", "blob"), ("040000", "tree"), ("120000", "blob")):  # a symbolic link is a blob at 120000
+            github = ModeGitHub(mode, kind)
+            self.assertEqual(github.not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [], mode)
+            self.assertFalse(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"), mode)
+            self.assertEqual(github.sent, [], mode)
 
 
 class AnsweringGitHub(GitHub):

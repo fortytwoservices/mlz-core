@@ -1,6 +1,6 @@
 variable "rendered_library_path" {
   type        = string
-  description = "The output folder of scripts/render_library.py for this customer: its library files and config.json."
+  description = "The output folder of mlz governance (tools/mlz/governance.py) for this customer: its library files and config.json."
   nullable    = false
 }
 

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from mlz import advanced, explain, inputs, platform, schema
+from mlz import advanced, explain, governance, inputs, platform, schema
 from mlz.merge import ConfigError
 from mlz.test_platform import GOVERNANCE
 
@@ -248,7 +248,7 @@ class LandingZoneTest(unittest.TestCase):
 
 class GovernanceTest(unittest.TestCase):
     """customer.yaml's advanced: reaches both of governance's calls, each under its name."""
-    rules = schema.governance_rules()
+    rules = governance
     starter = (inputs.CORE / "starter/mlz-governance/customer.yaml").read_text()
 
     def render(self, block: str) -> dict:

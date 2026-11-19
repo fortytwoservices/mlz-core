@@ -15,12 +15,11 @@ starter, replaced by mlz upgrade), at raw.githubusercontent.com: mlz-core is pub
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 from pathlib import Path
 
-from . import advanced, firewall, install, names, naming, platform, vending
+from . import advanced, firewall, governance, install, names, naming, platform, vending
 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
@@ -31,14 +30,6 @@ ARCHETYPES = ("corp", "online", "sandbox", "local")
 # or one address, which is a /32. Whether host bits are set is the loader's check.
 IPV4 = r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 CIDR = rf"^{IPV4}(/(0*([0-9]|[12][0-9]|3[0-2])|{IPV4}))?$"  # a prefix may be zero-padded, as int() reads it
-
-
-def governance_rules():
-    """governance/scripts/render_library.py, which runs as a script of its own, not as part of the mlz package."""
-    spec = importlib.util.spec_from_file_location("render_library", CORE / "governance" / "scripts" / "render_library.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def pattern(compiled: re.Pattern, ignore_case: bool = False) -> str:
@@ -175,7 +166,7 @@ def firewall_rules() -> dict:
 
 
 def customer() -> dict:
-    rules = governance_rules()
+    rules = governance
     guid = text("A subscription ID.", pattern=pattern(rules.GUID, ignore_case=True))
     strings = or_empty({"type": "array", "items": {"type": "string"}})
     tag_names = or_empty({"type": "array", "items": {"type": "string", "pattern": pattern(rules.TAG)}})
