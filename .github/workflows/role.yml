@@ -711,7 +711,8 @@ jobs:
           name: mlz-${{ inputs.role }}
           path: .mlz/
 
-      # Writing a workflow file needs Workflows as well as Contents; the upgrade pull requests, Pull requests.
+      # Writing a workflow file needs Workflows as well as Contents; the upgrade pull requests, Pull requests; the rule on
+      # each repo's main (its rulesets, and the bypass team's write access), Administration and Members.
       - id: writer
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -721,10 +722,13 @@ jobs:
           permission-contents: write
           permission-workflows: write
           permission-pull-requests: write
+          permission-administration: write
+          permission-members: read
 
       - name: Give the workload repos their files
         env:
           GH_TOKEN: ${{ steps.writer.outputs.token }}
+          MLZ_APP_SLUG: ${{ steps.writer.outputs.app-slug }} # the MLZ App, which each repo's rule lets through for the values
         run: python3 -I .mlz-core/tools/ci/run_mlz.py workload-repos --configs .mlz/vending
 
   # A contract pull request (tools/ci/publish.py, mlz install publish) merges itself once this run has checked

@@ -221,6 +221,19 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(config["tags"]["required"], ["Owner"])
         self.assertEqual(config["tags"]["inherited"], ["Owner", "CostCenter", "Environment", "Workload"])
 
+    def test_the_contract_carries_bootstrap_yaml_s_bypass_team(self):
+        # For the workload repos' rules, which vending makes (docs/vending.md); none until bootstrap.yaml names it.
+        config, out = self.render(self.BASE)
+        self.assertEqual(config["github"], {})
+        bootstrap = self.dir / "bootstrap.yaml"
+        bootstrap.write_text("github:\n  organization: demo-org\n  bypass_team: demo-admins\n")
+        config = rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
+        self.assertEqual(config["github"], {"bypass_team": "demo-admins"})
+        self.assertEqual(self.read(out, "config.json")["github"], {"bypass_team": "demo-admins"})
+        bootstrap.write_text("github:\n  bypass_team: [demo-admins]\n")
+        with self.assertRaisesRegex(rl.ConfigError, "bootstrap.yaml: github.bypass_team is \\['demo-admins'\\]: the slug"):
+            rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
+
     def test_rendering_twice_leaves_no_stale_files(self):
         self.render(self.BASE)
         _, out = self.render(self.BASE + "tags:\n  required: [Owner]\n")

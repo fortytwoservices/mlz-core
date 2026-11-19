@@ -10,7 +10,7 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from mlz import workload
+from mlz import install, workload
 from mlz.merge import ConfigError
 
 WORKLOAD = {"landing_zone": "payments-prod", "location": "norwayeast",
@@ -25,7 +25,8 @@ class FakeGitHub:
     createCommitOnBranch refuses one whose expectedHeadOid is not the branch's. push_on: a file whose reading makes the
     team push in between, with that file in it."""
 
-    def __init__(self, repos: dict[str, dict[str, str]], archived=(), push_on=None, core=None, pulls=None, releases=None):
+    def __init__(self, repos: dict[str, dict[str, str]], archived=(), push_on=None, core=None, pulls=None, releases=None,
+                 teams=None, rulesets=None, writers=None):
         self.repos, self.archived, self.commits, self.push_on = repos, set(archived), [], push_on
         self.heads = {repo: 0 for repo in repos}
         # mlz-core's files at its releases, {(path, ref): text}; each repo's pull requests, newest last; release notes.
@@ -35,6 +36,29 @@ class FakeGitHub:
         self.resets: list[tuple] = []  # (repo, branch, commit) each time a branch is made or moved
         self.updated: list[tuple] = []
         self.at: dict[tuple[str, str], dict[str, str]] = {}  # a repo's files at a commit other than main's head
+        # The organization's teams (slug to ID), each repo's own rulesets, and who may write to each repo.
+        self.teams = {"acme-admins": 7, "payments-devs": 8} if teams is None else teams
+        self.made_rulesets = rulesets if rulesets is not None else {}
+        self.writers = writers if writers is not None else {}
+
+    def app_id(self, slug):
+        return {"mlz-release": 99}[slug]
+
+    def team(self, org, slug):
+        return {"slug": slug, "id": self.teams[slug]} if slug in self.teams else None
+
+    def team_can_write(self, org, slug, repo):
+        return slug in self.writers.get(repo, set())
+
+    def grant_team(self, org, slug, repo):
+        self.writers.setdefault(repo, set()).add(slug)
+
+    def rulesets(self, repo):
+        return [{**ruleset, "source_type": "Repository", "source": repo} for ruleset in self.made_rulesets.get(repo, [])]
+
+    def add_ruleset(self, repo, ruleset):
+        self.made_rulesets.setdefault(repo, []).append(ruleset)
+        return True
 
     def releases(self, core):
         if isinstance(self._releases, Exception):
@@ -112,13 +136,14 @@ class SyncTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def config(self, key: str, **extra) -> None:
-        config = {"key": key, "github": {"organization": "acme-org", "repo": key, "create": True, "team": "payments-devs", "description": DESCRIPTION},
+        config = {"key": key, "github": {"organization": "acme-org", "repo": key, "create": True, "team": "payments-devs", "description": DESCRIPTION,
+                                         "bypass_team": "acme-admins"},
                   "workload": {**WORKLOAD, "landing_zone": key}, "decommission": False, **extra}
         (self.configs / f"{key}.json").write_text(json.dumps(config))
 
-    def sync(self, github) -> list[str]:
+    def sync(self, github, app_slug="mlz-release") -> list[str]:
         out = []
-        workload.sync(github, self.configs, out.append)
+        workload.sync(github, self.configs, out.append, app_slug)
         return out
 
     def test_a_new_repo_gets_the_starter_and_its_values_in_one_commit(self):
@@ -127,7 +152,7 @@ class SyncTest(unittest.TestCase):
         self.sync(github)
         [(repo, branch, _, files, message)] = github.commits
         self.assertEqual((repo, branch), ("acme-org/payments-prod", "main"))
-        self.assertEqual(set(files), {*workload.starter(), "mlz.auto.tfvars.json"})
+        self.assertEqual(set(files), {*workload.starter(), "mlz.auto.tfvars.json", ".github/CODEOWNERS"})
         # GitHub's own first README is replaced; the pins are the release's, without release-please's marker.
         self.assertIn("This landing zone's own Terraform", files["README.md"])
         self.assertIn("uses: fortytwoservices/mlz-core/.github/workflows/workload.yml@v", files[".github/workflows/mlz.yml"])
@@ -223,12 +248,15 @@ class UpgradeTest(SyncTest):
         """The repo as vending made it at tag, with its values up to date, and what the team changed since."""
         files = {name: workload.RELEASE_PLEASE_MARKER.sub("", text) for name, text in old_starter(tag).items()}
         files[workload.VALUES] = workload.values_file({**WORKLOAD, "landing_zone": "payments-prod"})
+        files[workload.CODEOWNERS] = workload.codeowners("acme-org", "payments-devs")
         return {**files, **changed}
 
     def github(self, files: dict[str, str], **kwargs) -> FakeGitHub:
         self.config("payments-prod")
         core = {(f"starter/mlz-workload/{name}", OLD): text for name, text in old_starter().items()}
-        return FakeGitHub({self.REPO: files}, core=core, releases=kwargs.pop("releases", NOTES), **kwargs)
+        ruled = {self.REPO: [install.main_ruleset("workload", 7, 99), install.checks_ruleset("workload", 99, workload.CHECK)]}
+        return FakeGitHub({self.REPO: files}, core=core, releases=kwargs.pop("releases", NOTES), rulesets=ruled,
+                          writers={self.REPO: {"acme-admins"}}, **kwargs)
 
     def test_an_older_repo_gets_one_pull_request_with_the_files_it_has_not_changed(self):
         github = self.github(self.made_at())
@@ -353,6 +381,75 @@ class UpgradeTest(SyncTest):
         out = self.sync(github)
         self.assertEqual(len(github.commits), 1)  # the values reached main
         self.assertEqual(out[-1], f"::warning::{self.REPO}: no upgrade pull request: gh api GET repos/fortytwoservices/mlz-core/releases: HTTP 502")
+
+
+class RuleTest(SyncTest):
+    """A workload repo's main takes the role repos' rule (decision D14), with the MLZ App let through for its values."""
+
+    REPO = "acme-org/payments-prod"
+
+    def made(self, **files) -> FakeGitHub:
+        self.config("payments-prod")
+        return FakeGitHub({self.REPO: {"README.md": f"# payments-prod\n{DESCRIPTION}\n", **files}})
+
+    def test_a_repo_gets_the_rule_its_code_owners_and_the_bypass_team_s_access(self):
+        github = self.made()
+        out = self.sync(github)
+        main, checks = github.made_rulesets[self.REPO]
+        self.assertEqual(main, install.main_ruleset("workload", 7, 99))
+        self.assertEqual(main["bypass_actors"], [{"actor_id": 7, "actor_type": "Team", "bypass_mode": "pull_request"},
+                                                 {"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
+        self.assertTrue(main["rules"][2]["parameters"]["require_code_owner_review"])
+        self.assertEqual(checks["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
+        self.assertEqual(checks["rules"][0]["parameters"]["required_status_checks"], [{"context": "workload / plan", "integration_id": 15368}])
+        self.assertTrue(checks["rules"][0]["parameters"]["strict_required_status_checks_policy"])
+        self.assertEqual(github.writers[self.REPO], {"acme-admins"})
+        self.assertTrue(github.repos[self.REPO][".github/CODEOWNERS"].endswith("\n* @acme-org/payments-devs\n"))
+        self.assertEqual(out[1:], [f"{self.REPO}: acme-org/acme-admins may write, for its bypass of main's approval",
+                                   f"{self.REPO}: ruleset main: pull requests only, a code owner's approval, acme-org/acme-admins may merge without it",
+                                   f"{self.REPO}: ruleset main-checks: workload / plan must pass, on a branch up to date with main, before any "
+                                   "merge into main; nobody but the MLZ App may bypass it, for its commits of the landing zone's values"])
+        # Again: nothing to do, nothing said.
+        self.assertEqual(self.sync(github), [])
+        self.assertEqual(len(github.made_rulesets[self.REPO]), 2)
+
+    def test_the_code_owners_file_is_vending_s(self):
+        github = self.made()
+        self.sync(github)
+        github.repos[self.REPO][".github/CODEOWNERS"] = "* @acme-org/someone-else\n"
+        self.sync(github)
+        files, message = github.commits[-1][3], github.commits[-1][4]
+        self.assertEqual((set(files), message), ({".github/CODEOWNERS"}, "chore: the landing zone's code owners, from vending"))
+
+    def test_a_ruleset_the_repo_has_already_is_left_as_it_is_and_said(self):
+        own = {"name": "main", "target": "branch", "enforcement": "active", "rules": [{"type": "deletion"}]}
+        github = self.made()
+        github.made_rulesets[self.REPO] = [own]
+        out = self.sync(github)
+        self.assertEqual([r["name"] for r in github.made_rulesets[self.REPO]], ["main", "main-checks"])
+        self.assertIn(f"{self.REPO}: has a ruleset named main that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)", out)
+
+    def test_without_the_app_s_id_no_rule_is_made_and_the_values_still_go(self):
+        github = self.made()
+        out = self.sync(github, app_slug=None)
+        self.assertEqual(github.made_rulesets, {})
+        self.assertEqual(len(github.commits), 1)
+        self.assertIn("no rule on main: the MLZ App's ID is not known (MLZ_APP_SLUG)", out[1])
+
+    def test_without_a_bypass_team_main_has_none_and_says_so(self):
+        self.config("payments-prod", github={"organization": "acme-org", "repo": "payments-prod", "create": True, "team": "payments-devs",
+                                             "description": DESCRIPTION, "bypass_team": None})
+        github = FakeGitHub({self.REPO: {}})
+        out = self.sync(github)
+        main = github.made_rulesets[self.REPO][0]
+        self.assertEqual(main["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"}])
+        self.assertTrue(any("governance's contract names no bypass team yet" in line for line in out))
+        # One named that the organization does not have: said, and main gets no team bypass either.
+        self.config("other-prod", github={"organization": "acme-org", "repo": "other-prod", "create": True, "team": "payments-devs",
+                                          "description": DESCRIPTION, "bypass_team": "gone"})
+        github = FakeGitHub({"acme-org/other-prod": {}})
+        out = self.sync(github)
+        self.assertTrue(any("the bypass team acme-org/gone is not there" in line for line in out))
 
 
 class CommandTest(unittest.TestCase):

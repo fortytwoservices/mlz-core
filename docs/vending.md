@@ -332,6 +332,32 @@ changes in Azure.
 - A repo vending does not make (`github.create: false`, or an existing `github.repo`) is the team's own, and so are
   its upgrades.
 
+**Its rule on main.** Vending gives each repo it makes the rule the role repos have (decision D14), on every run on
+`main`, as the MLZ App:
+
+- The ruleset `main`: changes only through a pull request, with a code owner's approval, and no force push or
+  deletion. The code owner is the landing zone's `github.team`, in `.github/CODEOWNERS` (`* @<org>/<team>`), which
+  belongs to mlz-core: vending writes it and keeps it as it is. Where the platform team owns the workload repos, that
+  is `team: platform` in `workload-defaults.yaml`.
+- The ruleset `main-checks`: the pipeline's plan, `workload / plan`, must pass on a branch up to date with `main`
+  before any merge into `main`.
+- **Nobody but the MLZ App may bypass the check**, and the App only for its own commits of `mlz.auto.tfvars.json` and
+  `.github/CODEOWNERS`, so that a landing zone's values keep reaching the repo without a person. The run on `main`
+  that such a commit starts still plans, and still waits for the team in `apply`. The App's key is only in the vending
+  repo, behind its `pipeline-files` rule (`docs/pipelines.md`).
+- The bypass team, `bootstrap.yaml`'s `github.bypass_team`, may merge a pull request without the code owner's
+  approval, and only a pull request. It reaches vending through governance's contract (`github.bypass_team` in
+  `_generated/governance.yaml`), and vending gives it write access to each repo, without which its bypass is no use.
+- No push rule on `.github/`, unlike the role repos: a workload repo holds no secret, only variables, and a pull
+  request's own workflow reaches only the plan identity, which trusts the repo's pull requests by design and reads
+  only its own landing zone. `main`'s workflow changes only through a reviewed pull request, like everything else.
+- A ruleset named `main` or `main-checks` that the repo has already is left as it is, and each run says so when it is
+  not the one vending makes.
+
+For a team that pushed straight to `main`: pushes are refused, and a change needs a pull request that another member of
+the team approves. A team of one needs a second member, or the bypass team. A pull request behind `main` needs
+"Update branch" before it merges, then a fresh plan.
+
 The workload repos are in the organization the vending repo is in: the pipeline's App tokens are for that one. The
 root's `landing_zone` output names the identities and the state.
 

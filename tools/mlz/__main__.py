@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
     gv.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
     gv.add_argument("--defaults", type=Path, default=renderer.DEFAULTS, help="Fortytwo's defaults (default: governance/defaults.yaml in mlz-core)")
     gv.add_argument("--out", type=Path, required=True, help="the folder to write the library and config.json to, replaced on every run")
+    gv.add_argument("--bootstrap", type=Path, help="the governance repo's bootstrap.yaml: its github.bypass_team goes into the contract, for the workload repos' rules")
     p = roles.add_parser("platform", help="connectivity/, management/ and identity/ into the config of the platform's stacks")
     p.add_argument("--repo", type=Path, required=True, help="the customer's mlz-platform checkout")
     p.add_argument("--governance", type=Path, help="the governance contract (default: <repo>/_generated/governance.yaml)")
@@ -156,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.role == "governance":
         try:
-            config = renderer.render(args.customer, args.defaults, args.out)
+            config = renderer.render(args.customer, args.defaults, args.out, args.bootstrap)
         except (renderer.RenderError, ConfigError) as error:
             print(f"mlz governance: {error}", file=sys.stderr)
             return 1
@@ -255,7 +256,7 @@ def main(argv: list[str] | None = None) -> int:
             if sha and vending_repo and github.head(vending_repo, "main") != sha:
                 print(f"mlz workload-repos: main has moved on from this run's {sha}: the newer run does it.")
                 return 0
-            workload.sync(github, args.configs)
+            workload.sync(github, args.configs, app_slug=os.environ.get("MLZ_APP_SLUG") or None)
         except ConfigError as error:
             print(f"mlz workload-repos: {error}", file=sys.stderr)
             return 1
@@ -449,7 +450,8 @@ def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[
     if found:
         return None
     if role == "governance":
-        return ["governance"] if run("governance", "--customer", repo / "customer.yaml", "--out", out / "rendered") else None
+        given = ["--bootstrap", repo / "bootstrap.yaml"] if (repo / "bootstrap.yaml").is_file() else []
+        return ["governance"] if run("governance", "--customer", repo / "customer.yaml", *given, "--out", out / "rendered") else None
     if role == "platform":
         if not run("platform", "--repo", repo, "--out", out / "platform.json"):
             return None

@@ -7,6 +7,11 @@ that are not there, and only to a repo without mlz.auto.tfvars.json yet; after t
 written, when the landing zone's values change. Not Terraform's: a file in Terraform's state is deleted with it, and a
 decommissioned landing zone's repo is archived with the team's files in it.
 
+Its main takes the role repos' rule (protect, decision D14): a pull request, a code owner's approval, the check
+passed. The code owner is the landing zone's github.team, in .github/CODEOWNERS, which belongs to mlz-core; the bypass
+team (bootstrap.yaml's, through governance's contract) may merge without the approval; and nobody but the MLZ App may
+bypass the check, so that its commits of the values above still reach main without a person.
+
 Once vending runs a newer release than a repo's pipeline calls, the repo is offered a pull request that moves it
 there (offer_upgrade), which the owning team merges. It owns the pipeline, .github/workflows/mlz.yml; the starter's
 other files move only while they are as the starter wrote them, and a file the team changed is named in the pull
@@ -20,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from . import mirror
+from . import install, mirror
 from .merge import ConfigError
 from .upgrade import RELEASE_PLEASE_MARKER, breaking_changes, demoted, releases_between, version
 
@@ -34,6 +39,8 @@ BUILD_BRANCH = "mlz/upgrade-next"  # where the next upgrade commit is made, so t
 # The call itself: a line that starts with uses:, so a commented-out one never decides the release.
 PIN = re.compile(r"^[ \t]*uses:[ \t]*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/workload\.yml@(?P<ref>[^\s#]+)", re.M)
 NAMING = re.compile(r"mlz-core\.git//modules/naming\?ref=(?P<ref>[^\"'\s&]+)")
+CODEOWNERS = ".github/CODEOWNERS"
+CHECK = "workload / plan"  # the caller's job (starter/mlz-workload), then workload.yml's: what main-checks requires
 KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
 MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
 
@@ -58,16 +65,24 @@ def values_file(workload: dict) -> str:
     return json.dumps({"mlz": workload}, indent=2, sort_keys=True) + "\n"
 
 
+def codeowners(organization: str, team: str) -> str:
+    """The repo's CODEOWNERS: the landing zone's team owns every file."""
+    return (f"# Who must approve a change: the landing zone's team, github.team in vending. mlz-core's vending writes\n"
+            f"# this file and keeps it as it is.\n* @{organization}/{team}\n")
+
+
 def release() -> str:
     """The release vending runs on: the one its starter's pipeline calls (release-please moves that pin each release)."""
     return PIN.search(starter()[WORKFLOW])["ref"]
 
 
-def sync(github, configs: Path, out: Callable[[str], None] = print) -> None:
+def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: str | None = None) -> None:
     """For each landing zone whose repo vending makes (configs: the folder of <key>.json that python3 -m mlz vending
-    writes), the starter once and the values whenever they change, then the pull request to vending's release when the
-    repo's pipeline is on an older one."""
+    writes), the starter once and the values and code owners whenever they change, the rule on main, then the pull
+    request to vending's release when the repo's pipeline is on an older one. app_slug: the MLZ App's, whose commits
+    the rule lets through; without it no rule is made, since it would refuse them."""
     releases: dict[str, str] = {}
+    app_id = None
     for path in sorted(configs.glob("*.json")):
         config = json.loads(path.read_text())
         github_config, workload = config.get("github") or {}, config.get("workload")
@@ -98,15 +113,65 @@ def sync(github, configs: Path, out: Callable[[str], None] = print) -> None:
         elif values != want:
             files, message = {VALUES: want}, "chore: the landing zone's values, from vending"
         else:
-            files = {}
+            files, message = {}, "chore: the landing zone's code owners, from vending"
+        owners = codeowners(github_config["organization"], github_config["team"]) if github_config.get("team") else None
+        if owners and github.file(repo, CODEOWNERS, head)[0] != owners:
+            files[CODEOWNERS] = owners
         if files:
             github.commit_files(repo, BRANCH, head, files, message)
             out(f"{repo}: {', '.join(sorted(files))}")
-        # Its values reach main whatever happens to the upgrade: a failure there is reported, and the next repo goes on.
+        # Its values reach main whatever happens to the rule or the upgrade: a failure there is reported, and the next
+        # repo goes on.
         try:
+            if app_slug and app_id is None:
+                app_id = github.app_id(app_slug)
+            protect(github, repo, github_config, app_id, out)
             offer_upgrade(github, repo, releases, out)
         except ConfigError as error:
             out(f"::warning::{repo}: no upgrade pull request: {error}")
+
+
+def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[str], None] = print) -> None:
+    """The rule on main, as the role repos have it (tools/mlz/install.py): the ruleset main, a pull request with a code
+    owner's approval, the bypass team merging without it; main-checks, the pipeline's plan passed on a branch up to
+    date with main, which nobody but the MLZ App may bypass. The bypass team gets write access, without which its
+    bypass is no use. A ruleset of either name the repo has already is left as it is, and said when it is not
+    vending's."""
+    if app_id is None:
+        out(f"::warning::{repo}: no rule on main: the MLZ App's ID is not known (MLZ_APP_SLUG), and the rule would refuse its commits of the values.")
+        return
+    organization, bypass = config["organization"], config.get("bypass_team")
+    team = github.team(organization, bypass) if bypass else None
+    if not bypass:
+        out(f"::warning::{repo}: governance's contract names no bypass team yet (bootstrap.yaml's github.bypass_team), so nobody may "
+            "merge into main without a code owner's approval.")
+    elif team is None:
+        out(f"::warning::{repo}: the bypass team {organization}/{bypass} is not there: no bypass on main's approval.")
+    elif not github.team_can_write(organization, bypass, repo):
+        github.grant_team(organization, bypass, repo)
+        out(f"{repo}: {organization}/{bypass} may write, for its bypass of main's approval")
+    wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id), install.checks_ruleset("workload", app_id, CHECK)]
+    found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
+    for ruleset in wanted:
+        if ruleset["name"] not in found:
+            github.add_ruleset(repo, ruleset)
+            out(f"{repo}: " + ("ruleset main: pull requests only, a code owner's approval" + (f", {organization}/{bypass} may merge without it" if team else "")
+                               if ruleset["name"] == "main" else
+                               f"ruleset {install.CHECKS_RULESET}: {CHECK} must pass, on a branch up to date with main, before any merge into main; "
+                               "nobody but the MLZ App may bypass it, for its commits of the landing zone's values"))
+        elif not same_ruleset(found[ruleset["name"]], ruleset):
+            out(f"{repo}: has a ruleset named {ruleset['name']} that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)")
+
+
+def same_ruleset(found: dict, wanted: dict) -> bool:
+    """Whether a ruleset GitHub holds is the one wanted: its target, enforcement, bypass actors and conditions, and
+    each rule with at least the parameters wanted (GitHub adds others of its own)."""
+    def actors(ruleset):
+        return sorted((a.get("actor_id"), a.get("actor_type"), a.get("bypass_mode")) for a in ruleset.get("bypass_actors") or [])
+    rules = {rule["type"]: rule.get("parameters") or {} for rule in found.get("rules") or []}
+    return (all(found.get(key) == wanted.get(key) for key in ("target", "enforcement", "conditions")) and actors(found) == actors(wanted)
+            and set(rules) == {rule["type"] for rule in wanted["rules"]}
+            and all(all(rules[rule["type"]].get(k) == v for k, v in (rule.get("parameters") or {}).items()) for rule in wanted["rules"]))
 
 
 def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[str], None] = print) -> str | None:

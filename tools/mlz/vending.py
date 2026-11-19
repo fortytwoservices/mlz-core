@@ -625,7 +625,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 "dns_servers": region["dns_servers"],
                 "routes": route_table_routes(region.get("spoke_routes") or []),
             },
-            "github": github_config(lz, names[key]),
+            "github": github_config(lz, names[key], governance),
             "decommission": decommissioned(lz),
             "names": names[key],
             # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
@@ -710,14 +710,17 @@ def creates_repo(lz: dict) -> bool:
     return isinstance(github, dict) and bool(github.get("organization")) and github.get("repo") is None and github.get("create") is not False
 
 
-def github_config(lz: dict, names: dict) -> dict | None:
-    """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None."""
+def github_config(lz: dict, names: dict, governance: dict | None = None) -> dict | None:
+    """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None.
+    For one vending makes, governance's bypass team too (bootstrap.yaml's), which tools/mlz/workload.py gives its rules."""
     github = lz["settings"].get("github")
     if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
         return None  # check() reports a github that is not a group of settings
     repo = github["repo"] if github.get("repo") is not None else names.get(REPOSITORY)  # '' or false: check() reports it
-    return {"organization": github["organization"], "repo": repo, "create": creates_repo(lz), "team": github.get("team"),
-            "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending."}
+    made = creates_repo(lz)
+    return {"organization": github["organization"], "repo": repo, "create": made, "team": github.get("team"),
+            "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending.",
+            **({"bypass_team": ((governance or {}).get("github") or {}).get("bypass_team")} if made else {})}
 
 
 def short_name(lz: dict) -> str:
