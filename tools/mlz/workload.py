@@ -141,17 +141,16 @@ def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[st
     changes, kept = upgrade_files(github, repo, head, called, current)
     body = upgrade_body(current, target, releases, changes, kept, naming_pins(github, repo, head, changes, target))
     # The commit is made on a branch of its own at that commit, then the pull request's branch moves straight onto it:
-    # a pull request whose branch stood on main for a moment would be closed by GitHub.
+    # a pull request whose branch stood on main for a moment would be closed by GitHub. An open one gets this release's
+    # title and notes first: should that fail, its branch has not moved, and the next run tries both again.
     github.commit_files(repo, BUILD_BRANCH, github.reset_branch(repo, BUILD_BRANCH, BRANCH, at=head), changes, title)
-    github.reset_branch(repo, UPGRADE_BRANCH, BRANCH, at=github.head(repo, BUILD_BRANCH))
-    github.delete_branch(repo, BUILD_BRANCH)
-    if latest and latest["state"] == "open":
-        # The pull request to an older release, still open: the same one moves on to this release.
+    moving = latest and latest["state"] == "open"
+    if moving:
         github.update_pull(repo, latest["number"], title, body)
-        out(f"{repo}: {current} -> {target}, in {latest['html_url']}")
-        return latest["html_url"]
-    url = github.create_pull(repo, UPGRADE_BRANCH, BRANCH, title, body)
-    out(f"{repo}: {current} -> {target}: {url}")
+    github.reset_branch(repo, UPGRADE_BRANCH, BRANCH, at=github.head(repo, BUILD_BRANCH))
+    url = latest["html_url"] if moving else github.create_pull(repo, UPGRADE_BRANCH, BRANCH, title, body)
+    github.delete_branch(repo, BUILD_BRANCH)
+    out(f"{repo}: {current} -> {target}, in {url}" if moving else f"{repo}: {current} -> {target}: {url}")
     return url
 
 
