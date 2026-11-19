@@ -64,8 +64,8 @@ vending:
     user_managed_identities.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     user_managed_identities.resource_group_name_existing: {class: derived, by: "the landing zone's identity resource group"}
     user_managed_identities.location: {class: setting, key: location, config: location}
-    user_managed_identities.tags: {class: derived, by: "Workload and Environment (the file's place) and ManagedBy only: a tag change must not update the identities, whose role assignments are named from their principal IDs"}
-    user_managed_identities.role_assignments: {class: fixed, value: {plan: Reader, deploy: Contributor}, why: "on the landing zone's subscription: the platform team runs every pipeline (decision D2)"}
+    user_managed_identities.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
+    user_managed_identities.role_assignments: {class: fixed, value: {}, why: "vending gives the identities their roles itself (identity_role: plan Reader, deploy Contributor, on the landing zone's subscription, decision D2), named from each identity's resource ID: sub-vending names its from the principal ID, which a tag change leaves unknown until the apply, and would replace them"}
     user_managed_identities.federated_credentials_advanced: {class: derived, by: "the workload repo's GitHub subjects, by ID: its pull requests and main for plan, its apply environment for deploy"}
     user_managed_identities.federated_credentials_github: {class: closed, why: "the identities trust GitHub's immutable subjects, through federated_credentials_advanced"}
     user_managed_identities.federated_credentials_terraform_cloud: {class: closed, why: "the workload repo runs on GitHub"}

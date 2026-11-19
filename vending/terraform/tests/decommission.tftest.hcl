@@ -32,12 +32,6 @@ run "live" {
   variables {
     config_file = "tests/live.json"
   }
-  # Only the tags that never change for a landing zone: a tag change must not update the identities, whose role
-  # assignments are named from their principal IDs.
-  assert {
-    condition     = local.identity_tags == { for key in ["Workload", "Environment", "ManagedBy"] : key => local.lz.tags[key] } && length(local.lz.tags) > 3
-    error_message = "The identities carry only the landing zone's Workload, Environment and ManagedBy tags."
-  }
   assert {
     condition     = length(azapi_resource.resource_group) == 2 && length(module.route_table) == 1
     error_message = "A live landing zone has its two resource groups and its route table."
@@ -55,8 +49,8 @@ run "live" {
     error_message = "The workload repo's state account is in a group of its own, named from the config."
   }
   assert {
-    condition     = toset(keys(azapi_resource.state_role)) == toset(["plan", "deploy"])
-    error_message = "The plan identity reads the state and the deploy identity writes it."
+    condition     = toset(keys(azapi_resource.identity_role)) == toset(["plan/subscription", "deploy/subscription", "plan/state", "deploy/state"])
+    error_message = "Each identity has its role on the subscription and on the state's container."
   }
   assert {
     condition     = length(azapi_resource.state_exemption) == 0
@@ -65,6 +59,54 @@ run "live" {
   assert {
     condition     = output.landing_zone.subscription_id == "00000000-0000-0000-0000-000000000010" && azapi_resource.resource_group["network"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000010" && length(azapi_resource_action.subscription) == 0
     error_message = "A subscription handed over is the one the landing zone's resources go in, and vending makes none."
+  }
+}
+
+# A landing zone already applied, whose identities a tag change updates: azapi then knows their principal IDs only
+# after the apply, so the role assignments' names come from what stays known, the scope and the identity's resource
+# ID. Named from a principal ID, as sub-vending names its own, they would be replaced on every tag change, the
+# identities without their roles meanwhile. Sub-vending's outputs are given here, as such a landing zone has them.
+run "identity_roles_named_from_ids" {
+  command = plan
+  variables {
+    config_file = "tests/live.json"
+  }
+  override_module {
+    target = module.vending
+    outputs = {
+      umi_resource_ids = {
+        plan   = "/subscriptions/00000000-0000-0000-0000-000000000010/resourceGroups/rg-acme-pay-id-pd-nwe-01/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-acme-pay-plan-pd-nwe-01"
+        deploy = "/subscriptions/00000000-0000-0000-0000-000000000010/resourceGroups/rg-acme-pay-id-pd-nwe-01/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-acme-pay-pd-nwe-01"
+      }
+      umi_principal_ids            = { plan = "00000000-0000-0000-0000-0000000000a1", deploy = "00000000-0000-0000-0000-0000000000a2" }
+      umi_client_ids               = { plan = "00000000-0000-0000-0000-0000000000b1", deploy = "00000000-0000-0000-0000-0000000000b2" }
+      virtual_network_resource_ids = { spoke = "/subscriptions/00000000-0000-0000-0000-000000000010/resourceGroups/rg-acme-pay-net-pd-nwe-01/providers/Microsoft.Network/virtualNetworks/vnet-acme-pay-pd-nwe-01" }
+    }
+  }
+  override_resource {
+    target          = azapi_resource.state_container
+    values          = { id = "/subscriptions/00000000-0000-0000-0000-000000000010/resourceGroups/rg-acme-pay-state-pd-nwe-01/providers/Microsoft.Storage/storageAccounts/stacmepaystatepdnwe01/blobServices/default/containers/tfstate" }
+    override_during = plan
+  }
+  assert {
+    condition = alltrue([for key, role in azapi_resource.identity_role :
+      role.name == uuidv5("url", "mlz-core/${role.parent_id}/${module.vending.umi_resource_ids[split("/", key)[0]]}")
+    ])
+    error_message = "Each role assignment is named from its scope and its identity's resource ID, never from the principal ID."
+  }
+  assert {
+    condition = alltrue([for key, role in azapi_resource.identity_role :
+      role.body.properties.principalId == module.vending.umi_principal_ids[split("/", key)[0]] && role.body.properties.principalType == "ServicePrincipal"
+    ])
+    error_message = "Each role assignment is given to its own identity's principal."
+  }
+  assert {
+    condition     = azapi_resource.identity_role["plan/subscription"].parent_id == "/subscriptions/00000000-0000-0000-0000-000000000010" && endswith(azapi_resource.identity_role["plan/subscription"].body.properties.roleDefinitionId, "/acdd72a7-3385-48ef-bd42-f606fba81ae7") && endswith(azapi_resource.identity_role["deploy/subscription"].body.properties.roleDefinitionId, "/b24988ac-6180-42a0-ab88-20f7382dd24c")
+    error_message = "On the subscription, the plan identity is Reader and the deploy identity Contributor."
+  }
+  assert {
+    condition     = endswith(azapi_resource.identity_role["plan/state"].parent_id, "/containers/tfstate") && endswith(azapi_resource.identity_role["plan/state"].body.properties.roleDefinitionId, "/2a2b9908-6ea1-4ae2-8e65-a410df84e7d1") && endswith(azapi_resource.identity_role["deploy/state"].body.properties.roleDefinitionId, "/ba92f5b4-2d11-453d-a403-e96b0029c9fe")
+    error_message = "On the state's container, the plan identity reads (Storage Blob Data Reader) and the deploy identity writes (Storage Blob Data Contributor)."
   }
 }
 
@@ -134,7 +176,7 @@ run "decommissioned" {
     error_message = "A decommissioned landing zone's output has no identity or network."
   }
   assert {
-    condition     = azapi_resource.state.name == "stacmepaystatepdnwe01" && length(azapi_resource.state_role) == 0
+    condition     = azapi_resource.state.name == "stacmepaystatepdnwe01" && length(azapi_resource.identity_role) == 0
     error_message = "A decommissioned landing zone keeps its state account, without the roles of the identities that went."
   }
 }

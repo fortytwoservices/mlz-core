@@ -9,12 +9,6 @@ locals {
   names           = local.lz.names
   github          = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
 
-  # The identities' tags: only those that never change for a landing zone (its key gives Workload and Environment).
-  # A tag change updates an identity, azapi then knows its principal ID only after the apply, and every role
-  # assignment named from that ID (sub-vending's, and state_role below) would be replaced, the identities without
-  # their rights meanwhile.
-  identity_tags = { for key, value in local.lz.tags : key => value if contains(["Workload", "Environment", "ManagedBy"], key) }
-
   # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
   # the NSGs, the route table, the deploy identity and its role, the budget and the two resource groups (with
   # anything else in them) are destroyed, and the subscription goes to Decommissioned (its management group
@@ -267,27 +261,38 @@ resource "azapi_resource" "state_container" {
   body      = { properties = { publicAccess = "None" } }
 }
 
-# The plan identity reads the state, the deploy identity writes it: on the container only.
-resource "azapi_resource" "state_role" {
-  for_each = {
-    for identity, role in {
-      plan   = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1" # Storage Blob Data Reader
-      deploy = "ba92f5b4-2d11-453d-a403-e96b0029c9fe" # Storage Blob Data Contributor
-    } : identity => role if !local.decommission
+# The identities' roles, given here rather than by sub-vending: the plan identity reads the subscription and the state's
+# container, the deploy identity changes the subscription and writes the state.
+resource "azapi_resource" "identity_role" {
+  for_each = local.decommission ? {} : {
+    "plan/subscription"   = { identity = "plan", scope = local.subscription, role = "acdd72a7-3385-48ef-bd42-f606fba81ae7" }                  # Reader
+    "deploy/subscription" = { identity = "deploy", scope = local.subscription, role = "b24988ac-6180-42a0-ab88-20f7382dd24c" }                # Contributor
+    "plan/state"          = { identity = "plan", scope = azapi_resource.state_container.id, role = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1" }   # Storage Blob Data Reader
+    "deploy/state"        = { identity = "deploy", scope = azapi_resource.state_container.id, role = "ba92f5b4-2d11-453d-a403-e96b0029c9fe" } # Storage Blob Data Contributor
   }
 
   type = "Microsoft.Authorization/roleAssignments@2022-04-01"
-  # Unique in the tenant, as Azure needs: the container and the principal, so a replaced identity gets a new assignment
-  # (an assignment's principal never changes).
-  name      = uuidv5("url", "mlz-core/${azapi_resource.state_container.id}/${module.vending.umi_principal_ids[each.key]}")
-  parent_id = azapi_resource.state_container.id
+  # Unique in the tenant, as Azure needs: the scope and the identity's resource ID, never its principal ID. A tag change
+  # updates an identity, and azapi knows its principal ID only after the apply: a name made from it would replace the
+  # assignment, the identity without its role meanwhile. The ID stays known, and the assignment is put again
+  # unchanged, which Azure accepts (checked 19 November 2026). A replaced identity's ID is known only after the apply,
+  # so its assignments are replaced with it (an assignment's principal never changes).
+  name      = uuidv5("url", "mlz-core/${each.value.scope}/${module.vending.umi_resource_ids[each.value.identity]}")
+  parent_id = each.value.scope
   body = {
     properties = {
       # A role's ID in the subscription's own form, as Azure stores it there: plans stay clean.
-      roleDefinitionId = "${local.subscription}/providers/Microsoft.Authorization/roleDefinitions/${each.value}"
-      principalId      = module.vending.umi_principal_ids[each.key]
+      roleDefinitionId = "${local.subscription}/providers/Microsoft.Authorization/roleDefinitions/${each.value.role}"
+      principalId      = module.vending.umi_principal_ids[each.value.identity]
       principalType    = "ServicePrincipal"
     }
+  }
+  # PrincipalNotFound: a new identity takes a while to reach every Entra replica. RoleAssignmentExists: the same role
+  # under another name, deleted in the same apply, as sub-vending's were on the upgrade from mlz-core v0.11.
+  retry = { error_message_regex = ["PrincipalNotFound", "RoleAssignmentExists"] }
+
+  timeouts {
+    create = "10m"
   }
 }
 
@@ -461,10 +466,7 @@ module "vending" {
       name                         = local.names.plan_identity
       resource_group_name_existing = azapi_resource.resource_group["identity"].name
       location                     = local.lz.location
-      tags                         = local.identity_tags
-      role_assignments = {
-        reader = { definition = "Reader" }
-      }
+      tags                         = local.lz.tags
       # Its pull requests, and main, where every run plans too before the apply (.github/workflows/workload.yml).
       federated_credentials_advanced = local.subject == null ? {} : {
         pull_request = {
@@ -484,10 +486,7 @@ module "vending" {
       name                         = local.names.deploy_identity
       resource_group_name_existing = azapi_resource.resource_group["identity"].name
       location                     = local.lz.location
-      tags                         = local.identity_tags
-      role_assignments = {
-        contributor = { definition = "Contributor" }
-      }
+      tags                         = local.lz.tags
       federated_credentials_advanced = local.subject == null ? {} : {
         apply = {
           name               = "github-environment-apply"
