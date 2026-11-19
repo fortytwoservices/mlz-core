@@ -411,11 +411,12 @@ def problems(snapshot: dict, maps: dict[str, dict]) -> list[str]:
             if section.get("file") is not None and section["file"] not in FILES:
                 found.append(f"{at}: file {section['file']!r} is not one of {', '.join(FILES)}")
             paths = call["inputs"]
-            if not isinstance(section.get("inputs") or {}, dict):
+            # Absent or empty (null) is none; anything else that is not a mapping is a mistake, [] and false too.
+            if section.get("inputs") is not None and not isinstance(section["inputs"], dict):
                 found.append(f"{at}: inputs maps each input's path to its entry")
                 continue
             entries = {path: entry(value) for path, value in (section.get("inputs") or {}).items()}
-            if not isinstance(section.get("notes") or {}, dict):
+            if section.get("notes") is not None and not isinstance(section["notes"], dict):
                 found.append(f"{at}: notes maps an input's path to a note")
             else:
                 found += [f"{at}: notes.{path} is no input of the module" for path in (section.get("notes") or {}) if path not in paths]
