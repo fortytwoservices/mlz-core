@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Editor help for this repo's YAML in JetBrains IDEs: the schemas of the mlz-core release this repo runs, as
+     .vscode/settings.json gives them to VS Code. A JetBrains mask's * also crosses folders. The file belongs to
+     mlz-core: an upgrade (python3 -m mlz upgrade) replaces it with the new release's version. -->
+<project version="4">
+  <component name="JsonSchemaMappingsProjectConfiguration">
+    <state>
+      <map>
+        <entry key="mlz-core connectivity">
+          <value>
+            <SchemaInfo>
+              <option name="name" value="mlz-core connectivity" />
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/connectivity.schema.json" /> <!-- x-release-please-version -->
+              <option name="schemaVersion" value="JSON Schema 7" />
+              <option name="patterns">
+                <list>
+                  <Item>
+                    <option name="path" value="connectivity/*.yaml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                  <Item>
+                    <option name="path" value="connectivity/*.yml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                </list>
+              </option>
+            </SchemaInfo>
+          </value>
+        </entry>
+        <entry key="mlz-core firewall-rules">
+          <value>
+            <SchemaInfo>
+              <option name="name" value="mlz-core firewall-rules" />
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/firewall-rules.schema.json" /> <!-- x-release-please-version -->
+              <option name="schemaVersion" value="JSON Schema 7" />
+              <option name="patterns">
+                <list>
+                  <Item>
+                    <option name="path" value="firewall-rules/*.yaml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                  <Item>
+                    <option name="path" value="firewall-rules/*.yml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                </list>
+              </option>
+            </SchemaInfo>
+          </value>
+        </entry>
+        <entry key="mlz-core network">
+          <value>
+            <SchemaInfo>
+              <option name="name" value="mlz-core network" />
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.12.0/schemas/network.schema.json" /> <!-- x-release-please-version -->
+              <option name="schemaVersion" value="JSON Schema 7" />
+              <option name="patterns">
+                <list>
+                  <Item>
+                    <option name="path" value="management/*.yaml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                  <Item>
+                    <option name="path" value="management/*.yml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                  <Item>
+                    <option name="path" value="identity/*.yaml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                  <Item>
+                    <option name="path" value="identity/*.yml" />
+                    <option name="mappingKind" value="Pattern" />
+                  </Item>
+                </list>
+              </option>
+            </SchemaInfo>
+          </value>
+        </entry>
+      </map>
+    </state>
+  </component>
+</project>

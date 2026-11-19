@@ -9,11 +9,13 @@ from pathlib import Path
 
 from mlz import mirror
 from mlz.merge import ConfigError
-from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, WRAPPER, breaking_changes, pin_of, releases_between, role_of, upgrade, version
+from mlz.upgrade import (GITIGNORE, OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, WRAPPER, breaking_changes, gitignore_with, pin_of, releases_between,
+                         role_of, upgrade, version)
 
 STARTERS = Path(__file__).resolve().parents[2] / "starter"
 CORE = "fortytwoservices/mlz-core"
 EDITOR = (".vscode/settings.json", ".vscode/extensions.json")
+JETBRAINS = ".idea/jsonSchemas.xml"
 
 
 def caller(role: str, ref: str, core: str = CORE) -> str:
@@ -40,7 +42,7 @@ def editor(role: str, path: str, tag: str) -> str:
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
                  editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False,
-                 wrapper_from: str | None = None, push_rulesets: list | None = None):
+                 wrapper_from: str | None = None, push_rulesets: list | None = None, jetbrains_from: str | None = None):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -51,6 +53,9 @@ class FakeGitHub:
                 if version(tag) and version(tag) >= version(editor_from):  # the editor settings came with editor_from
                     for path in EDITOR:
                         self.files[(CORE, f"starter/mlz-{role}/{path}", tag)] = (editor(role, path, tag), f"sha-{tag}")
+                if jetbrains_from and version(tag) and version(tag) >= version(jetbrains_from):  # and JetBrains' with jetbrains_from
+                    self.files[(CORE, f"starter/mlz-{role}/{JETBRAINS}", tag)] = (editor(role, JETBRAINS, tag), f"sha-{tag}")
+                    self.files[(CORE, f"starter/mlz-{role}/{GITIGNORE}", tag)] = ((STARTERS / f"mlz-{role}" / GITIGNORE).read_text(), f"sha-{tag}")
                 if wrapper_from and version(tag) and version(tag) >= version(wrapper_from):  # ./mlz came with wrapper_from
                     self.files[(CORE, f"starter/mlz-{role}/{WRAPPER}", tag)] = ((STARTERS / f"mlz-{role}" / WRAPPER).read_text(), f"sha-{tag}")
         self._releases = releases
@@ -214,6 +219,44 @@ class UpgradeTest(unittest.TestCase):
         github = FakeGitHub(caller("governance", "v0.1.5"), {"v0.1.5": notes("v0.1.5"), "v0.1.6": notes("v0.1.6")}, repo_files=own)
         self.run_upgrade(github)
         self.assertEqual(set(github.writes[1][4]), {WORKFLOW})  # neither release has editor settings
+
+    def test_a_release_with_jetbrains_settings_adds_them_and_a_gitignore(self):
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, jetbrains_from="v0.1.8")
+        self.run_upgrade(github)
+        files, body = github.writes[1][4], github.writes[2][5]
+        self.assertIn("/mlz-core/v0.1.8/schemas/customer.schema.json", files[JETBRAINS])
+        self.assertNotIn("x-release-please", files[JETBRAINS])
+        self.assertEqual(files[GITIGNORE], (STARTERS / "mlz-governance" / GITIGNORE).read_text())
+        self.assertIn(JETBRAINS, OWNED)
+        self.assertNotIn(GITIGNORE, OWNED)  # the customer's file, which only ever gets lines
+        self.assertIn("`.vscode/extensions.json`, `.idea/jsonSchemas.xml`. If this repo", body)  # replaced: not the .gitignore
+        self.assertIn("`.gitignore` gets the starter's lines it lacks", body)
+
+    def test_the_repo_s_own_gitignore_only_gets_the_lines_it_lacks(self):
+        ours = (STARTERS / "mlz-governance" / GITIGNORE).read_text()
+        for own, expected in ((".terraform/\n", ".terraform/\n\n" + ours),
+                              (".terraform/", ".terraform/\n\n" + ours),  # no newline at its end
+                              ("\n", ours),
+                              ("/.idea/*\n.terraform/\n", "/.idea/*\n.terraform/\n\n" + "".join(l + "\n" for l in ours.splitlines() if l != "/.idea/*")),
+                              (ours, None), ("node_modules/\n" + ours.replace("\n", "\r\n"), None)):
+            with self.subTest(own=own):
+                self.assertEqual(gitignore_with(own, ours), expected)
+        self.assertEqual(gitignore_with(None, ours), ours)
+        # On the target already: the pull request leaves the file out.
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.8")) for path in (*EDITOR, JETBRAINS)}
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, jetbrains_from="v0.1.8",
+                            repo_files={**current, GITIGNORE: "*.tfplan\n" + ours})
+        self.run_upgrade(github)
+        self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
+
+    def test_going_back_before_the_jetbrains_settings_removes_them_and_leaves_the_gitignore(self):
+        ours = (STARTERS / "mlz-governance" / GITIGNORE).read_text()
+        current = {JETBRAINS: editor("governance", JETBRAINS, "v0.1.8"), GITIGNORE: ours}
+        github = FakeGitHub(caller("governance", "v0.1.8"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, jetbrains_from="v0.1.8")
+        self.run_upgrade(github, target="v0.1.7")
+        files = github.writes[1][4]
+        self.assertIsNone(files[JETBRAINS])
+        self.assertNotIn(GITIGNORE, files)
 
     def test_defaults_to_the_latest_release(self):
         github = FakeGitHub(caller("governance", "v0.1.5"), {t: notes(t) for t in ("v0.1.5", "v0.1.10", "v0.1.9")})

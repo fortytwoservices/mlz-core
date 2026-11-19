@@ -34,11 +34,23 @@
         },
         {
           "type": "generic",
+          "path": "starter/mlz-governance/.idea/jsonSchemas.xml"
+        },
+        {
+          "type": "generic",
           "path": "starter/mlz-platform/.vscode/settings.json"
         },
         {
           "type": "generic",
+          "path": "starter/mlz-platform/.idea/jsonSchemas.xml"
+        },
+        {
+          "type": "generic",
           "path": "starter/mlz-vending/.vscode/settings.json"
+        },
+        {
+          "type": "generic",
+          "path": "starter/mlz-vending/.idea/jsonSchemas.xml"
         },
         {
           "type": "generic",

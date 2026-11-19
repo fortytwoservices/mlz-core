@@ -526,6 +526,15 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("customer.yaml", added)  # already there: never replaced
         self.assertIn("bootstrap.yaml", added)
 
+    def test_an_adopted_repo_s_own_gitignore_keeps_its_lines_and_gets_the_starter_s(self):
+        own = ("acme/mlz-governance", ".gitignore")
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={own: (".terraform/\n*.tfstate\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        added = github.commits[0][3]
+        self.assertIn(".idea/jsonSchemas.xml", added)
+        self.assertTrue(added[".gitignore"].startswith(".terraform/\n*.tfstate\n\n# JetBrains"), added[".gitignore"])
+        self.assertTrue(added[".gitignore"].endswith("/.idea/*\n!/.idea/jsonSchemas.xml\n"), added[".gitignore"])
+
     def test_an_adopted_repo_on_another_default_branch_is_named(self):
         install.step_repos(FakeGitHub(existing=REPOS.values(), existing_branch="master"), self.folder, self.out)
         self.assertIn("acme/mlz-platform: its default branch is master, but the pipelines run on main; rename it", self.printed)

@@ -34,7 +34,10 @@ PIPELINE_FILES = ".github/**/*"
 # The files in a customer repo that belong to mlz-core, which an upgrade replaces with the target release's
 # starter: the workflow, the editor settings pointing at that release's schemas, and ./mlz. A release from before
 # the editor settings, or before ./mlz, does not have them, so going back to one removes them.
-OWNED = (WORKFLOW, ".vscode/settings.json", ".vscode/extensions.json", WRAPPER)
+OWNED = (WORKFLOW, ".vscode/settings.json", ".vscode/extensions.json", ".idea/jsonSchemas.xml", WRAPPER)
+# The repo's .gitignore is the customer's, but for the lines that let JetBrains' schema mappings through: those are
+# added when missing, and nothing else in the file is ever changed or taken away (gitignore_with).
+GITIGNORE = ".gitignore"
 # Of those, the ones a person runs: executable (GitHub.make_executable), which the commit that writes them cannot do.
 EXECUTABLE = (WRAPPER,)
 PIN = re.compile(r"uses:\s*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflows/role\.yml@(?P<ref>[^\s#]+)")
@@ -43,7 +46,7 @@ RELEASE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 # release-please's marker for mlz-core's own release pull requests; it means nothing in a customer's repo.
 # release-please's marker on a line it moves to each release (# in YAML, // in the editor settings), which a
 # customer repo's copy goes without.
-RELEASE_PLEASE_MARKER = re.compile(r"[ \t]*(#|//) x-release-please-version[ \t]*$", re.M)
+RELEASE_PLEASE_MARKER = re.compile(r"[ \t]*(#|//|<!--) x-release-please-version( -->)?[ \t]*$", re.M)
 
 
 def version(ref: str) -> tuple[int, int, int] | None:
@@ -65,6 +68,20 @@ def role_of(workflow: str) -> str:
     if not match:
         raise ConfigError(f"{WORKFLOW} names no role (governance, platform or vending).")
     return match["role"]
+
+
+def gitignore_with(current: str | None, starter: str) -> str | None:
+    """The repo's .gitignore with the starter's lines it lacks appended, comments included once; None when it has them
+    all. Never changes or removes a line the repo has."""
+    rules = [line for line in starter.splitlines() if line.strip() and not line.startswith("#")]
+    if current is None or not current.strip():
+        return starter
+    have = {line.strip() for line in current.splitlines()}
+    if all(rule in have for rule in rules):
+        return None
+    comments = [line for line in starter.splitlines() if line.startswith("#")]
+    added = [line for line in comments if line.strip() not in have] + [rule for rule in rules if rule not in have]
+    return current + ("" if current.endswith("\n") or not current else "\n") + "\n" + "\n".join(added) + "\n"
 
 
 def matches(pattern: str, path: str) -> bool:
@@ -150,14 +167,16 @@ def render_body(repo: str, role: str, current: str, target: str, releases: dict[
     back = version(current) is not None and version(target) < version(current)
     breaking = [entry for tag in tags for entry in breaking_changes(releases[tag])]
     paths = paths if paths is not None else {WORKFLOW: ""}
-    replaced = ", ".join(f"`{p}`" for p, text in paths.items() if text is not None)
+    replaced = ", ".join(f"`{p}`" for p, text in paths.items() if text is not None and p != GITIGNORE)
     removed = ", ".join(f"`{p}`" for p, text in paths.items() if text is None)
     lines = [
         f"Moves this repo's pipeline {'back ' if back else ''}from mlz-core `{current}` to `{target}`.",
         "",
         f"**What changes:** the files that belong to mlz-core are replaced by the `{target}` starter for the {role} "
         f"role: {replaced}." + (f" {removed}, which `{target}` does not have, {'is' if ',' not in removed else 'are'} removed." if removed else "")
-        + " If this repo had changed them, the diff shows it: settings belong in the YAML files.",
+        + " If this repo had changed them, the diff shows it: settings belong in the YAML files."
+        + (f" `{GITIGNORE}` gets the starter's lines it lacks, which keep JetBrains' own files in `.idea/` out of the repo; "
+           "every line it has stays." if paths.get(GITIGNORE) else ""),
         "",
         "## Before you merge",
         "",
@@ -270,6 +289,13 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
         if after != before[path]:
             changes[path] = after
+    # The target's .gitignore lines, appended where missing; going back to a release without them leaves them.
+    starter_ignore, _ = github.file(source, f"starter/mlz-{role}/{GITIGNORE}", target)
+    if starter_ignore is not None:
+        before[GITIGNORE] = github.file(repo, GITIGNORE, base)[0]
+        ignore = gitignore_with(before[GITIGNORE], starter_ignore)
+        if ignore is not None:
+            changes[GITIGNORE] = ignore
     title = f"chore: mlz-core {target}"
     body = render_body(repo, role, current, target, releases, releases_between(releases, current, target), changes)
     if dry_run:
