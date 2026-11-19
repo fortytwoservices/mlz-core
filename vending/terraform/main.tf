@@ -9,6 +9,12 @@ locals {
   names           = local.lz.names
   github          = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
 
+  # The identities' tags: only those that never change for a landing zone (its key gives Workload and Environment).
+  # A tag change updates an identity, azapi then knows its principal ID only after the apply, and every role
+  # assignment named from that ID (sub-vending's, and state_role below) would be replaced, the identities without
+  # their rights meanwhile.
+  identity_tags = { for key, value in local.lz.tags : key => value if contains(["Workload", "Environment", "ManagedBy"], key) }
+
   # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
   # the NSGs, the route table, the deploy identity and its role, the budget and the two resource groups (with
   # anything else in them) are destroyed, and the subscription goes to Decommissioned (its management group
@@ -455,7 +461,7 @@ module "vending" {
       name                         = local.names.plan_identity
       resource_group_name_existing = azapi_resource.resource_group["identity"].name
       location                     = local.lz.location
-      tags                         = local.lz.tags
+      tags                         = local.identity_tags
       role_assignments = {
         reader = { definition = "Reader" }
       }
@@ -478,7 +484,7 @@ module "vending" {
       name                         = local.names.deploy_identity
       resource_group_name_existing = azapi_resource.resource_group["identity"].name
       location                     = local.lz.location
-      tags                         = local.lz.tags
+      tags                         = local.identity_tags
       role_assignments = {
         contributor = { definition = "Contributor" }
       }

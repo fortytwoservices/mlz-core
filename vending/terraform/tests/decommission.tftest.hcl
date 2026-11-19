@@ -32,6 +32,12 @@ run "live" {
   variables {
     config_file = "tests/live.json"
   }
+  # Only the tags that never change for a landing zone: a tag change must not update the identities, whose role
+  # assignments are named from their principal IDs.
+  assert {
+    condition     = local.identity_tags == { for key in ["Workload", "Environment", "ManagedBy"] : key => local.lz.tags[key] } && length(local.lz.tags) > 3
+    error_message = "The identities carry only the landing zone's Workload, Environment and ManagedBy tags."
+  }
   assert {
     condition     = length(azapi_resource.resource_group) == 2 && length(module.route_table) == 1
     error_message = "A live landing zone has its two resource groups and its route table."
