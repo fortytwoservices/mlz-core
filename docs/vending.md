@@ -278,15 +278,28 @@ way, so its workflows sign in from its `apply` environment and its pull requests
   and every push to `main` plans, as the plan identity, from a read-only copy of the state; on `main` the apply then
   waits for the team in `apply`, and applies, as the deploy identity, only the changes that plan showed. The scripts
   are the role repos' own (`tools/ci/plan.sh`, `apply.sh`).
-- `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with an example named through
-  mlz-core's naming helper (`modules/naming`, `docs/naming.md`); a README.
+- `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with examples (commented out):
+  a resource group named through mlz-core's naming helper (`modules/naming`, `docs/naming.md`), and a virtual machine
+  (`az-tf-mlz-virtual-machine`) in the landing zone's app subnet with its tags; a README.
 - **`mlz.auto.tfvars.json`**: the landing zone's key, region and naming values (the customer's code, the workload's
-  short name, the environment's and region's codes, the templates). Its subscription is the one the pipeline signs in
-  to, `AZURE_SUBSCRIPTION_ID`. Vending writes it again whenever they
-  change, so a team never types them.
+  short name, the environment's and region's codes, the templates), and what the team builds on:
+  - `network`: the network's resource group, name and range, each subnet's name and range by its key in the landing
+    zone's file, and the DNS servers (the hub's). By names, not IDs: a subscription vending makes is never read back,
+    so the repo builds an ID from the subscription its pipeline signs in to (`AZURE_SUBSCRIPTION_ID`), as `main.tf`'s
+    example does;
+  - `tags`: the tags vending gives what it makes, for the team's own resources;
+  - `resource_groups` and `platform_owns`: vending's groups in the subscription (network, identity, state). Vending owns
+    them: anything changed in them, its next apply changes back. The team builds in groups of its own, and may put
+    network interfaces and private endpoints in the landing zone's subnets, nothing more. The deploy identity keeps
+    the built-in Contributor on the subscription (decision D2), so this list is the guard, not a role.
+
+  Vending writes it again whenever they change, so a team never types them.
 
 The starter goes in once, and adds only files that are not there: nothing the team wrote is replaced, and after that
-only `mlz.auto.tfvars.json` is written. None of it is in Terraform's state, so none of it is deleted when the landing
+only `mlz.auto.tfvars.json` is written. So a repo made before a release that adds a value keeps its `variables.tf`:
+Terraform drops the values its `mlz` type does not declare, without an error or a warning (checked with Terraform
+1.17.0), so nothing breaks, and the team takes the new `variable "mlz"` from `starter/mlz-workload/variables.tf` of
+that release when it wants the new values. None of it is in Terraform's state, so none of it is deleted when the landing
 zone is decommissioned and its repo archived.
 
 The workload repos are in the organization the vending repo is in: the pipeline's App tokens are for that one. The

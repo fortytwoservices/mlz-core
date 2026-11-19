@@ -666,12 +666,35 @@ class VendingTest(unittest.TestCase):
         own = {**GOVERNANCE, "naming": {"org": "dmo", "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"}}}
         self.allocate(governance=own)
         configs = build(self.repo, own, PLATFORM)
-        # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written.
-        self.assertEqual(configs["payments-prod"]["workload"], {
+        # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written; and
+        # the landing zone's network by names, its tags and the groups vending owns (docs/vending.md).
+        prod, names = configs["payments-prod"], configs["payments-prod"]["names"]
+        workload = prod["workload"]
+        self.assertEqual({k: workload[k] for k in ("landing_zone", "location", "org", "app", "env", "region", "template", "templates")}, {
             "landing_zone": "payments-prod", "location": "norwayeast",
             "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
             "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
         })
+        self.assertEqual(workload["network"], {
+            "resource_group": names["network_resource_group"], "virtual_network": names["virtual_network"],
+            "address_space": prod["network"]["address_space"],
+            "subnets": {name: {"name": f"snet-{name}", "address_prefix": prefix} for name, prefix in prod["network"]["subnets"].items()},
+            "dns_servers": prod["network"]["dns_servers"],
+        })
+        self.assertEqual(workload["tags"], prod["tags"])  # the tags vending gives what it makes
+        self.assertEqual(workload["resource_groups"], {"network": names["network_resource_group"], "identity": names["identity_resource_group"],
+                                                       "state": names["state_resource_group"]})
+        self.assertEqual(workload["platform_owns"], sorted(workload["resource_groups"].values()))
+        # The starter declares every value vending writes: Terraform would drop one it does not, without a word.
+        starter = (Path(__file__).resolve().parents[2] / "starter" / "mlz-workload" / "variables.tf").read_text()
+        declared = set(re.findall(r"^\s+([a-z_]+)\s+=", starter, re.M))
+        self.assertEqual(set(workload) - declared, set())
+        self.assertEqual(set(workload["network"]) - declared, set())
+        # And each subnet's attributes, in the subnets' own object type: the example reads subnet.name.
+        subnet_type = re.search(r"subnets = map\(object\(\{(.*?)\}\)\)", starter, re.S).group(1)
+        subnet_declared = set(re.findall(r"^\s+([a-z_]+)\s+=", subnet_type, re.M))
+        for subnet in workload["network"]["subnets"].values():
+            self.assertEqual(set(subnet) - subnet_declared, set())
         self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
         # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
         self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
