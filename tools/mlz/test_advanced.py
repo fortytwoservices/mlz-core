@@ -122,9 +122,119 @@ class AdvancedTest(unittest.TestCase):
         rows = {row[0]: row for part in explain.module_inputs("platform/terraform", config, {"region": "swedencentral"}).values() for row in part}
         self.assertEqual(rows["hub_virtual_networks.bastion.sku"][1:], ("Premium", "open: set under advanced.bastion.sku in connectivity/<region>.yaml"))
         self.assertEqual(rows["hub_virtual_networks.bastion.scale_units"][1], "2")  # not set: the module's default
-        self.assertEqual(advanced.given("platform/terraform", "connectivity", config, {"region": "norwayeast"}), {})
+        self.assertEqual(advanced.given("platform/terraform", "connectivity", config, {"region": "norwayeast"}), [])
         worked = explain.module_inputs("platform/terraform", config, {"region": "swedencentral"}, worked_out=True)["Worked out"]
         self.assertNotIn("hub_virtual_networks.bastion.sku", [row[0] for row in worked])  # the customer's, not worked out
+
+
+
+class LandingZoneTest(unittest.TestCase):
+    """A landing zone's advanced: reaches sub-vending's call: its own inputs, and its objects by vending's keys."""
+
+    def setUp(self):
+        from mlz.test_vending import DEFAULTS, PROD, WORKLOAD
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
+        self.prod = PROD + "network:\n  subnets:\n    app: 26\n"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write(self, relative: str, text: str) -> None:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def build(self, block: str = "") -> dict:
+        from mlz import vending
+        from mlz.test_vending import GOVERNANCE, PLATFORM
+        self.write("landing-zones/payments/prod.yaml", self.prod + ("advanced:\n" + block if block else ""))
+        plan, _, retired = vending.allocate(self.repo, PLATFORM)
+        self.write(vending.IP_PLAN, vending.render_plan(plan, retired))
+        self.write(vending.NAMES, vending.render_names(vending.give_names(self.repo, plan, GOVERNANCE)[0]))
+        return vending.build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]
+
+    def problems(self, block: str) -> list[str]:
+        with self.assertRaises(ConfigError) as caught:
+            self.build(block)
+        return [line.strip() for line in str(caught.exception).splitlines()[1:]]
+
+    def test_its_own_inputs_and_its_objects_by_vending_s_keys(self):
+        config = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n"
+                            "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          service_endpoints: [Microsoft.Storage]\n"
+                            "  network_security_groups:\n    app:\n      security_rules:\n        deny-rdp: {access: Deny, direction: Inbound, name: deny-rdp, priority: 200, protocol: Tcp}\n")
+        self.assertEqual(config["advanced"]["virtual_networks"]["spoke"]["subnets"]["app"], {"service_endpoints": ["Microsoft.Storage"]})
+        self.assertEqual(config["advanced"]["role_assignments"]["readers"]["definition"], "Reader")
+
+    def test_without_advanced_the_config_has_no_trace_of_it(self):
+        self.assertNotIn("advanced", self.build())
+
+    def test_keys_vending_does_not_give_and_inputs_it_owns_are_refused(self):
+        where = "landing-zones/payments/prod"
+        self.assertEqual(sorted(self.problems("  virtual_networks:\n    hub:\n      ddos_protection_enabled: true\n    spoke:\n      subnets:\n"
+                                              "        web:\n          service_endpoints: [Microsoft.Storage]\n        app:\n          address_prefix: 10.0.0.0/26\n")), [
+            f"{where}: advanced.virtual_networks.hub: there is no such spoke here (spoke).",
+            f"{where}: advanced.virtual_networks.spoke.subnets.app.address_prefix is worked out by mlz-core (the subnet's block in _generated/ip-plan.yaml, "
+            "whose size network.subnets asks for); it cannot be set.",
+            f"{where}: advanced.virtual_networks.spoke.subnets.web: there is no such <subnet> here (app)."])
+        self.assertEqual(self.problems("  budgets:\n    monthly:\n      notifications:\n        actual_80:\n          threshold: 90\n"), [
+            f"{where}: advanced.budgets.monthly.notifications.actual_80.threshold is fixed by Fortytwo "
+            "(a warning at 80 % spent, and when the month is forecast to go over). Ask for a change in mlz-core."])
+        self.assertEqual(self.problems("  role_assignment_enabled: true\n"), [
+            f"{where}: advanced.role_assignment_enabled is worked out by mlz-core (on when advanced: sets role_assignments); it cannot be set."])
+
+    def test_what_the_module_requires_of_an_object_advanced_adds_is_required(self):
+        where = "landing-zones/payments/prod"
+        self.assertEqual(sorted(self.problems("  role_assignments:\n    readers: {definition: Reader}\n"
+                                              "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          delegations: [{name: web}]\n")), [
+            f"{where}: advanced.role_assignments.readers needs principal_id, which the module requires.",
+            f"{where}: advanced.virtual_networks.spoke.subnets.app.delegations[0] needs service_delegation, which the module requires."])
+        # The schema checks one layer, which may give part of an assignment another completes: no required there.
+        assignments = schema.landing_zone()["properties"]["advanced"]["properties"]["role_assignments"]
+        self.assertNotIn("required", assignments["additionalProperties"])
+        self.write("defaults/landing-zone-defaults.yaml", self.read("defaults/landing-zone-defaults.yaml") +
+                   "advanced:\n  role_assignments:\n    readers: {definition: Reader}\n")
+        merged = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa}\n")
+        self.assertEqual(merged["advanced"]["role_assignments"]["readers"], {"definition": "Reader", "principal_id": "00000000-0000-0000-0000-0000000000aa"})
+
+    def test_a_null_is_the_module_s_default_and_takes_an_upper_layer_s_value_away(self):
+        self.write("defaults/landing-zone-defaults.yaml", self.read("defaults/landing-zone-defaults.yaml") +
+                   "advanced:\n  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n")
+        self.assertIn("role_assignments", self.build()["advanced"])
+        self.assertNotIn("advanced", self.build("  role_assignments: null\n"))  # nothing left: no block at all
+
+    def test_a_decommissioned_landing_zone_s_advanced_is_shown_as_not_given(self):
+        self.prod += "decommission: true\n"
+        config = self.build("  role_assignments:\n    readers: {principal_id: 00000000-0000-0000-0000-0000000000aa, definition: Reader}\n"
+                            "  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          service_endpoints: [Microsoft.Storage]\n")
+        rows = {row[0]: row for part in explain.module_inputs("vending/terraform", config, {}).values() for row in part}
+        self.assertTrue(rows["role_assignments"][1].startswith("none: decommissioned"))
+        self.assertTrue(rows["virtual_networks.subnets.service_endpoints"][1].startswith("none: decommissioned"))
+
+    def read(self, relative: str) -> str:
+        return (self.repo / relative).read_text()
+
+    def test_no_budget_no_budget_inputs(self):
+        self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\n")
+        self.prod = self.prod.replace("budget:\n  monthly: 2000\n", "")
+        self.assertEqual(self.problems("  budgets:\n    monthly:\n      notifications:\n        actual_80:\n          locale: en-gb\n"), [
+            "landing-zones/payments/prod: advanced.budgets.monthly: there is no such monthly here (none)."])
+
+    def test_the_schema_takes_the_maps_by_any_key(self):
+        block = schema.landing_zone()["properties"]["advanced"]
+        subnets = block["properties"]["virtual_networks"]["additionalProperties"]["properties"]["subnets"]
+        self.assertEqual(subnets["additionalProperties"]["properties"]["service_endpoints"], {"type": ["array", "null"], "items": {"type": "string"}})
+        self.assertIn("role_assignments", block["properties"])
+        self.assertNotIn("role_assignment_enabled", block["properties"])
+
+    def test_explain_names_the_entry_advanced_set(self):
+        config = self.build("  virtual_networks:\n    spoke:\n      subnets:\n        app:\n          service_endpoints: [Microsoft.Storage]\n")
+        rows = {row[0]: row for part in explain.module_inputs("vending/terraform", config, {}).values() for row in part}
+        self.assertEqual(rows["virtual_networks.subnets.service_endpoints"][1:], (
+            "{virtual_networks.spoke.subnets.app.service_endpoints: [Microsoft.Storage]}",
+            "open: set under advanced.virtual_networks.spoke.subnets.<subnet>.service_endpoints in a landing zone's file or a layer above it"))
 
 
 if __name__ == "__main__":

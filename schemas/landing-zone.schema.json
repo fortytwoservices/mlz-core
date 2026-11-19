@@ -203,6 +203,372 @@
       "description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.",
       "const": true
     },
+    "advanced": {
+      "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/vending.md lists them). Anything else is refused with what owns it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "budgets": {
+          "type": "object",
+          "description": "By monthly.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "notifications": {
+                "type": "object",
+                "description": "By <actual_80 or forecast_100>.",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "contact_roles": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "contact_groups": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "locale": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "network_security_groups": {
+          "type": "object",
+          "description": "By <subnet>.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "security_rules": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "access": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destination_address_prefix": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destination_address_prefixes": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "destination_application_security_group_ids": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "destination_port_range": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destination_port_ranges": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "direction": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "number"
+                    },
+                    "protocol": {
+                      "type": "string"
+                    },
+                    "source_address_prefix": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "source_address_prefixes": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "source_application_security_group_ids": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "source_port_range": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "source_port_ranges": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "subscription_register_resource_providers_and_features": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "role_assignments": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "principal_id": {
+                "type": "string"
+              },
+              "definition": {
+                "type": "string"
+              },
+              "relative_scope": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resource_group_scope_key": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "condition": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "condition_version": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "principal_type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "definition_lookup_enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "use_random_uuid": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "wait_for_subscription_before_subscription_operations": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "create": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "destroy": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "virtual_networks": {
+          "type": "object",
+          "description": "By spoke.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "flow_timeout_in_minutes": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "ddos_protection_enabled": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "ddos_protection_plan_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subnets": {
+                "type": "object",
+                "description": "By <subnet>.",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "private_endpoint_network_policies": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "private_link_service_network_policies_enabled": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    },
+                    "service_endpoints": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "service_endpoint_policies": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "delegations": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "service_delegation": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "tags": {
       "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
       "type": [

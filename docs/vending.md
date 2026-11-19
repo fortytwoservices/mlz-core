@@ -155,6 +155,13 @@ table's and sub-vending's, with its class (a setting, worked out, fixed by Forty
 the landing zone's config and where it comes from. It needs both contracts. `docs/reference/vending.md` has the
 same without the values.
 
+## Sub-vending inputs mlz-core leaves alone
+
+A landing zone's `advanced:`, in its file or a layer above, sets inputs of `Azure/avm-ptn-alz-sub-vending` that
+mlz-core does not set: role assignments on the subscription, a subnet's service endpoints or delegations, an NSG's
+rules, the budget alerts' contact roles. Anything mlz-core owns is refused with a message that names its owner:
+`docs/advanced.md`, and the inputs it takes on `docs/reference/vending.md`.
+
 ## Decommissioning a landing zone
 
 A landing zone is retired by one line in its own file, never by deleting the file (a deleted file leaves

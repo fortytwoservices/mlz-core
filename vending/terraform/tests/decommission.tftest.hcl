@@ -186,3 +186,45 @@ run "decommissioned_with_a_repo" {
     error_message = "A decommissioned landing zone's repo goes (archive_on_destroy archives it), with nothing trusting it."
   }
 }
+
+# A landing zone's advanced: (tools/mlz/advanced.py) reaches sub-vending's objects beside mlz-core's values, which it
+# cannot change; live.json, the same landing zone without it, is given what it always was (the run above).
+run "advanced" {
+  command = plan
+  variables {
+    config_file = "tests/advanced.json"
+  }
+  assert {
+    condition     = local.virtual_networks["spoke"].ddos_protection_enabled == false && tolist(local.virtual_networks["spoke"].subnets["default"].service_endpoints) == tolist(["Microsoft.Storage"])
+    error_message = "advanced: did not reach the spoke and its subnet."
+  }
+  assert {
+    condition     = local.virtual_networks["spoke"].name == "vnet-acme-pay-pd-nwe-01" && local.virtual_networks["spoke"].subnets["default"].address_prefix == "10.100.8.0/26"
+    error_message = "mlz-core's own values must stay as they are beside advanced:."
+  }
+  assert {
+    condition     = local.network_security_groups["default"].security_rules["deny-rdp"].priority == 200 && local.network_security_groups["default"].name == "nsg-acme-pay-default-pd-nwe-01"
+    error_message = "advanced: did not reach the subnet's NSG beside its name."
+  }
+  assert {
+    condition     = tolist(local.budgets["monthly"].notifications["actual_80"].contact_roles) == tolist(["Owner"]) && local.budgets["monthly"].notifications["actual_80"].threshold == 80
+    error_message = "advanced: did not reach the budget's alert beside its threshold."
+  }
+}
+
+run "without_advanced" {
+  command = plan
+  variables {
+    config_file = "tests/live.json"
+  }
+  # Exactly the attributes mlz-core gave each object before advanced: existed.
+  assert {
+    condition = (
+      toset(keys(local.virtual_networks["spoke"])) == toset(["name", "address_space", "resource_group_name_existing", "location", "dns_servers", "tags", "subnets", "hub_network_resource_id", "hub_peering_enabled", "hub_peering_name_tohub", "hub_peering_name_fromhub", "hub_peering_options_tohub", "hub_peering_options_fromhub"]) &&
+      toset(keys(local.virtual_networks["spoke"].subnets["default"])) == toset(["name", "address_prefix", "network_security_group", "route_table"]) &&
+      toset(keys(local.network_security_groups["default"])) == toset(["name", "resource_group_name_existing", "location", "tags"]) &&
+      toset(keys(local.budgets["monthly"].notifications["actual_80"])) == toset(["enabled", "operator", "threshold", "contact_emails"])
+    )
+    error_message = "A landing zone without advanced: is not given what it was before."
+  }
+}

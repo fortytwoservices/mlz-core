@@ -25,9 +25,29 @@ builds:
 | File | Reaches | Keys, as the module names them |
 |---|---|---|
 | `connectivity/<region>.yaml` | that region's hub in `az-tf-mlz-connectivity-hub`'s `hub_virtual_networks` | `bastion.sku`, `firewall.zones`, `virtual_network_dns_servers`, ... |
+| a landing zone's file, or a layer above it | `Azure/avm-ptn-alz-sub-vending`'s call: its own inputs, and its objects by the keys vending gives them | `role_assignments`, `virtual_networks.spoke.subnets.<subnet>.service_endpoints`, `network_security_groups.<subnet>.security_rules`, ... |
 
-Landing zones and `customer.yaml` come next (brief L3). An input of the whole module call, such as the hub module's
-`retry`, is not reached from a hub file, since each region has its own file.
+`customer.yaml` comes next (brief L3). An input of the whole hub module call, such as its `retry`, is not reached
+from a hub file, since each region has its own file.
+
+A landing zone's `advanced:` goes in any of its layers and is merged as its other settings are, so
+`defaults/landing-zone-defaults.yaml` can give every landing zone a role assignment, and one landing zone's file a
+subnet's service endpoints. Sub-vending's objects are maps vending keys itself, and `advanced:` names an entry by
+its key: `spoke` for the one network, a subnet's name for a subnet or its NSG, `monthly` for the budget (only with
+`budget.monthly`), `actual_80` and `forecast_100` for its alerts. A key vending does not give is refused, so a
+mistyped subnet name is not dropped:
+
+```yaml
+# landing-zones/payments/prod.yaml
+advanced:
+  role_assignments:               # on the subscription; role_assignment_enabled follows from it
+    readers: {principal_id: 00000000-0000-0000-0000-000000000000, definition: Reader}
+  virtual_networks:
+    spoke:
+      subnets:
+        app:
+          service_endpoints: [Microsoft.Storage]
+```
 
 Which keys a file takes is on its root's page in `docs/reference/` ("set it with `advanced.bastion.sku`"), in the
 editor through the file's schema, and in `python3 -m mlz explain --repo . <region> --inputs`, which shows what
@@ -56,11 +76,15 @@ fixes for everyone.
 
 1. The loader checks the block against the root's input map (`<root>/inputs.yaml`, `tools/mlz/advanced.py`): each
    path must be an input of the module at its pin, covered by an `open` entry, with a value of the module's type.
-2. It writes the block, as given, into the stack's config (`hubs.<region>.advanced` in the platform's), only when
-   there is one. A stack without `advanced:` renders exactly as before.
-3. The root puts the block in first and mlz-core's own values over it (`platform/terraform/main.tf`,
-   `local.hub_virtual_networks`), so it can only add. A hub without one is given exactly what it was given before:
-   `platform/terraform/tests/advanced.tftest.hcl` checks both, with the provider mocked.
+2. It writes the block, as given, into the stack's config (`hubs.<region>.advanced` in the platform's, `advanced`
+   in a landing zone's), only when there is one. A stack without `advanced:` renders exactly as before.
+3. The root puts the block in first and mlz-core's own values over it, so it can only add: the platform's
+   `local.hub_virtual_networks`, vending's `local.network_security_groups`, `local.virtual_networks` and
+   `local.budgets`. A module input of its own is passed from the block, or as `null` or the module's default when the
+   block has none (sub-vending's `role_assignments` and `subscription_register_resource_providers_and_features` are
+   `nullable = false`, so `null` is their default). A stack without one is given exactly what it was given before:
+   `platform/terraform/tests/advanced.tftest.hcl` and vending's `tests/decommission.tftest.hcl` (runs `advanced` and
+   `without_advanced`) check both, with the providers mocked.
 
 ### Why the loader checks types itself
 

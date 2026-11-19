@@ -18,7 +18,7 @@ import re
 from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
-from . import naming
+from . import advanced, naming
 from .files import preload, read_setting, read_yaml, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
@@ -31,7 +31,7 @@ TAKEN_ENVIRONMENTS = (ALL_DEFAULTS.removesuffix("-defaults"), WORKLOAD_DEFAULTS)
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names"}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names", "advanced"}
 # Where a subscription vending makes is billed (docs/vending.md): an EA enrollment account, or an MCA invoice section.
 # An MPA customer's (CSP) is Fortytwo's Partner Center's to make, not the customer's identities'.
 BILLING_ACCOUNT = r"/providers/Microsoft\.Billing/billingAccounts/[^/]+"
@@ -187,6 +187,13 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
 
     problems += name_problems(key, lz)
     problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
+    # Sub-vending inputs mlz-core leaves at their defaults (tools/mlz/advanced.py), in any layer, merged as the rest
+    # are; its maps' entries by the keys vending/terraform gives them.
+    subnets = list((wanted_network(lz, []) or (0, {}))[1])
+    budget = s.get("budget") if isinstance(s.get("budget"), dict) else {}
+    advanced.check("landing-zone", where, s.get("advanced"), problems, keys={
+        "virtual_networks": ["spoke"], "virtual_networks.subnets": subnets, "network_security_groups": subnets,
+        "budgets": ["monthly"] if budget.get("monthly") is not None else [], "budgets.notifications": ["actual_80", "forecast_100"]})
     # One landing zone at a time, in its own file: a layer above would retire every landing zone below it. Every
     # layer is looked at, since the landing zone's own file setting it too would hide one above.
     for name, data in lz["layers"][:-1]:
@@ -616,6 +623,8 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             "names": names[key],
             # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
             "workload": {**workloads[key], **workload_facts(names[key], plan[key], region, tags)} if key in workloads else None,
+            # Sub-vending inputs mlz-core leaves alone, checked; only when given, so a landing zone without them is as before.
+            **({"advanced": advanced.prune(s["advanced"])} if isinstance(s.get("advanced"), dict) and advanced.prune(s["advanced"]) else {}),
         }
     return configs
 

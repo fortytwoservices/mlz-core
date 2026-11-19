@@ -47,7 +47,7 @@ The landing zone's subscription in its management group, its network peered with
 
 Settings from a landing zone's file or a layer above it.
 
-96 entries: 11 setting, 25 derived, 31 fixed, 16 open, 13 closed.
+96 entries: 11 setting, 26 derived, 31 fixed, 15 open, 13 closed.
 
 | Input | Type | Class | Source, value or reason |
 |---|---|---|---|
@@ -68,9 +68,9 @@ Settings from a landing zone's file or a layer above it.
 | `budgets.notifications.threshold` | number | fixed | `{"actual_80": 80, "forecast_100": 100}`: a warning at 80 % spent, and when the month is forecast to go over |
 | `budgets.notifications.threshold_type` | string | fixed | `{"actual_80": "Actual", "forecast_100": "Forecasted"}`: a warning at 80 % spent, and when the month is forecast to go over |
 | `budgets.notifications.contact_emails` | list(string) | setting | `budget.contacts` in a landing zone's file or a layer above it: the owner when not set |
-| `budgets.notifications.contact_roles` | list(string) | open | the module's default: `[]` |
-| `budgets.notifications.contact_groups` | list(string) | open | the module's default: `[]` |
-| `budgets.notifications.locale` | string | open | the module's default: `"en-us"` |
+| `budgets.notifications.contact_roles` | list(string) | open | the module's default: `[]`; set it with `advanced.budgets.monthly.notifications.<actual_80 or forecast_100>.contact_roles` in a landing zone's file or a layer above it |
+| `budgets.notifications.contact_groups` | list(string) | open | the module's default: `[]`; set it with `advanced.budgets.monthly.notifications.<actual_80 or forecast_100>.contact_groups` in a landing zone's file or a layer above it |
+| `budgets.notifications.locale` | string | open | the module's default: `"en-us"`; set it with `advanced.budgets.monthly.notifications.<actual_80 or forecast_100>.locale` in a landing zone's file or a layer above it |
 | `network_security_group_enabled` | bool | derived | on, until decommission is true |
 | `network_security_groups` | map(object) | | one per subnet, by the subnet's name |
 | `network_security_groups.name` | string | derived | the naming template, kept in _generated/names.yaml; set it with `names.network_security_groups` in the landing zone's own file, `landing-zones/<workload>/<env>.yaml` |
@@ -79,13 +79,13 @@ Settings from a landing zone's file or a layer above it.
 | `network_security_groups.resource_group_name_existing` | string | derived | the landing zone's network resource group |
 | `network_security_groups.tags` | map(string) | setting | `tags` in a landing zone's file or a layer above it: with Owner, CostCenter, Environment, Workload and ManagedBy |
 | `network_security_groups.resource_types` | object | fixed | the module's default (`{}`): the API versions the module is tested with; new ones come with a module release |
-| `network_security_groups.security_rules` | map(object) | open | the module's default: `null` |
+| `network_security_groups.security_rules` | map(object) | open | the module's default: `null`; set it with `advanced.network_security_groups.<subnet>.security_rules` in a landing zone's file or a layer above it |
 | `resource_group_creation_enabled` | bool | fixed | the module's default (`false`): off: vending makes the landing zone's resource groups itself, named from the template |
 | `resource_groups` | map(object) | fixed | the module's default (`{}`): vending makes the landing zone's resource groups itself, named from the template |
-| `subscription_register_resource_providers_and_features` | map(set(string)) | open | the module's default: see the module |
+| `subscription_register_resource_providers_and_features` | map(set(string)) | open | the module's default: see the module; set it with `advanced.subscription_register_resource_providers_and_features` in a landing zone's file or a layer above it |
 | `subscription_register_resource_providers_enabled` | bool | fixed | `true`: a new subscription needs its providers before anything is made in it |
-| `role_assignment_enabled` | bool | open | the module's default: `false` |
-| `role_assignments` | map(object) | open | the module's default: `{}` |
+| `role_assignment_enabled` | bool | derived | on when advanced: sets role_assignments |
+| `role_assignments` | map(object) | open | the module's default: `{}`; set it with `advanced.role_assignments` in a landing zone's file or a layer above it |
 | `route_table_enabled` | bool | fixed | the module's default (`false`): off: the route table is module.route_table's |
 | `route_tables` | map(object) | fixed | the module's default (`{}`): the route table is module.route_table's |
 | `subscription_alias_enabled` | bool | fixed | `false`: vending makes a subscription with one alias PUT of its own, which no plan reads back: reading an alias needs aliases/write, which the plan identity has not |
@@ -98,7 +98,7 @@ Settings from a landing zone's file or a layer above it.
 | `subscription_tags` | map(string) | setting | `tags` in a landing zone's file or a layer above it: with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy |
 | `subscription_update_existing` | bool | derived | true for a subscription vending made, so the module names and tags it |
 | `subscription_workload` | string | fixed | the module's default (`null`): unused: the module's alias is off |
-| `wait_for_subscription_before_subscription_operations` | object | open | the module's default: `{}` |
+| `wait_for_subscription_before_subscription_operations` | object | open | the module's default: `{}`; set it with `advanced.wait_for_subscription_before_subscription_operations` in a landing zone's file or a layer above it |
 | `umi_enabled` | bool | derived | on, until decommission is true |
 | `user_managed_identities` | map(object) | | plan (Reader) and deploy (Contributor), for the workload repo |
 | `user_managed_identities.name` | string | derived | the naming template, kept in _generated/names.yaml; set it with `names.plan_identity` or `names.deploy_identity` in the landing zone's own file, `landing-zones/<workload>/<env>.yaml` |
@@ -119,22 +119,22 @@ Settings from a landing zone's file or a layer above it.
 | `virtual_networks.ipam_pools` | list(object) | closed | addresses come from the IP allocator |
 | `virtual_networks.location` | string | setting | `location` in a landing zone's file or a layer above it |
 | `virtual_networks.dns_servers` | list(string) | derived | the region's DNS servers, from the platform contract |
-| `virtual_networks.flow_timeout_in_minutes` | number | open | the module's default: `null` |
-| `virtual_networks.ddos_protection_enabled` | bool | open | the module's default: `false` |
-| `virtual_networks.ddos_protection_plan_id` | string | open | the module's default: `null` |
+| `virtual_networks.flow_timeout_in_minutes` | number | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.flow_timeout_in_minutes` in a landing zone's file or a layer above it |
+| `virtual_networks.ddos_protection_enabled` | bool | open | the module's default: `false`; set it with `advanced.virtual_networks.spoke.ddos_protection_enabled` in a landing zone's file or a layer above it |
+| `virtual_networks.ddos_protection_plan_id` | string | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.ddos_protection_plan_id` in a landing zone's file or a layer above it |
 | `virtual_networks.subnets.name` | string | derived | snet-&lt;subnet&gt; |
 | `virtual_networks.subnets.address_prefix` | string | derived | the subnet's block in _generated/ip-plan.yaml, whose size network.subnets asks for |
 | `virtual_networks.subnets.address_prefixes` | list(string) | closed | one prefix per subnet, from the IP allocator |
 | `virtual_networks.subnets.ipam_pools` | list(object) | closed | addresses come from the IP allocator |
 | `virtual_networks.subnets.nat_gateway` | object | closed | everything leaves through the hub's firewall |
 | `virtual_networks.subnets.network_security_group` | object | derived | the subnet's own NSG |
-| `virtual_networks.subnets.private_endpoint_network_policies` | string | open | the module's default: `"Enabled"` |
-| `virtual_networks.subnets.private_link_service_network_policies_enabled` | bool | open | the module's default: `true` |
+| `virtual_networks.subnets.private_endpoint_network_policies` | string | open | the module's default: `"Enabled"`; set it with `advanced.virtual_networks.spoke.subnets.<subnet>.private_endpoint_network_policies` in a landing zone's file or a layer above it |
+| `virtual_networks.subnets.private_link_service_network_policies_enabled` | bool | open | the module's default: `true`; set it with `advanced.virtual_networks.spoke.subnets.<subnet>.private_link_service_network_policies_enabled` in a landing zone's file or a layer above it |
 | `virtual_networks.subnets.route_table` | object | derived | the landing zone's route table |
 | `virtual_networks.subnets.default_outbound_access_enabled` | bool | fixed | the module's default (`false`): off: everything leaves through the hub's firewall |
-| `virtual_networks.subnets.service_endpoints` | set(string) | open | the module's default: `null` |
-| `virtual_networks.subnets.service_endpoint_policies` | map(object) | open | the module's default: `null` |
-| `virtual_networks.subnets.delegations` | list(object) | open | the module's default: `null` |
+| `virtual_networks.subnets.service_endpoints` | set(string) | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.subnets.<subnet>.service_endpoints` in a landing zone's file or a layer above it |
+| `virtual_networks.subnets.service_endpoint_policies` | map(object) | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.subnets.<subnet>.service_endpoint_policies` in a landing zone's file or a layer above it |
+| `virtual_networks.subnets.delegations` | list(object) | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.subnets.<subnet>.delegations` in a landing zone's file or a layer above it |
 | `virtual_networks.hub_network_resource_id` | string | derived | the region's hub, from the platform contract |
 | `virtual_networks.hub_peering_enabled` | bool | fixed | `true`: every landing zone is a spoke of its region's hub |
 | `virtual_networks.hub_peering_direction` | string | fixed | the module's default (`"both"`): both: vending makes both ends |

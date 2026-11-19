@@ -8,3 +8,6 @@ network:
   subnets:                            # the IP allocator gives out their addresses
     app: 26
     data: 27
+
+# advanced: {virtual_networks: {spoke: {subnets: {app: {service_endpoints: [Microsoft.Storage]}}}}}
+#                                     # sub-vending inputs mlz-core leaves at their defaults: docs/advanced.md
