@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.4](https://github.com/fortytwoservices/mlz-core/compare/v0.11.3...v0.11.4) (2026-11-19)
+
+
+### Bug Fixes
+
+* **platform:** a hub with Bastion or its DNS resolver off plans again ([#113](https://github.com/fortytwoservices/mlz-core/issues/113)) ([c4be5e2](https://github.com/fortytwoservices/mlz-core/commit/c4be5e2988ba25c0ac5642d7b1d15f2952b17ad4))
+
 ## [0.11.3](https://github.com/fortytwoservices/mlz-core/compare/v0.11.2...v0.11.3) (2026-11-19)
 
 
