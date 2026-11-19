@@ -100,11 +100,8 @@ def governance(naming: Naming, primary: str) -> dict:
 def hub(naming: Naming, region: str, explicit: dict | None = None) -> dict:
     """One region's hub: every component the hub module makes, from the template or the hub file's names:."""
     explicit = explicit or {}
-    named = {key: explicit[key] if key in explicit else platform_name(naming, "hub", kind, region, purpose)
-             for key, (kind, purpose) in HUB.items()}
-    # Three public IPs in one group: a template without {purpose} would give them one name.
-    apart("the hub's public IPs", {key: named[key] for key in ("firewall_public_ip", "firewall_management_public_ip", "bastion_public_ip")})
-    return named
+    return {key: explicit[key] if key in explicit else platform_name(naming, "hub", kind, region, purpose)
+            for key, (kind, purpose) in HUB.items()}
 
 
 def hub_explicit(where: str, given: object, problems: list[str]) -> dict:
