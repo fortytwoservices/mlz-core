@@ -14,6 +14,7 @@
     python3 -m mlz schema   --out schemas
     python3 -m mlz map      --repo <a customer repo>                 each settings file's stack, root and modules
     python3 -m mlz stacks   --role <role> --stacks <json> --base <checked copy of the base>   in tools/ci/check.sh
+    python3 -m mlz batches  --stacks <json> [--daily]               the plan jobs for a run, as JSON (role.yml)
     python3 -m mlz owners   --repo <owner>/<repo> --ref <commit>     in a checkout: CODEOWNERS as GitHub reads it
                             [--new-teams note --base <commit> | --new-teams grant]
 
@@ -115,6 +116,9 @@ def main() -> int:
     st.add_argument("--stacks", required=True, help="every stack, as JSON, as check.sh found them")
     st.add_argument("--base", type=Path, required=True, help="the base commit's copy of the repo, checked by check.sh")
     st.add_argument("--repo", type=Path, default=Path("."), help="this commit's repo, checked (default: here)")
+    bt = roles.add_parser("batches", help="the plan jobs for a run: one stack each, or groups of stacks (tools/mlz/stacks.py)")
+    bt.add_argument("--stacks", required=True, help="the stacks the run plans, as JSON")
+    bt.add_argument("--daily", action="store_true", help="the daily check, which plans in groups")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
     i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
@@ -131,6 +135,10 @@ def main() -> int:
 
     if args.role == "map":
         print(stacks.render(args.repo), end="")
+        return 0
+
+    if args.role == "batches":
+        print(json.dumps(stacks.batches(json.loads(args.stacks), args.daily)))
         return 0
 
     if args.role == "stacks":

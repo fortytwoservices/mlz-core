@@ -94,6 +94,12 @@ backend. Only the apply job uses the backend itself.
 
 Applies of the same stack never run at the same time, and one is never cancelled halfway.
 
+**Plans in groups.** A run planning 20 stacks or fewer plans each in a job of its own, for quick feedback. The daily
+check, and any run planning more (an upgrade plans every stack), plans them in groups of 20, one after the other in
+one job (`tools/ci/plans.sh`, `tools/mlz/stacks.py`'s `batches`), so a hundred landing zones hold a runner for five
+jobs, not a hundred, and stay well under GitHub's limit of 256 jobs a matrix. Each stack still gets its summary on
+the run page, its comment on a pull request and its status for the drift issue.
+
 `plan`, `apply` and `publish` reach Azure and the state. They run on the repo variable `MLZ_RUNS_ON` when it is
 set: the runners in management's network, self-hosted unless `bootstrap.yaml` asks for GitHub-hosted ones,
 which `mlz install runners` sets up and switches the repos to ([bootstrap](bootstrap.md#private-runners)).

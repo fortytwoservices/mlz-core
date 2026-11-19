@@ -163,3 +163,15 @@ def changed(role: str, stacks: list[str], head: Path, base: Path) -> list[str]:
     """The stacks whose inputs differ between two checked copies of a repo, in the order given: one the base did not
     have counts as changed, so a new landing zone is planned."""
     return [stack for stack in stacks if any(content(head / path) != content(base / path) for path in inputs(role, stack))]
+
+
+BATCH = 20  # stacks one plan job plans one after the other, on the daily check or when more than this are planned
+
+
+def batches(stacks: list[str], daily: bool) -> list[dict]:
+    """The plan jobs for a run: one stack each, for quick feedback, while BATCH or fewer are planned outside the daily
+    check; otherwise groups of BATCH in order, so N stacks hold a runner for about N/BATCH jobs (docs/bootstrap.md)."""
+    if not daily and len(stacks) <= BATCH:
+        return [{"id": stack, "stacks": stack} for stack in stacks]
+    groups = [stacks[i:i + BATCH] for i in range(0, len(stacks), BATCH)]
+    return [{"id": f"group-{n:03d}", "stacks": " ".join(group)} for n, group in enumerate(groups, 1)]
