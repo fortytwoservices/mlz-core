@@ -400,21 +400,26 @@ def problems(snapshot: dict, maps: dict[str, dict]) -> list[str]:
         found += [f"{where}: no section for module.{key.replace('.', '.module.')}" for key in calls if key not in mapped]
         found += [f"{where}: {key} is no module call of this root" for key in mapped if key not in calls]
         for key, call in calls.items():
-            section = mapped.get(key)
+            section, at = mapped.get(key), f"{where}: {key}"
+            if key in mapped and not isinstance(section, dict):  # `connectivity:` with nothing under it reads as null
+                found.append(f"{at}: a section maps builds, file, notes and inputs; this one is empty or not a mapping")
             if not isinstance(section, dict):
                 continue
-            at = f"{where}: {key}"
             found += [f"{at}: {field} is not a field; use {', '.join(sorted(CALL_FIELDS))}" for field in section if field not in CALL_FIELDS]
             if not section.get("builds"):
                 found.append(f"{at}: builds is required: what the call makes, in a line")
             if section.get("file") is not None and section["file"] not in FILES:
                 found.append(f"{at}: file {section['file']!r} is not one of {', '.join(FILES)}")
             paths = call["inputs"]
-            if not isinstance(section.get("inputs") or {}, dict):
+            # Absent or empty (null) is none; anything else that is not a mapping is a mistake, [] and false too.
+            if section.get("inputs") is not None and not isinstance(section["inputs"], dict):
                 found.append(f"{at}: inputs maps each input's path to its entry")
                 continue
             entries = {path: entry(value) for path, value in (section.get("inputs") or {}).items()}
-            found += [f"{at}: notes.{path} is no input of the module" for path in (section.get("notes") or {}) if path not in paths]
+            if section.get("notes") is not None and not isinstance(section["notes"], dict):
+                found.append(f"{at}: notes maps an input's path to a note")
+            else:
+                found += [f"{at}: notes.{path} is no input of the module" for path in (section.get("notes") or {}) if path not in paths]
             for path, item in entries.items():
                 found += [f"{at}: {path}: {text}" for text in entry_problems(path, item, paths, section.get("file"), accepted)]
             for path in leaves(paths):
