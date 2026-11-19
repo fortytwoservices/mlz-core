@@ -57,7 +57,7 @@ Any layer can be a folder of chunks.
 
 ## What is worked out
 
-- **Address ranges and subnets**, by the IP allocator (`python3 -m mlz allocate`). A new landing zone gets
+- **Address ranges and subnets**, by the IP allocator (`./mlz allocate --repo .`). A new landing zone gets
   the first free block of its size in its region's `landing_zone_ranges`, never in a region's
   `platform_address_space` (the hub, management and identity) or a range the platform reserves; a new subnet gets the first free block in its landing zone's range,
   largest first. It writes the network plan, and nobody types an address:
@@ -90,7 +90,7 @@ Any layer can be a folder of chunks.
   its own. You can still run `./mlz allocate --repo .` yourself, for example to see the
   addresses before pushing.
 
-  `python3 -m mlz allocate --check` writes nothing and fails when the plan or the names in the repo are not what
+  `./mlz allocate --repo . --check` writes nothing and fails when the plan or the names in the repo are not what
   the allocator would write. On `main` it stops two pull requests that each took the same free block, if both
   were merged before either was brought up to date. 500 landing zones take about a second.
 - **Tags** on everything: `Owner`, `CostCenter`, `Environment` (the file name), `Workload` (the folder),
@@ -100,7 +100,7 @@ Any layer can be a folder of chunks.
   and records them in `_generated/names.yaml`, where they stay when the template or a short name changes;
   `./mlz names --repo . --renew <key>` gives a landing zone the template's names again (`docs/naming.md`).
 
-`python3 -m mlz vending` checks every landing zone: every problem at once, each naming the file that set
+`mlz vending`, which `./mlz check` runs, checks every landing zone: every problem at once, each naming the file that set
 the value (a mistake in `defaults/landing-zone-defaults.yaml` is reported once, against that file, not once per landing zone),
 and writes `<key>.json` per landing zone; the Terraform root reads one of them. The output folder is
 its own: it is emptied of old configs on every run, so a removed landing zone leaves none behind, and a
@@ -146,7 +146,7 @@ Worked out
   address range        10.100.4.0/24                  <- the IP plan (_generated/ip-plan.yaml)
   route default        0.0.0.0/0 via 10.100.0.4       <- the platform's contract, for norwayeast
 Check
-  no problems in this landing zone (python3 -m mlz vending checks them all together)
+  no problems in this landing zone (./mlz check checks them all together)
 ```
 
 It reads the contracts in `_generated/` when they are there, and says what waits for them when they are
@@ -189,7 +189,7 @@ owner: payments@demo.example
 - **Then the files go, in pull requests a person merges.** Once the destroy is applied (the job reads the landing
   zone's state, whose `landing_zone` output says `decommissioned: true` from then on: a run that gets there while
   the decommission still waits for its reviewer offers nothing), vending's pipeline
-  (its `decommission` job, `python3 -m mlz decommission`) opens one in the platform repo that deletes
+  (its `decommission` job, `mlz decommission`) opens one in the platform repo that deletes
   `firewall-rules/landing-zones/<key>.yaml`, when there is one. Once that is merged, and the platform's apply has
   taken the landing zone's rules out of Azure (the job reads every rule collection group of every hub's
   firewall policy, since shared rules are in each: none still changing or failed, none with the landing zone's collections, no rule with its
@@ -283,7 +283,7 @@ An existing repo (`github.repo`) is the team's own: vending makes nothing in it,
 way, so its workflows sign in from its `apply` environment and its pull requests.
 
 **Its files.** After the apply that made it, vending's pipeline gives the repo mlz-core's workload starter
-(`starter/mlz-workload`), in one commit by the MLZ App (`python3 -m mlz workload-repos`, `tools/mlz/workload.py`):
+(`starter/mlz-workload`), in one commit by the MLZ App (`mlz workload-repos`, `tools/mlz/workload.py`):
 
 - `.github/workflows/mlz.yml`, which calls mlz-core's `workload.yml` at the release vending ran on when it made the repo
   (below: an upgrade moves it). Every pull request

@@ -211,6 +211,19 @@ class SummaryTest(unittest.TestCase):
         # A map's key added with a value unknown until apply: it is only in after_unknown, and the key is a known change.
         self.assertFalse(unknown_only({"actions": ["update"], "before": {"input": {}}, "after": {"input": {}}, "after_unknown": {"input": {"new_key": True}}}))
 
+    def test_an_import_s_id_and_a_move_s_previous_address_are_in_their_fingerprints(self):
+        # The apply matches the reviewed plan line by line: importing another object, or moving from another address,
+        # must not match what the reviewer saw.
+        def fingerprint(**record) -> str:
+            change = {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}
+            if "importing" in record:
+                change["importing"] = record.pop("importing")
+            return self.summarise([{"address": "azapi_resource.x", "change": change, **record}])[1].split()[-1]
+        self.assertNotEqual(fingerprint(importing={"id": "/subscriptions/s/resourceGroups/a"}), fingerprint(importing={"id": "/subscriptions/s/resourceGroups/b"}))
+        self.assertEqual(fingerprint(importing={"id": "/subscriptions/s/resourceGroups/a"}), fingerprint(importing={"id": "/subscriptions/s/resourceGroups/a"}))
+        self.assertNotEqual(fingerprint(previous_address="azapi_resource.old"), fingerprint(previous_address="azapi_resource.other"))
+        self.assertEqual(fingerprint(previous_address="azapi_resource.old"), fingerprint(previous_address="azapi_resource.old"))
+
     def test_a_moved_object_left_deposed_keeps_its_previous_address(self):
         moved = {"address": "azapi_resource.x", "previous_address": "azapi_resource.old", "deposed": "a1b2",
                  "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}}

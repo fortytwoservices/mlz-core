@@ -39,7 +39,7 @@ wait for which:
 - **A pull request's newer push cancels its older run**, so an older plan never replaces the newer one's
   comment.
 - **The daily drift check never waits** and is never waited for: it only plans, against a copy of the state. The workflow checks out mlz-core's code at the exact
-commit it came from (it reads which one from the run's own OIDC token), so code and workflow never drift
+commit it came from (it reads which one from GitHub's `job.workflow_sha`), so code and workflow never drift
 apart. The steps themselves are small scripts in `tools/ci/`.
 
 ## Upgrading a customer
@@ -48,7 +48,7 @@ A customer stays on its release until Fortytwo decides to move it. Then an engin
 ([changes to `.github/`](#changes-to-github)) runs, from an mlz-core checkout:
 
 ```sh
-PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to v0.1.8
+PYTHONPATH=tools python3 -m mlz upgrade acme/mlz-governance acme/mlz-platform acme/mlz-vending --to vX.Y.Z
 ```
 
 A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by `mlz install repos`), or that
@@ -56,7 +56,7 @@ A repo that calls the organization's copy of mlz-core (`acme/mlz-core`, made by 
 pull request's workflow calls the copy at it. The release notes and the starters are mlz-core's. With
 self-hosted runners it then lets the runner group run that release's `role.yml` too.
 
-Each repo gets one pull request, `chore: mlz-core v0.1.8`, on branch `mlz/upgrade-v0.1.8`:
+Each repo gets one pull request, `chore: mlz-core vX.Y.Z`, on branch `mlz/upgrade-vX.Y.Z`:
 
 - It replaces the files that belong to mlz-core with the release's starter for the repo's role:
   `.github/workflows/mlz.yml`, so changes on the caller's side ship with the release, and the editor
@@ -128,8 +128,9 @@ set: the runners in management's network, self-hosted unless `bootstrap.yaml` as
 which `mlz install runners` sets up and switches the repos to ([bootstrap](bootstrap.md#private-runners)).
 Self-hosted runners take only jobs from mlz-core's `role.yml` at the release a repo pins, so a job a pull
 request adds to `mlz.yml` gets none. Until then, and once it is deleted again, they run on
-GitHub's public runners. `check`, `changed` and `merge` never reach Azure and always run on GitHub's public
-runners.
+GitHub's public runners. `decommission` reaches Azure too (as vending's plan identity, to read the hubs' firewall
+policies), always from GitHub's public runners. `check`, `changed`, `merge`, `drift` and `workload-repos` never reach
+Azure and always run on GitHub's public runners.
 
 Every step runs in the repo's checkout, which a pull request controls, and some hold a token or an Azure sign-in.
 So no file of the checkout ever runs as code: the pipeline runs mlz isolated (`python3 -I`,
@@ -269,7 +270,7 @@ identity, from its own pull request (proved on a test customer on 19 November). 
 | Setting | From |
 |---|---|
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
-| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app that opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
+| Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app every job reads the organization's copy of mlz-core with, and which opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
 | `.github/CODEOWNERS`, write access for the platform team, the rulesets `main`, `main-checks` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
 

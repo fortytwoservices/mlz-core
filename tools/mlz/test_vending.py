@@ -188,7 +188,9 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n")
         self.assertEqual(self.allocate(), ["payments-prod: subnet cache 10.100.9.192/26"])  # not app's block
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 27\n")
-        self.assertIn("subnet app was removed and still holds 10.100.9.0/26; ask for a /26", self.problems(allocate, PLATFORM))
+        self.assertIn("subnet app was removed and still holds 10.100.9.0/26; ask for a /26 to get it back. For a /27, take app out of the YAML, "
+                      "free the block once the removed subnet is destroyed (./mlz release --repo . payments-prod), then ask for it again.", self.problems(allocate, PLATFORM))
+        self.assertIn("payments-prod asks for app again", self.problems(release, "payments-prod"))  # hence: out of the YAML first
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 26\n")
         self.assertIn("payments-prod asks for app again; run the IP allocator", self.problems(release, "payments-prod"))
         self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.9.0/26 given back"])

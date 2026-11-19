@@ -207,6 +207,9 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
      again for up to five minutes.
    - Without `--yes` it shows the plan and asks before applying. Only a terminal can answer: piped input or
      a script counts as no, and `--yes` is the way to go ahead without a person.
+   - Whether there is anything to apply is the plan's JSON, read as the pipelines read theirs
+     ([pipelines](pipelines.md#what-runs-when)): an `import` or `moved` block alone is applied, so that the state
+     records it, and its summary says "In the state only, nothing in Azure changes". Never Terraform's exit code.
    - It ends by checking that every identity trusts a subject GitHub actually issues to its repo.
 4. **`handover`** moves the platform subscriptions into `<root>`, after asking. A subscription already anywhere
    in the tree stays where it is, so a run after governance never pulls one back out.
