@@ -487,7 +487,7 @@ LEGEND = """Each input is in one class:
 | setting | from a key in the customer's YAML | yes, with that key |
 | derived | worked out by mlz-core: from the layout, the IP allocator, a contract or the naming | no; a name, under `names:` where the entry says so |
 | fixed | Fortytwo's decision for every customer | no |
-| open | mlz-core does not set it, so the module's default applies | not yet |
+| open | mlz-core does not set it, so the module's default applies | under `advanced:` where the entry says so (docs/advanced.md); not yet elsewhere |
 | closed | not supported yet | no |
 
 An entry covers its input and everything in it: `bastion` closed means every attribute of `bastion`. A map or list of
@@ -520,7 +520,7 @@ def short(value: str | None, limit: int = 60) -> str:
     return f"`{text}`" if len(text) <= limit else "see the module"
 
 
-def describe(item: dict, info: dict, file: str | None) -> str:
+def describe(item: dict, info: dict, file: str | None, reach: str | None = None) -> str:
     kind = item["class"]
     if kind == "setting":
         text = f"`{item['key']}` in {FILES[item.get('file', file)]}"
@@ -539,11 +539,12 @@ def describe(item: dict, info: dict, file: str | None) -> str:
         return f"{value}: {item['why']}"
     if kind == "open":
         default = "required" if info["required"] else f"the module's default: {short(info.get('default'))}"
-        return default + (f"; {item['why']}" if item.get("why") else "")
+        return default + (f"; {item['why']}" if item.get("why") else "") + (f"; set it with {reach}" if reach else "")
     return item["why"]
 
 
 def page(root: str, calls: dict, mapped: dict) -> str:
+    from . import advanced
     from .stacks import STACKS
     stacks = [s.name for s in STACKS if s.root == root]
     lines = [f"# {root}: who owns each input", "",
@@ -565,7 +566,7 @@ def page(root: str, calls: dict, mapped: dict) -> str:
         for path, info in call["inputs"].items():
             if path in entries:
                 item = entries[path]
-                text = describe(item, info, section.get("file"))
+                text = describe(item, info, section.get("file"), advanced.where(root, key, path))
                 if path in notes:
                     text = f"{notes[path]}. {text}"
                 lines.append(f"| `{path}` | {info['type']} | {item['class']} | {cell(text)} |")

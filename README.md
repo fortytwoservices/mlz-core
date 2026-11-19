@@ -36,7 +36,8 @@ starter/
   mlz-<role>/          what each template repo starts with: its pipeline, its editor settings, and
                        example settings, commented out or in examples/, which the loader does not read
 schemas/               JSON Schemas of the customer YAML, for editors (below)
-docs/                  one page per part; reference/, who owns each module input (below)
+docs/                  one page per part; reference/, who owns each module input (below); advanced.md, the module
+                       inputs a customer may set where mlz-core sets none
 ```
 
 ## Who owns each module input

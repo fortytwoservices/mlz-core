@@ -84,6 +84,85 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "advanced": {
+      "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/platform.md lists them). Anything else is refused with what owns it.",
+      "type": "object",
+      "properties": {
+        "virtual_network_dns_servers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "firewall": {
+          "type": "object",
+          "properties": {
+            "zones": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "firewall_policy": {
+              "type": "object",
+              "properties": {
+                "base_policy_id": {
+                  "type": "string"
+                },
+                "threat_intelligence_mode": {
+                  "type": "string"
+                },
+                "dns_servers": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "bastion": {
+          "type": "object",
+          "properties": {
+            "sku": {
+              "type": "string"
+            },
+            "zones": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "scale_units": {
+              "type": "number"
+            },
+            "copy_paste_enabled": {
+              "type": "boolean"
+            },
+            "file_copy_enabled": {
+              "type": "boolean"
+            },
+            "ip_connect_enabled": {
+              "type": "boolean"
+            },
+            "kerberos_enabled": {
+              "type": "boolean"
+            },
+            "shareable_link_enabled": {
+              "type": "boolean"
+            },
+            "tunneling_enabled": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

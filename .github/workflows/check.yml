@@ -74,4 +74,6 @@ jobs:
 
       # Plans with the providers mocked, so no Azure either: what a root builds for a given config.
       - name: Test the roots
-        run: terraform -chdir=vending/terraform test
+        run: |
+          terraform -chdir=vending/terraform test
+          terraform -chdir=platform/terraform test
