@@ -34,6 +34,7 @@ BOOTSTRAP = """github:
     platform: mlz-platform
     vending: mlz-vending
   platform_team: platform
+  bypass_team: mlz-admins
   reviewers: [acme-lead]
 """
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
@@ -41,13 +42,14 @@ CORE_COPY = "acme/mlz-core"  # the organization's copy of mlz-core
 
 
 WORKFLOW = ".github/workflows/mlz.yml"
+TEAM_IDS = {"platform": 11, "mlz-admins": 12}
 
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
-                 teams=("platform",), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
-                 required_check=True, strict=True, core=True, not_executable=()):
+                 teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
+                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always"):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -75,9 +77,11 @@ class FakeGitHub:
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
-        self.created, self.commits, self.rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
+        self.created, self.commits, self.made_rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
         self.unexecutable = set(not_executable)  # (repo, path): on main without its mode, as a stopped run left it
         self.ruleset_bodies = {}
+        # The push ruleset that guards .github/ (finding 17), as GitHub would answer for the person signed in.
+        self.push_guard, self.can_bypass = push_guard, can_bypass
 
     def repo(self, repo):
         return self.repos.get(repo)
@@ -128,7 +132,7 @@ class FakeGitHub:
     def add_ruleset(self, repo, ruleset):
         if (repo, ruleset["name"]) in self.existing_rulesets:
             return False
-        self.rulesets.append((repo, ruleset["name"]))
+        self.made_rulesets.append((repo, ruleset["name"]))
         self.ruleset_bodies[repo] = ruleset
         return True
 
@@ -136,7 +140,12 @@ class FakeGitHub:
         return (repo, name) in self.variables
 
     def team(self, org, slug):
-        return {"slug": slug, "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
+        return {"slug": slug, "id": TEAM_IDS.get(slug, 1), "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
+
+    def rulesets(self, repo):
+        if not self.push_guard:
+            return []
+        return [{**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}]
 
     def team_can_write(self, org, slug, repo):
         return (slug, repo) in self.writers
@@ -433,8 +442,12 @@ class InstallTest(unittest.TestCase):
         # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
         self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
         self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
-        self.assertEqual(github.rulesets, [(repo, "main") for repo in REPOS.values()])
+        # The push ruleset first, after the starter's first commit; then main.
+        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "main")])
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
+        # Only the repo that existed: its branches may predate the push ruleset.
+        warned = [line for line in self.printed if "pushed before the ruleset" in line]
+        self.assertEqual(warned, ["acme/mlz-platform: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know"])
 
     def test_an_existing_public_repo_is_named_not_changed(self):
         github = FakeGitHub(existing=REPOS.values(), private=False)
@@ -495,7 +508,7 @@ class InstallTest(unittest.TestCase):
     def test_an_existing_ruleset_named_main_is_left_alone(self):
         github = FakeGitHub(existing=REPOS.values(), rulesets=[("acme/mlz-platform", "main")])
         install.step_repos(github, self.folder, self.out)
-        self.assertNotIn(("acme/mlz-platform", "main"), github.rulesets)  # the customer's own may be stricter
+        self.assertNotIn(("acme/mlz-platform", "main"), github.made_rulesets)  # the customer's own may be stricter
         self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
                       "and requires a code owner's review and platform / check (mlz install check says)", self.printed)
 
@@ -555,8 +568,9 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        # Per repo: the MLZ App, its code owners, and its check; then what is not checked.
-        self.assertEqual(len(self.printed), 12)
+        # Per repo: the MLZ App, its code owners, its push ruleset, and its check; then what is not checked.
+        self.assertEqual(len(self.printed), 15)
+        self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
         self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
         self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before a merge into main", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
@@ -588,7 +602,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(github.created[0], "acme/mlz-core (empty)")  # before the repos whose first runs call it
         self.assertEqual(pushed, [("acme/mlz-core", install.release())])
         self.assertEqual(github.access["acme/mlz-core"], "organization")
-        self.assertEqual([name for repo, name in github.rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch", "no-release-branches"])
+        self.assertEqual([name for repo, name in github.made_rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch", "no-release-branches"])
         workflow = next(files for repo, _, _, files, _ in github.commits if repo == "acme/mlz-platform")[".github/workflows/mlz.yml"]
         self.assertIn(f"    uses: acme/mlz-core/.github/workflows/role.yml@{install.release()}\n", workflow)
         self.assertNotIn("fortytwoservices/mlz-core", workflow)
@@ -610,6 +624,49 @@ class InstallTest(unittest.TestCase):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
         with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
+
+    def test_the_push_ruleset_refuses_github_changes_but_from_the_bypass_team(self):
+        ruleset = install.push_ruleset(12)
+        self.assertEqual((ruleset["target"], ruleset["enforcement"]), ("push", "active"))
+        self.assertEqual(ruleset["bypass_actors"], [{"actor_id": 12, "actor_type": "Team", "bypass_mode": "always"}])
+        self.assertEqual(ruleset["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}])
+        for path in (".github/workflows/mlz.yml", ".github/CODEOWNERS", ".github/actions/x/action.yml"):
+            self.assertTrue(install.matches(".github/**/*", path), path)
+        for path in ("customer.yaml", "mlz", "_generated/governance.yaml", "docs/.github/x", ".githubx/y"):
+            self.assertFalse(install.matches(".github/**/*", path), path)
+
+    def test_the_bypass_team_is_required_visible_and_not_the_platform_team(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  bypass_team: mlz-admins\n", ""))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.bypass_team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("bypass_team: mlz-admins", "bypass_team: platform"))
+        with self.assertRaisesRegex(ConfigError, "github.bypass_team is platform, the platform team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
+        with self.assertRaisesRegex(ConfigError, "acme has no team mlz-admins"):
+            install.step_repos(FakeGitHub(teams=("platform",)), self.folder, self.out)
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-admins is a secret team"):
+            install.step_repos(FakeGitHub(secret=("mlz-admins",)), self.folder, self.out)
+
+    def test_check_finds_a_missing_push_ruleset_and_a_bypass_without_the_team(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(FakeGitHub(push_guard=False, **everywhere), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: no active push ruleset refuses changes under .github/", str(caught.exception))
+
+        class OthersBypass(FakeGitHub):
+            def rulesets(self, repo):
+                return [{**install.push_ruleset(99), "id": 9, "current_user_can_bypass": "never"}]
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(OthersBypass(**everywhere), self.folder, self.out)
+        self.assertIn("acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz upgrade", str(caught.exception))
+
+    def test_an_offer_under_github_stops_before_its_branch_when_the_person_may_not_bypass(self):
+        github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"], can_bypass="never")
+        with self.assertRaisesRegex(ConfigError, "its ruleset pipeline-files refuses changes to .github/CODEOWNERS, .github/workflows/mlz.yml"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.commits, github.branches), ([], []))  # nothing pushed, no branch made
 
     def test_a_wrapper_left_without_its_mode_is_offered_the_mode(self):
         # An earlier run made the repo and its starter commit, and stopped before the commit that makes ./mlz executable.

@@ -49,7 +49,7 @@ from . import contract, mirror, names, naming, owners, platform, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, RELEASE_PLEASE_MARKER, WORKFLOW, pin_of, version
+from .upgrade import EXECUTABLE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, matches, pin_of, push_refused, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -70,6 +70,22 @@ def required_check(role: str) -> str:
     """The check GitHub knows the role's check job by: the starter workflow's job, named after the role, then
     role.yml's own (as the canary's runs showed, 2026-11-14)."""
     return f"{role} / check"
+
+
+# A branch's run uses the workflow the branch has, with the repo's secrets (the MLZ App's key) and the plan identity's
+# trust, so whoever could change .github/ on a branch could reach both (finding 17, abc, 19 November). This ruleset
+# refuses such a change on every branch, from anyone but the bypass team (decision D9).
+PUSH_RULESET = "pipeline-files"
+
+
+def push_ruleset(team_id: int) -> dict:
+    return {
+        "name": PUSH_RULESET,
+        "target": "push",
+        "enforcement": "active",
+        "bypass_actors": [{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}],
+        "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [PIPELINE_FILES]}}],
+    }
 
 
 def main_ruleset(role: str) -> dict:
@@ -96,7 +112,7 @@ def main_ruleset(role: str) -> dict:
     }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "reviewers", "runners")
+GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
 # bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
 # a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
 RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
@@ -200,6 +216,33 @@ def platform_team(bootstrap: dict) -> tuple[str, str]:
     return github["organization"], team
 
 
+def bypass_team(bootstrap: dict) -> tuple[str, str]:
+    """(organization, team slug): the small team that alone may change .github/ in the three repos, bootstrap.yaml's
+    github.bypass_team. Not the platform team: every member of that one can push."""
+    github = bootstrap.get("github") or {}
+    team = github.get("bypass_team")
+    if not isinstance(team, str) or not team:
+        raise ConfigError("bootstrap.yaml needs github.bypass_team: the slug of the small GitHub team that alone may change .github/ in "
+                          "the three repos (mlz upgrade, CODEOWNERS), and so can reach the MLZ App's key (docs/bootstrap.md).")
+    if team == github.get("platform_team"):
+        raise ConfigError(f"bootstrap.yaml: github.bypass_team is {team}, the platform team. Name a smaller team: every member of the "
+                          "platform team can push, and the bypass team's members alone may change .github/ (docs/bootstrap.md).")
+    return github["organization"], team
+
+
+def found_bypass_team(github, bootstrap: dict) -> dict:
+    """The bypass team as GitHub has it: there, and visible, so the platform team can see who may bypass."""
+    org, team = bypass_team(bootstrap)
+    found = github.team(org, team)
+    if found is None:
+        raise ConfigError(f"{org} has no team {team} (bootstrap.yaml's github.bypass_team). Make it, with the few people who may run "
+                          "mlz upgrade and change CODEOWNERS, then run this step again.")
+    if found.get("privacy") == "secret":
+        raise ConfigError(f"{org}/{team} is a secret team: the platform team could not see who may change .github/. An organization "
+                          "owner makes it visible (the team's Settings, Team visibility), then run this step again.")
+    return found
+
+
 def release() -> str:
     return "v" + json.loads((CORE / ".release-please-manifest.json").read_text())["."]
 
@@ -239,6 +282,13 @@ def offer_executable(github, repo: str, branch: str, out: Callable[[str], None])
     out(f"{repo}: {names} is not executable; the fix is offered in {url}")
 
 
+def refuse_if_pushes_refused(github, repo: str, paths) -> None:
+    """Stops before a branch is made whose commit a push ruleset would refuse, with what to do (upgrade.push_refused)."""
+    refused = push_refused(github, repo, list(paths))
+    if refused:
+        raise ConfigError(refused)
+
+
 def make_executable(github, repo: str, branch: str, files: dict[str, str], message: str) -> None:
     """The starter files a person runs (./mlz), made executable after the commit that wrote them, which cannot set a
     mode (GitHub.make_executable). A new repo's: before its ruleset, as its first commit is."""
@@ -273,6 +323,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         # GitHub skips a secret team in CODEOWNERS, which would leave every path without an owner.
         raise ConfigError(f"{org}/{team} is a secret team, and CODEOWNERS can only name a visible one. An organization owner "
                           "makes it visible (the team's Settings, Team visibility), then run this step again.")
+    admins = found_bypass_team(github, bootstrap)
     # First the organization's copy of mlz-core, at this release: a new repo's first commit starts its pipeline,
     # which calls it.
     mirror.ensure(github, core_repository(bootstrap), release(), out)
@@ -313,6 +364,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
                 missing.pop(owners.PATH, None)
             url = github.open_pull(repo, STARTER_BRANCH)
             if not url:
+                refuse_if_pushes_refused(github, repo, missing)
                 github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
             make_executable(github, repo, STARTER_BRANCH, missing, message)  # also on an offer an earlier run left without it
             if not url:
@@ -325,6 +377,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
                 # A repo set up before code owners: the file comes as a pull request, which a person merges.
                 url = github.open_pull(repo, CODE_OWNERS_BRANCH)
                 if not url:
+                    refuse_if_pushes_refused(github, repo, [owners.PATH])
                     github.commit_files(repo, CODE_OWNERS_BRANCH, github.reset_branch(repo, CODE_OWNERS_BRANCH, branch),
                                         {owners.PATH: owners.render(org, team)}, "chore: the platform team as code owner")
                     url = github.create_pull(repo, CODE_OWNERS_BRANCH, branch, "chore: the platform team as code owner",
@@ -337,6 +390,15 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             github.grant_team(org, team, repo)
             out(f"{repo}: {org}/{team} given write access, as its code owner")
+        # After the starter's first commit, which writes .github/: the bypass team alone may change it from now on.
+        if github.add_ruleset(repo, push_ruleset(admins["id"])):
+            out(f"{repo}: ruleset {PUSH_RULESET} (changes under .github/ refused on every branch, but from {org}/{admins['slug']})")
+            if not created:
+                # It refuses pushes only: a branch pushed before it keeps its changes, and a pull request from one runs them.
+                out(f"{repo}: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know")
+        else:
+            out(f"{repo}: has a ruleset named {PUSH_RULESET} already, left as it is; mlz install check says whether it refuses changes "
+                "under .github/")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
         if github.add_ruleset(repo, main_ruleset(role)):
             out(f"{repo}: ruleset main (pull requests only, a code owner's approval, {required_check(role)} passed on a branch up to date with main, no force push or deletion)")
@@ -375,6 +437,7 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
         problems += code_owner_problems(github, bootstrap, repo, out)
+        problems += push_ruleset_problems(github, bootstrap, repo, out)
         problems += required_check_problems(github, role, repo, out)
     # GitHub shows an App's installations only to the App itself and the organization's owners.
     out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
@@ -411,6 +474,28 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
     if not found:
         out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}")
     return found
+
+
+def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str], None]) -> list[str]:
+    """Whether an active push ruleset refuses changes under .github/ on every branch, with the bypass team as one that
+    may bypass it (finding 17)."""
+    try:
+        org, team = bypass_team(bootstrap)
+        admins = found_bypass_team(github, bootstrap)
+    except ConfigError as error:
+        return [str(error)]
+    probes = (WORKFLOW, owners.PATH)  # a file .github/ holds, and one at its top
+    guards = [r for r in github.rulesets(repo) if r.get("target") == "push" and r.get("enforcement") == "active"
+              and all(any(matches(p, probe) for rule in r.get("rules") or [] if rule.get("type") == "file_path_restriction"
+                          for p in (rule.get("parameters") or {}).get("restricted_file_paths") or []) for probe in probes)]
+    if not guards:
+        return [f"{repo}: no active push ruleset refuses changes under .github/, so a pull request's own run can reach the MLZ App's "
+                f"key and the plan identity; mlz install repos makes the ruleset {PUSH_RULESET} (docs/pipelines.md)."]
+    if not any(actor.get("actor_type") == "Team" and actor.get("actor_id") == admins["id"] for r in guards for actor in r.get("bypass_actors") or []):
+        return [f"{repo}: its ruleset {guards[0]['name']} refuses changes under .github/, but {org}/{team} (bootstrap.yaml's "
+                "github.bypass_team) may not bypass it, so nobody can run mlz upgrade; add the team as a bypass actor (Settings, Rules, Rulesets)."]
+    out(f"{repo}: changes under .github/ are refused on every branch, but from {org}/{team} (ruleset {guards[0]['name']})")
+    return []
 
 
 def required_check_problems(github, role: str, repo: str, out: Callable[[str], None]) -> list[str]:
