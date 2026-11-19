@@ -213,10 +213,11 @@ def main() -> int:
     if args.role == "workload-repos":
         try:
             github = GitHub()
-            # Only the run of main's current commit writes: an older one, a daily run among them, has older values.
-            sha, vending_repo = os.environ.get("GITHUB_SHA"), os.environ.get("GITHUB_REPOSITORY")
+            # Only configs rendered at main's current commit are written: older ones have older values. MLZ_CONFIGS_AT is
+            # the commit they were rendered at (main's, which the workload-repos job checks out), or this run's.
+            sha, vending_repo = os.environ.get("MLZ_CONFIGS_AT") or os.environ.get("GITHUB_SHA"), os.environ.get("GITHUB_REPOSITORY")
             if sha and vending_repo and github.head(vending_repo, "main") != sha:
-                print(f"mlz workload-repos: main has moved on from this run's {sha}: the newer run does it.")
+                print(f"mlz workload-repos: main has moved on from {sha}, which these configs are from: the newer run does it.")
                 return 0
             workload.sync(github, args.configs)
         except ConfigError as error:

@@ -13,17 +13,18 @@ terraform -chdir="$root" init -reconfigure -input=false -no-color \
   -backend-config="storage_account_name=$TFSTATE_STORAGE_ACCOUNT" \
   -backend-config="container_name=$TFSTATE_CONTAINER" \
   -backend-config="key=$stack.tfstate"
-# The state must be the one the reviewed plan started from. Another run that applied this stack in between (vending's
-# runs on main do not queue: docs/pipelines.md) would otherwise let an older plan's values, whose fingerprints may
-# still match, undo the newer change.
+# shellcheck disable=SC2046
+terraform -chdir="$root" plan -input=false -no-color $(vars_for "$role" "$stack") -out="$WORK/plans/$stack.tfplan" >/dev/null
+# The state must still be the one the reviewed plan started from, read after this plan was made: a change before or
+# during it shows here, and Terraform refuses to apply a saved plan whose state changed after it. Another run that
+# applied this stack in between (vending's runs on main do not queue: docs/pipelines.md) would otherwise let an older
+# plan's values, whose fingerprints may still match, undo the newer change.
 reviewed_version=$(cat "$WORK/reviewed/version-$stack.txt" 2>/dev/null || echo "not recorded")
 now_version=$(terraform -chdir="$root" state pull | python3 "$CORE/tools/ci/state_version.py")
 if [[ $now_version != "$reviewed_version" ]]; then
   echo "::error::$stack's state changed after this plan was reviewed (it was at $reviewed_version, it is at $now_version): another run applied it. Nothing is applied. Start a new run on main for a fresh plan (gh workflow run mlz.yml --ref main)."
   exit 1
 fi
-# shellcheck disable=SC2046
-terraform -chdir="$root" plan -input=false -no-color $(vars_for "$role" "$stack") -out="$WORK/plans/$stack.tfplan" >/dev/null
 terraform -chdir="$root" show -json "$WORK/plans/$stack.tfplan" > "$WORK/plans/$stack.json"
 if ! python3 "$CORE/tools/ci/summary.py" "$WORK/plans/$stack.json" "$stack" "$WORK/apply-summary-$stack.md" "$WORK/apply-changes-$stack.txt"; then
   echo "::error::The plan is refused; nothing is applied."

@@ -759,7 +759,7 @@ jobs:
             exit 0
           fi
           python3 -m mlz vending --repo . --out .mlz/vending
-          python3 -m mlz workload-repos --configs .mlz/vending
+          MLZ_CONFIGS_AT=$(git rev-parse HEAD) python3 -m mlz workload-repos --configs .mlz/vending
 
   # A contract pull request (tools/ci/publish.sh, mlz install publish) merges itself once this run has checked
   # and planned it: the run on main that the merge starts still waits for the role's reviewer, so a person's

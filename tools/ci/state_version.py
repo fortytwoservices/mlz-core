@@ -2,8 +2,9 @@
 
     python3 state_version.py [<state file>]       (stdin without one: terraform state pull | ...)
 
-Prints "<lineage> <serial>", or "none" for no state, or one with no resources yet: a backend may write an empty
-state for a key it has not seen, which must count as the "none" a plan of a new stack recorded.
+Prints "<lineage> <serial>", or "none" for no state, or one with neither resources nor outputs: a backend may write
+an empty state for a key it has not seen, which must count as the "none" a plan of a new stack recorded. A state with
+outputs alone is a real one (a root may hold only outputs), so its serial counts.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ def version(text: str) -> str:
     if not text.strip():
         return "none"
     state = json.loads(text)
-    if not state.get("resources"):
+    if not state.get("resources") and not state.get("outputs"):
         return "none"
     return f"{state.get('lineage')} {state.get('serial')}"
 

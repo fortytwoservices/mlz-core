@@ -95,6 +95,7 @@ jobs:
             .mlz/plan-workload.txt
             .mlz/summary-workload.md
             .mlz/changes-workload.txt
+            .mlz/version-workload.txt
           include-hidden-files: true
           retention-days: 30
 
