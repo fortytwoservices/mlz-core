@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -127,7 +128,7 @@ class ChangedTest(unittest.TestCase):
         (root / path).write_text(text)
 
     def saved_meta(self) -> str:
-        """A saved copy of api.github.com/meta for check.sh's firewall step (MLZ_GITHUB_META): no fetch, which GitHub
+        """A saved copy of api.github.com/meta for check.py's firewall step (MLZ_GITHUB_META): no fetch, which GitHub
         allows 60 times an hour without a token."""
         path = Path(self.tmp.name) / "meta.json"
         path.write_text(json.dumps({"domains": {"actions": ["*.actions.githubusercontent.com", "github.com"]}}))
@@ -163,9 +164,9 @@ class ChangedTest(unittest.TestCase):
         self.write(self.head, "_generated/bootstrap.yaml", "state: {account: x}\n")
         self.assertEqual(stacks.changed("governance", ["governance"], self.head, self.base), ["governance"])
 
-    def test_a_failed_check_fails_check_sh_and_prints_no_stacks(self):
-        # check.sh works out the stacks in a command substitution, where bash clears errexit: a failed render must
-        # still fail the script, not fall through to "nothing to plan".
+    def test_a_failed_check_fails_check_py_and_prints_no_stacks(self):
+        # A failed render must fail the step, not fall through to "nothing to plan" (check.sh's bash cleared errexit in
+        # the command substitution that read the stacks, and had to be told).
         import os
         import subprocess
         from mlz.contract import render
@@ -177,7 +178,7 @@ class ChangedTest(unittest.TestCase):
         (repo / "_generated" / "governance.yaml").write_text(render("governance", GOVERNANCE))
         (repo / "connectivity" / "norwayeast.yaml").write_text("platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\nfirewall: Gold\n")
         env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_EVENT_NAME", "PYTHONPATH")}
-        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo, env=env, capture_output=True, text=True)
+        done = subprocess.run([sys.executable, str(repo / ".mlz-core" / "tools" / "ci" / "check.py"), "platform"], cwd=repo, env=env, capture_output=True, text=True)
         self.assertNotEqual(done.returncode, 0, done.stdout)
         self.assertIn("firewall 'Gold' must be one of", done.stderr)
         self.assertEqual(done.stdout, "")
@@ -201,7 +202,7 @@ class ChangedTest(unittest.TestCase):
         self.assertEqual(stacks.difference("governance", "governance", self.head).splitlines()[4:], ['| `naming.org` | `"dm"` | (none) |'])
 
     def test_a_pull_request_that_changes_one_value_shows_that_one_difference(self):
-        # check.sh on a pull request keeps the base's configs in .mlz/base/; mlz diff then shows the one setting changed.
+        # check.py on a pull request keeps the base's configs in .mlz/base/; mlz diff then shows the one setting changed.
         import os
         import subprocess
         from mlz.contract import render
@@ -222,7 +223,7 @@ class ChangedTest(unittest.TestCase):
         (repo / "connectivity" / "norwayeast.yaml").write_text(hub.replace("Standard", "Premium"))
         git("commit", "-qam", "the change")
         (repo / ".mlz-core").symlink_to(stacks.CORE)
-        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
+        done = subprocess.run([sys.executable, str(repo / ".mlz-core" / "tools" / "ci" / "check.py"), "platform"], cwd=repo,
                               env={**env, "GITHUB_EVENT_NAME": "pull_request", "MLZ_GITHUB_META": self.saved_meta()}, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(json.loads(done.stdout.strip().splitlines()[-1]), ["connectivity", "management", "identity"])
@@ -251,19 +252,43 @@ class ChangedTest(unittest.TestCase):
         (repo / "connectivity" / "norwayeast.yaml").write_text("platform_address_space: 10.100.0.0/21\nlanding_zone_ranges: 10.100.0.0/16\n")
         git("commit", "-qam", "the first hub")
         (repo / ".mlz-core").symlink_to(stacks.CORE)
-        done = subprocess.run([str(repo / ".mlz-core" / "tools" / "ci" / "check.sh"), "platform"], cwd=repo,
+        done = subprocess.run([sys.executable, str(repo / ".mlz-core" / "tools" / "ci" / "check.py"), "platform"], cwd=repo,
                               env={**env, "GITHUB_EVENT_NAME": "pull_request", "MLZ_GITHUB_META": self.saved_meta()}, capture_output=True, text=True)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertTrue((repo / ".mlz/base/README").is_file())
         self.assertEqual(stacks.difference("platform", "connectivity", repo), "**connectivity** is new: the base branch has no such stack.\n")
 
-    def test_check_sh_names_every_input_the_roots_are_given(self):
-        # What vars_for passes a root must be what inputs() compares, or a change to it would plan nothing.
-        lib = (stacks.CORE / "tools" / "ci" / "lib.sh").read_text()
-        for passed in ("$WORK/rendered", "_generated/bootstrap.yaml", "$WORK/firewall.json", "$WORK/platform.json", "$WORK/vending/$stack.json"):
-            self.assertIn(passed, lib)
-        # Those (platform.json twice), the stack's own name (network=) and the organization's ID, neither of which a change moves.
-        self.assertEqual(len(re.findall(r"-var [a-z_]+=", lib)), 8)
+    def test_the_files_a_root_is_given_are_the_inputs_compared(self):
+        # What terraform_vars passes a root must be what inputs() compares, or a change to it would plan nothing.
+        repo = self.head
+        self.write(repo, "_generated/bootstrap.yaml", "state: {account: x}\n")  # governance passes it only when it is there
+        for role, stack in (("governance", "governance"), ("platform", "connectivity"), ("platform", "management"),
+                            ("platform", "identity"), ("platform", "firewall-rules"), ("vending", "payments-prod")):
+            values = stacks.terraform_vars(role, stack, repo, env={"GITHUB_REPOSITORY_OWNER_ID": "42"})[1::2]
+            files = [value.split("=", 1)[1] for value in values if "/" in value]
+            self.assertEqual(files, [str(repo / path) for path in stacks.inputs(role, stack)], f"{role} {stack}")
+
+    def test_each_stack_plans_in_its_root_with_lib_sh_s_variables(self):
+        # tools/ci/lib.sh's root_of and vars_for, which plan.py and apply.py now take from the table.
+        repo, work = self.head, self.head / ".mlz"
+        for (role, stack), root in {("governance", "governance"): "governance/terraform", ("platform", "connectivity"): "platform/terraform",
+                                    ("platform", "management"): "platform/networks/terraform", ("platform", "identity"): "platform/networks/terraform",
+                                    ("platform", "firewall-rules"): "platform/rules/terraform", ("vending", "payments-prod"): "vending/terraform"}.items():
+            self.assertEqual(stacks.root(role, stack), stacks.CORE / root)
+        self.assertEqual(stacks.root("workload", "workload", repo=repo), repo)  # the team's own root, at the repo's top
+        owner = {"GITHUB_REPOSITORY_OWNER_ID": "42"}
+        self.assertEqual(stacks.terraform_vars("governance", "governance", repo, {}), ["-var", f"rendered_library_path={work}/rendered"])
+        self.assertEqual(stacks.terraform_vars("platform", "management", repo, owner),
+                         ["-var", f"config_file={work}/platform.json", "-var", "network=management", "-var", "github_business_id=42"])
+        self.assertEqual(stacks.terraform_vars("platform", "management", repo, {}), ["-var", f"config_file={work}/platform.json", "-var", "network=management"])
+        self.assertEqual(stacks.terraform_vars("platform", "identity", repo, owner), ["-var", f"config_file={work}/platform.json", "-var", "network=identity"])
+        self.assertEqual(stacks.terraform_vars("vending", "payments-prod", repo, {}), ["-var", f"config_file={work}/vending/payments-prod.json"])
+        self.assertEqual(stacks.terraform_vars("workload", "workload", repo, owner), [])
+        for role, stack in (("platform", "hubs"), ("nope", "x")):
+            with self.assertRaisesRegex(ValueError, f"unknown {role} stack {stack}"):
+                stacks.terraform_vars(role, stack, repo, {})
+        with self.assertRaisesRegex(ValueError, "unknown platform stack hubs"):
+            stacks.root("platform", "hubs")
 
 
 if __name__ == "__main__":

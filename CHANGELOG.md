@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.11.5](https://github.com/fortytwoservices/mlz-core/compare/v0.11.4...v0.11.5) (2026-11-19)
+
+
+### Features
+
+* ./mlz in each repo, one loader and one check ([#116](https://github.com/fortytwoservices/mlz-core/issues/116)) ([bcb6ab8](https://github.com/fortytwoservices/mlz-core/commit/bcb6ab8cf63cfe5d021815cd48532477c05bd825))
+
+
+### Bug Fixes
+
+* **pipeline:** read GitHub's meta with the job's token, and never retry a used-up rate limit ([#118](https://github.com/fortytwoservices/mlz-core/issues/118)) ([f6d994c](https://github.com/fortytwoservices/mlz-core/commit/f6d994c5478902d5a29e2e95f397479fe13a805c))
+* **pipeline:** run mlz isolated from the customer's checkout, on every Python ([#119](https://github.com/fortytwoservices/mlz-core/issues/119)) ([d912b8e](https://github.com/fortytwoservices/mlz-core/commit/d912b8e26340efc8d5c542236ed63add6be4dcda))
+
 ## [0.11.4](https://github.com/fortytwoservices/mlz-core/compare/v0.11.3...v0.11.4) (2026-11-19)
 
 

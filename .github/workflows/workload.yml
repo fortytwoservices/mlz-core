@@ -3,7 +3,7 @@
 # which vending keeps up to date. Every run plans, as the plan identity, from a copy of the state in the landing
 # zone's own account; on main, the apply then runs in the apply environment, as the deploy identity, once the
 # owning team approves, and only if its plan makes exactly the changes the reviewed one showed. The scripts are
-# role.yml's, with the role "workload" (tools/ci/lib.sh).
+# role.yml's, with the role "workload" (tools/mlz/stacks.py: its root is the repo's top).
 name: mlz workload
 
 on:
@@ -80,7 +80,7 @@ jobs:
         id: plan
         run: |
           set +e
-          .mlz-core/tools/ci/plan.sh workload workload
+          python3 .mlz-core/tools/ci/plan.py workload workload
           echo "status=$?" >> "$GITHUB_OUTPUT"
 
       - name: Show the plan on the run page
@@ -155,4 +155,4 @@ jobs:
           terraform_wrapper: false
 
       - name: Apply
-        run: .mlz-core/tools/ci/apply.sh workload workload
+        run: python3 .mlz-core/tools/ci/apply.py workload workload
