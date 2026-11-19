@@ -408,7 +408,6 @@ jobs:
           BATCHES: ${{ needs.check.outputs.batches }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HEAD_TITLE: ${{ github.event.head_commit.message }}
         run: python3 .mlz-core/tools/ci/changed.py
 
   apply:
