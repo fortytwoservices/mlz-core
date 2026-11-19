@@ -37,6 +37,11 @@ wait for which:
     lineage and serial, `tools/ci/state_version.py`), and the apply compares it after planning again, while
     Terraform refuses a saved plan whose state changed after it. So an older run never applies its older values over
     a newer run's. This holds for every role. When it stops an apply, start a manual run, whose plan has both.
+  - **What is left:** the check above reads `main` when the apply job starts. A change taken back in the seconds after
+    that, whose run plans before this apply writes the state, finds nothing to change and applies nothing, while this
+    apply goes on: Azure then has the change `main` no longer has. Only a queue per landing zone would close that, which
+    GitHub Actions does not offer short of the queue on `main`. The daily check reports it in its drift issue, and a
+    manual run puts it right.
   - **Only a pull request's run writes the IP plan and the names**, and a pull request merges only up to date with
     `main` (the ruleset `main`), so two landing zones never get the same addresses.
   - **Only the run of `main`'s latest commit offers vending's contract** and the decommission pull requests, and
