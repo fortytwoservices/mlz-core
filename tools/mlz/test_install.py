@@ -48,7 +48,7 @@ TEAM_IDS = {"platform": 11, "mlz-admins": 12}
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
-                 teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, owned=True,
+                 teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, dismiss_stale=True, owned=True,
                  required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
@@ -56,6 +56,7 @@ class FakeGitHub:
         self.teams, self.secret, self.granted = set(teams), set(secret), []
         self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
         self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
+        self.dismiss_stale = dismiss_stale  # whether the repo's main dismisses an approval on a later push
         # And whether it requires the role's check to pass.
         self.required_check, self.strict = required_check, strict
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
@@ -162,7 +163,8 @@ class FakeGitHub:
     def branch_rules(self, repo, branch):
         role = next(role for role, name in REPOS.items() if name == repo)
         checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check is True else self.required_check(role)
-        return [{"type": "deletion", "ruleset_id": 7}, {"type": "pull_request", "ruleset_id": 7, "parameters": {"require_code_owner_review": self.ruleset_review}},
+        return [{"type": "deletion", "ruleset_id": 7}, {"type": "pull_request", "ruleset_id": 7, "parameters": {"require_code_owner_review": self.ruleset_review,
+                                                                                          "dismiss_stale_reviews_on_push": self.dismiss_stale}},
                 {"type": "required_status_checks", "ruleset_id": 8, "parameters": {"strict_required_status_checks_policy": self.strict, "required_status_checks": checks}}]
 
     def has_secret(self, repo, name):
@@ -573,8 +575,11 @@ class InstallTest(unittest.TestCase):
             # handover merged is checked again against the new owners.
             self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
             self.assertTrue(required["strict_required_status_checks_policy"])
-        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, no force push or deletion; "
-                      "acme/mlz-admins may merge a pull request without the approval)", self.printed)
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, which a later push takes back; no "
+                      "force push or deletion; acme/mlz-admins may merge a pull request without the approval)", self.printed)
+        review = next(rule["parameters"] for rule in github.ruleset_bodies[("acme/mlz-vending", "main")]["rules"] if rule["type"] == "pull_request")
+        self.assertTrue(review["dismiss_stale_reviews_on_push"])  # as in the workload repos (decision of 19 November)
+        self.assertFalse(review["require_last_push_approval"])
         self.assertIn("acme/mlz-vending: ruleset main-checks (vending / check passed on a branch up to date with main, before any merge; "
                       "nobody bypasses it)", self.printed)
         # The starter workflow's job gives the check its name.
@@ -594,7 +599,16 @@ class InstallTest(unittest.TestCase):
         self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
         self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
-                      "and a code owner's review is required on main", self.printed)
+                      "and a code owner's review is required on main, which a later push takes back", self.printed)
+
+    def test_check_fails_while_an_approval_survives_a_later_push(self):
+        # A repo made before 19 November: its main keeps an approval after new commits, until the box is ticked.
+        github = FakeGitHub(existing=REPOS.values(), dismiss_stale=False,
+                            variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        self.assertIn("acme/mlz-vending: an approval on main stays after a later push, so an approved change can become another before it "
+                      "merges; turn on 'Dismiss stale pull request approvals when new commits are pushed' in its ruleset main", str(caught.exception))
 
     # code owners
 

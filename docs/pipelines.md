@@ -228,6 +228,19 @@ the file, from `bootstrap.yaml`'s `platform_team`:
     covers its whole ruleset. `mlz install check` notes the missing bypass, and fails while the check is required
     only by a ruleset someone may bypass.
 - A code owner approves merges to `main`; the apply still waits for the role's environment's reviewer.
+- **A push after an approval needs a new one** (stale approvals are dismissed, the user's decision of 19 November, as
+  in the workload repos): an approved change cannot become another before it merges.
+  - Bringing a branch up to date with `main` keeps the approval while the pull request's own diff is unchanged:
+    tested on GitHub on 19 November, "Update branch" and a pushed merge of `main` both kept it, while a merge whose
+    resolution changed the pull request's files, and a new commit, dismissed it. So `main-checks`' up-to-date rule
+    does not make every open pull request wait for a new approval after each merge.
+  - Left open on purpose: someone who pushes onto a pull request they did not open may approve it themselves.
+    GitHub's "Require approval of the most recent reviewable push" would close that, but it would leave a team of two
+    unable to approve a reviewer's small fix; the bypass team, whose every bypass GitHub records, is the way for such
+    exceptions.
+  - `mlz install repos` gives a new repo's `main` this. For a repo made before, tick "Dismiss stale pull request
+    approvals when new commits are pushed" in its ruleset `main` (Settings, Rules, Rulesets); `mlz install check`
+    fails until it is on.
 
 ## Changes to `.github/`
 
