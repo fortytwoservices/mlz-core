@@ -201,12 +201,13 @@ def counts(naming: Naming, kind: str) -> bool:
 
 
 def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpose: str | None = None, nn: int = 1,
-           number: int = 1) -> str:
+           number: int | None = None) -> str:
     """The name of one resource of type `kind`, or a ConfigError saying which rule it breaks and how to fix it.
     env is the environment's long name (prod), region Azure's (norwayeast); both are turned into short codes. number is
     the resource's place among mlz-core's own of its type where it is (names.py's and vending.py's tables): it is the
-    {nn} of a template without {purpose}, which then tells them apart. With {purpose}, {nn} is nn, as it always was."""
-    if counts(naming, kind):
+    {nn} of a template without {purpose}, which then tells them apart. With {purpose}, or for a name whose caller gives
+    nn itself (the workload helper's cases), {nn} is nn, as it always was."""
+    if number is not None and counts(naming, kind):
         nn = number
     problems: list[str] = []
     rules = rules_for(kind)
