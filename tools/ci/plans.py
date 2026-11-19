@@ -14,6 +14,13 @@ import sys
 from pathlib import Path
 
 
+def unknown_only(changes: Path) -> int:
+    """How many changes a stack's list holds when every one is an update only to values unknown until apply (summary.py's
+    kind unknown), else 0: on the daily check those are no drift on their own, as they may well end unchanged."""
+    lines = changes.read_text().splitlines() if changes.is_file() else []
+    return len(lines) if lines and all(line.startswith("unknown ") for line in lines) else 0
+
+
 def plan(role: str, stacks: list[str], say=print) -> int:
     core, work = Path.cwd() / ".mlz-core", Path.cwd() / ".mlz"  # mlz-core's checkout, and what the run works out
     event = os.environ.get("GITHUB_EVENT_NAME", "")
@@ -25,6 +32,12 @@ def plan(role: str, stacks: list[str], say=print) -> int:
         summary = work / f"summary-{stack}.md"
         if status not in (0, 2, 3) or not summary.is_file():
             status = 1
+        maybe = unknown_only(work / f"changes-{stack}.txt") if status == 2 and event == "schedule" else 0
+        if maybe:
+            say(f"::notice::{stack}: {maybe} update(s) only to values unknown until apply, which may end unchanged: no drift on their own.")
+            with open(os.environ.get("GITHUB_STEP_SUMMARY") or os.devnull, "a") as page:
+                page.write(f"{stack}: {maybe} update(s) only to values unknown until apply, which may end unchanged; not counted as drift.\n\n")
+            status = 0
         if event == "schedule":
             (work / f"status-{stack}.txt").write_text(f"{status}\n")
         if status != 1:

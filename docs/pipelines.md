@@ -96,7 +96,16 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 | `drift` | daily | Keeps one issue in the repo, "Daily check: Azure differs from main": opened, or commented on, when the check fails, or a stack's plan differs from `main` or did not finish (refused, or stopped before planning); closed by the first daily check that finds every stack as `main` says. An issue of that title opened by a person is left alone. |
 
 The summary is short enough to read: the counts, the changes by resource type, and every change to or
-removal of an existing resource by name. A reviewer approving an apply sees the plan of that very run on
+removal of an existing resource by name.
+
+Whether a stack has changes is only ever its list of changes, read from the plan's JSON (`terraform show -json`,
+`tools/ci/summary.py`): never Terraform's exit code, and never its text. Terraform's exit code says only whether a
+plan was made. The list holds every resource that is added, changed, replaced or destroyed, and every output that
+changes. It also holds what changes the state alone: an `import` block, a `moved` block and a `removed` block
+(forget), which are applied like the rest, so that the state records them, though nothing in Azure changes. Terraform's
+own `applyable` must agree with the list being empty or not, or the plan fails rather than guess. An update whose
+every difference is a value unknown until apply is planned and applied, but on the daily check it is no drift on its
+own: it may well end unchanged, and the run page says how many there were. A reviewer approving an apply sees the plan of that very run on
 its page, and that plan is what gets applied, or nothing is.
 
 The plan identities can only read the state, and Terraform's Azure backend writes an empty state the

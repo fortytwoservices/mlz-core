@@ -7,7 +7,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ci.summary import main, resource_type
+from ci.summary import main, resource_type, unknown_only
+
+PLANS = Path(__file__).resolve().parent / "fixtures" / "plans"  # real plans, Terraform 1.17.0, one per case (L15)
 
 
 def change(address: str, *actions: str, after: dict | None = None, before: dict | None = None, deposed: str | None = None,
@@ -160,6 +162,64 @@ class SummaryTest(unittest.TestCase):
         ])
         self.assertEqual(self.exit_code, 0)
         self.assertNotIn("Refused", summary)
+
+    def real(self, name: str) -> tuple[int, list[str], str]:
+        """A real plan's exit code, its change list's kinds and addresses, and its summary."""
+        code = main(str(PLANS / f"{name}.json"), name, str(self.dir / "summary.md"), str(self.dir / "changes.txt"))
+        lines = [" ".join(line.split()[:2]) for line in (self.dir / "changes.txt").read_text().splitlines()]
+        return code, lines, (self.dir / "summary.md").read_text()
+
+    def test_real_plans_have_changes_exactly_when_terraform_says_applyable(self):
+        # Each list against what the plan holds, and Terraform's applyable agreeing with the list being non-empty.
+        expected = {
+            "g-noop": [],
+            "a-import": ["import random_id.imported"],  # -detailed-exitcode said 2, and the old list was empty: never applied
+            "b-moved": ["move terraform_data.a2"],  # the same
+            "c-removed": ["forget terraform_data.a"],  # the same; "forget" is missing from json-format's list of actions
+            "d-drift-ignored": [],  # drift on an ignored attribute changes nothing
+            "d2-drift-managed": ["change tfcoremock_simple_resource.d"],
+            "e-output": ["change output.o"],
+            "f-unknown-only": ["unknown terraform_data.a"],
+        }
+        for name, lines in expected.items():
+            code, found, _ = self.real(name)
+            self.assertEqual((code, found), (0, lines), name)
+            self.assertEqual(json.loads((PLANS / f"{name}.json").read_text())["applyable"], bool(lines), name)
+
+    def test_state_only_changes_say_so(self):
+        self.assertIn("- imports `random_id.imported`", self.real("a-import")[2])
+        self.assertIn("- moves `terraform_data.a` to `terraform_data.a2`", self.real("b-moved")[2])
+        summary = self.real("c-removed")[2]
+        self.assertIn("**In the state only, nothing in Azure changes**", summary)
+        self.assertIn("- forgets `terraform_data.a`: it stays in Azure and leaves the state", summary)
+        self.assertIn("**c-removed**: no resource changes.", summary)
+
+    def test_an_update_only_to_unknown_values(self):
+        summary = self.real("f-unknown-only")[2]
+        self.assertIn("1 of the changes only to values unknown until apply, which may end unchanged", summary)
+        self.assertIn("- change, to values unknown until apply: `terraform_data.a`", summary)
+        # A known difference beside the unknown ones is a change; so is an update with nothing to show and nothing unknown.
+        self.assertFalse(unknown_only({"actions": ["update"], "before": {"a": 1, "b": 2}, "after": {"a": 1, "b": 3}, "after_unknown": {"c": True}}))
+        self.assertTrue(unknown_only({"actions": ["update"], "before": {"a": 1, "c": [1]}, "after": {"a": 1}, "after_unknown": {"c": True}}))
+        self.assertFalse(unknown_only({"actions": ["update"], "before": {"a": 1}, "after": {"a": 1}, "after_unknown": {}}))
+
+    def test_a_plan_terraform_disagrees_with_fails(self):
+        # applyable, with nothing on the list: a kind of change this file does not know. Never skipped, never guessed.
+        plan = json.loads((PLANS / "g-noop.json").read_text())
+        plan["applyable"] = True
+        (self.dir / "odd.json").write_text(json.dumps(plan))
+        self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
+        plan.update(applyable=False, errored=True)
+        (self.dir / "odd.json").write_text(json.dumps(plan))
+        self.assertEqual(main(str(self.dir / "odd.json"), "odd", str(self.dir / "s.md"), str(self.dir / "c.txt")), 1)
+
+    def test_an_incomplete_plan_is_a_change_and_says_another_run_is_needed(self):
+        plan = json.loads((PLANS / "g-noop.json").read_text())
+        plan.update(complete=False, applyable=True, deferred_changes=[{"reason": "provider_config_unknown"}])
+        (self.dir / "deferred.json").write_text(json.dumps(plan))
+        self.assertEqual(main(str(self.dir / "deferred.json"), "x", str(self.dir / "s.md"), str(self.dir / "c.txt")), 0)
+        self.assertTrue((self.dir / "c.txt").read_text().startswith("deferred plan "))
+        self.assertIn("**Not complete:** Terraform says another plan and apply are needed", (self.dir / "s.md").read_text())
 
     def test_resource_type_keeps_the_innermost_module(self):
         self.assertEqual(resource_type("module.management.module.law.azapi_resource.this"), "law: azapi_resource.this")

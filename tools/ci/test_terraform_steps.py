@@ -80,19 +80,23 @@ class Case(unittest.TestCase):
 
 
 class PlanTest(Case):
-    def plan(self, fake: Terraform, summary: int = 0) -> int:
-        with mock.patch.object(plan.summary, "main", return_value=summary) as checked:
+    def plan(self, fake: Terraform, summary: int = 0, changes: str = "") -> int:
+        """plan.py with summary.py stood in for: its exit code, and the change list it writes."""
+        def summarise(plan_json, stack, summary_file, changes_file):
+            Path(changes_file).write_text(changes)
+            return summary
+        with mock.patch.object(plan.summary, "main", side_effect=summarise) as checked:
             self.checked = checked
             return plan.plan("vending", "payments-prod", run=fake)
 
     def test_a_new_stack_plans_from_no_state(self):
-        fake = Terraform(blob="false", plan=2)
-        self.assertEqual(self.plan(fake), 2)
+        fake = Terraform(blob="false", plan=0)
+        self.assertEqual(self.plan(fake, changes="add azapi_resource.x 1234\n"), 2)  # changes: the list, not the exit code
         self.assertEqual(fake.verbs(), ["az exists", "init", "plan", "show", "show"])  # nothing to download
         self.assertEqual((self.work / "version-payments-prod.txt").read_text(), "none\n")
         self.assertIn(f'path = "{self.work}/state/payments-prod.tfstate"', (self.root / "backend_override.tf").read_text())
         planned = fake.calls[2]
-        self.assertIn("-detailed-exitcode", planned)
+        self.assertNotIn("-detailed-exitcode", planned)  # never relied on (D12)
         self.assertIn("-lock=false", planned)
         self.assertEqual(planned[-3:], ["-var", f"config_file={self.work}/vending/payments-prod.json", f"-out={self.work}/plans/payments-prod.tfplan"])
         self.assertEqual((self.work / "plan-payments-prod.txt").read_text(), "the plan\n")
@@ -114,8 +118,27 @@ class PlanTest(Case):
         self.checked.assert_not_called()
 
     def test_a_refused_plan_exits_3_and_a_failed_summary_1(self):
-        self.assertEqual(self.plan(Terraform(plan=2), summary=3), 3)
-        self.assertEqual(self.plan(Terraform(plan=0), summary=1), 1)
+        self.assertEqual(self.plan(Terraform(plan=0), summary=3, changes="destroy azapi_resource.policy 1\n"), 3)
+        self.assertEqual(self.plan(Terraform(plan=0), summary=1), 1)  # an errored plan, or applyable against the list
+
+    def test_changes_or_not_is_the_list_whatever_terraform_s_exit_code(self):
+        # An import, a move or a forget alone: the list holds it, so the plan has changes, and the apply applies it.
+        self.assertEqual(self.plan(Terraform(plan=0), changes="import azapi_resource.x 5678\n"), 2)
+        self.assertEqual(self.plan(Terraform(plan=0), changes=""), 0)
+
+    def test_a_plan_is_failed_without_its_file_or_its_json(self):
+        class NoFile(Terraform):
+            def __call__(self, command, **kwargs):
+                if self.verb(command) == "plan":
+                    self.calls.append(command)
+                    return subprocess.CompletedProcess(command, 0, "")  # says it planned, writes nothing
+                return super().__call__(command, **kwargs)
+        fake = NoFile()
+        self.assertEqual(self.plan(fake), 1)
+        self.assertNotIn("show", fake.verbs())
+        failing = Terraform(fails=("show",))
+        self.assertEqual(self.plan(failing), 1)
+        self.checked.assert_not_called()
 
     def test_a_failed_lookup_stops_before_planning(self):
         # Never plan every resource as new because the state could not be looked for.
@@ -124,6 +147,17 @@ class PlanTest(Case):
             self.plan(fake)
         self.assertEqual(fake.verbs(), ["az exists"])
         self.assertFalse((self.work / "version-payments-prod.txt").exists())
+
+
+class NoExitCodeTest(unittest.TestCase):
+    def test_no_decision_rests_on_terraform_s_detailed_exit_code(self):
+        # D12: whether a stack has changes is only ever summary.py's list, from the plan's JSON.
+        core = Path(__file__).resolve().parents[2]
+        files = [*sorted((core / "tools" / "ci").glob("*.py")), *sorted((core / ".github" / "workflows").glob("*.yml"))]
+        found = [f"{path.name}:{number}" for path in files if not path.name.startswith("test_")
+                 for number, line in enumerate(path.read_text().splitlines(), 1)
+                 if ('"-detailed-exitcode"' in line if path.suffix == ".py" else "-detailed-exitcode" in line.split("#")[0])]
+        self.assertEqual(found, [])
 
 
 class ApplyTest(Case):
