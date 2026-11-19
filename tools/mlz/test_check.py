@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -122,6 +123,13 @@ class WrapperTest(unittest.TestCase):
             run = subprocess.run([str(repo / upgrade.WRAPPER), "check", "--json"], cwd=repo, capture_output=True, text=True,
                                  env={**os.environ, "XDG_CACHE_HOME": str(cache), "PYTHONPATH": str(Path(tmp) / "elsewhere")})
             self.assertEqual((run.returncode, run.stdout), (0, '["governance"]\n'), run.stderr)
+
+    def test_every_python_it_starts_is_isolated(self):
+        # Even before it is in the repo, while it fetches: a sitecustomize.py or PYTHONPATH must not run in its place.
+        text = (STARTERS / "mlz-governance" / upgrade.WRAPPER).read_text()
+        calls = [line for line in text.splitlines() if re.search(r"\bpython3 ", line) and not line.lstrip().startswith("#") and "command -v" not in line]
+        self.assertEqual(len(calls), 2, calls)  # the rename into the cache, and mlz itself
+        self.assertTrue(all("python3 -I " in line for line in calls), calls)
 
     def test_without_the_workflow_it_says_where_to_run_it(self):
         with tempfile.TemporaryDirectory() as tmp:

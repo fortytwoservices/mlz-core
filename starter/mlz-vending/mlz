@@ -38,13 +38,14 @@ if [ ! -f "$cache/tools/mlz/__main__.py" ]; then
   tar -xzf "$download/core.tar.gz" -C "$download/core" --strip-components 1
   # One rename puts the whole release in place, and never over a folder that is there: when another ./mlz fetched
   # it meanwhile, that one stays, in use or not, and this copy goes.
-  python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$download/core" "$cache" 2>/dev/null || true
+  python3 -I -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$download/core" "$cache" 2>/dev/null || true
   rm -rf "$download"
   trap - EXIT
   [ -f "$cache/tools/mlz/__main__.py" ] || fail "$cache is there without mlz-core's tools; delete it and run ./mlz again."
 fi
 
 cd "$here"
-# Isolated (-I): Python takes nothing from this repo or the environment, so a file here named mlz.py, or a
-# PYTHONPATH, cannot stand in for the release; only the release's tools are added to its path.
+# Isolated (-I), as every python3 here: Python takes nothing from this repo, the folder it is run from or the
+# environment, so a file named mlz.py or sitecustomize.py, or a PYTHONPATH, cannot run in its place; only the
+# release's tools are added to its path.
 exec python3 -I -c 'import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); runpy.run_module("mlz", run_name="__main__", alter_sys=True)' "$cache/tools" "$@"
