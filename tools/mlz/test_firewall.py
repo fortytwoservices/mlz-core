@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import http.client
 import io
 import json
 import os
@@ -10,9 +11,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
+from unittest import mock
 
-from mlz.firewall import PARTITIONS, build, github_actions_domains, partition
+from mlz.firewall import GITHUB_META, PARTITIONS, build, github_actions_domains, partition
 from mlz.merge import ConfigError
 
 # A hub's names, as tools/mlz/names.py gives them: the policy's ID is built from two of them.
@@ -454,6 +457,33 @@ class FirewallTest(unittest.TestCase):
         broken.write_text("{}")
         with self.assertRaisesRegex(ConfigError, "GitHub's Actions domains could not be read from .*broken.json: 'domains'"):
             github_actions_domains(broken)
+
+    def answer(self, status: int, **headers: str) -> urllib.error.HTTPError:
+        """GitHub's answer to an anonymous request that fails, as urllib raises it."""
+        message = http.client.HTTPMessage()
+        for name, value in headers.items():
+            message[name.replace("_", "-")] = value
+        return urllib.error.HTTPError(GITHUB_META, status, "Forbidden", message, None)
+
+    def test_an_anonymous_rate_limit_used_up_says_until_when_and_is_not_retried(self):
+        # 60 an hour per address, which a runner may share: waiting seconds would not help (14:00 UTC, 19 November 2026).
+        limited = self.answer(403, X_RateLimit_Remaining="0", X_RateLimit_Reset="1795096800")
+        with mock.patch("mlz.firewall.urllib.request.urlopen", side_effect=limited) as fetched, mock.patch("mlz.firewall.time.sleep") as slept:
+            with self.assertRaisesRegex(ConfigError, "GitHub's API rate limit for anonymous requests from this address is used up until 14:00 UTC, "
+                                                     "so https://api.github.com/meta could not be read: .* or give a saved copy with --github-meta."):
+                github_actions_domains()
+        self.assertEqual((fetched.call_count, slept.call_count), (1, 0))
+
+    def test_any_other_failure_is_tried_three_times(self):
+        meta = io.BytesIO(json.dumps({"domains": {"actions": GITHUB}}).encode())
+        refused = self.answer(403, X_RateLimit_Remaining="57")  # a 403 with requests left is no rate limit
+        with mock.patch("mlz.firewall.urllib.request.urlopen", side_effect=[OSError("timed out"), refused, meta]) as fetched, \
+                mock.patch("mlz.firewall.time.sleep") as slept:
+            self.assertEqual(github_actions_domains(), sorted(GITHUB))
+        self.assertEqual((fetched.call_count, slept.call_count), (3, 2))
+        with mock.patch("mlz.firewall.urllib.request.urlopen", side_effect=OSError("timed out")), mock.patch("mlz.firewall.time.sleep"):
+            with self.assertRaisesRegex(ConfigError, "GitHub's Actions domains could not be read from https://api.github.com/meta: timed out"):
+                github_actions_domains()
 
 
 if __name__ == "__main__":

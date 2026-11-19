@@ -50,8 +50,12 @@ class GitHubMetaTest(unittest.TestCase):
         self.assertEqual(self.said, ["::error::GitHub's meta (api.github.com/meta) could not be read: gh: Bad Gateway (HTTP 502)"])
 
     def test_a_403_that_is_not_the_rate_limit_is_not_called_one(self):
-        self.assertIsNone(github_meta.rate_limited(403, {"x-ratelimit-remaining": "57"}))
-        self.assertEqual(github_meta.rate_limited(429, {"x-ratelimit-remaining": "0"}), "it resets (within the hour)")
+        self.assertEqual(self.fetch("HTTP/2.0 403 Forbidden\nX-Ratelimit-Remaining: 57\n\n{}", code=1, stderr="gh: Forbidden (HTTP 403)"), 1)
+        self.assertEqual(self.said, ["::error::GitHub's meta (api.github.com/meta) could not be read: gh: Forbidden (HTTP 403)"])
+
+    def test_a_rate_limit_without_its_reset_time_still_says_so(self):
+        self.assertEqual(self.fetch("HTTP/2.0 429 Too Many Requests\nX-Ratelimit-Remaining: 0\n\n{}", code=1), 1)
+        self.assertIn("is used up until it resets (within the hour):", self.said[0])
 
     def test_crlf_and_mixed_case_headers(self):
         status, headers, body = github_meta.parse("HTTP/1.1 200 OK\r\nX-RateLimit-Remaining: 5\r\n\r\n{}")
