@@ -233,6 +233,28 @@ identity, from its own pull request (proved on a test customer on 19 November). 
 - **Plans and records:** GitHub records every bypass (the repo's Insights, Rules). Push rulesets need GitHub Team or
   Enterprise, and private repos.
 
+## Changes to `.github/`
+
+A run uses the workflow of the branch it runs on, with the repo's secrets and its plan identity's trust. A branch
+that changed `.github/workflows/mlz.yml` could therefore take the MLZ App's private key, or sign in as the plan
+identity, from its own pull request (proved on a test customer on 19 November). So each role repo's push ruleset,
+`pipeline-files`, refuses a change under `.github/` on every branch, from everyone but `bootstrap.yaml`'s
+`bypass_team`:
+
+- **Who must be in the bypass team:**
+  - whoever runs `mlz upgrade`, which rewrites `.github/workflows/mlz.yml`;
+  - whoever changes `.github/CODEOWNERS`.
+  - Both `mlz upgrade` and `mlz install repos` check before they push anything, and stop with who may if you may not.
+- **Its members can reach the App's key,** as the repo's admins can. Keep it small; it may not be the platform team.
+- **What the rule leaves alone:** the contracts, the IP plan and the names, which are under `_generated/`. The MLZ
+  App's own pull requests and commits never need the bypass.
+- **It checks pushes, not merges** (tested 19 November). A pull request whose branch a bypass member pushed merges
+  like any other, after its review. A branch pushed before the ruleset existed keeps whatever it changed under
+  `.github/`, and a pull request from it would run that. So when the ruleset comes to an existing repo, delete the
+  branches you do not know.
+- **Plans and records:** GitHub records every bypass (the repo's Insights, Rules). Push rulesets need GitHub Team or
+  Enterprise, and private repos.
+
 ## What a repo needs
 
 | Setting | From |
