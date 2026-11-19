@@ -1,17 +1,19 @@
-"""Tests for plans.sh: a group of stacks planned one after the other in one job, each as one job per stack did."""
+"""Tests for plans.py: a group of stacks planned one after the other in one job, each as one job per stack did. plans.sh's
+tests, unchanged but for the script they run and the comment step's fake, which is Python as comment.py is."""
 
 from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-PLANS = Path(__file__).resolve().parent / "plans.sh"
+PLANS = Path(__file__).resolve().parent / "plans.py"
 
-# plan.sh as plans.sh calls it: exits with the code .fake/<stack> holds, after writing the stack's summary unless the
-# plan failed. comment.sh records its call, and fails for a stack named in .fake/comment-fails.
+# plan.sh as plans.py calls it: exits with the code .fake/<stack> holds, after writing the stack's summary unless the
+# plan failed. comment.py records its call, and fails for a stack named in .fake/comment-fails.
 FAKE_PLAN = """#!/usr/bin/env bash
 code=$(cat ".fake/$2")
 echo "planned $2" >> .fake/calls
@@ -19,10 +21,12 @@ echo "planned $2" >> .fake/calls
 [[ $code != 1 ]] && echo "**$2**: summary" > ".mlz/summary-$2.md"
 exit "$code"
 """
-FAKE_COMMENT = """#!/usr/bin/env bash
-echo "comment $1 $2 $3" >> .fake/calls
-grep -qx "$1" .fake/comment-fails 2>/dev/null && exit 1
-exit 0
+FAKE_COMMENT = """import sys
+from pathlib import Path
+with open(".fake/calls", "a") as calls:
+    calls.write("comment " + " ".join(sys.argv[1:]) + "\\n")
+fails = Path(".fake/comment-fails")
+sys.exit(1 if fails.exists() and sys.argv[1] in fails.read_text().split() else 0)
 """
 
 
@@ -32,7 +36,7 @@ class PlansTest(unittest.TestCase):
         self.dir = Path(self.tmp.name)
         ci = self.dir / ".mlz-core" / "tools" / "ci"
         ci.mkdir(parents=True)
-        for name, text in (("plan.sh", FAKE_PLAN), ("comment.sh", FAKE_COMMENT)):
+        for name, text in (("plan.sh", FAKE_PLAN), ("comment.py", FAKE_COMMENT)):
             (ci / name).write_text(text)
             (ci / name).chmod(0o755)
         (self.dir / ".fake").mkdir()
@@ -46,7 +50,7 @@ class PlansTest(unittest.TestCase):
             (self.dir / ".fake" / stack).write_text(f"{code}\n")
         summary = self.dir / "step-summary.md"
         env = {**os.environ, "GITHUB_EVENT_NAME": event, "GITHUB_STEP_SUMMARY": str(summary)}
-        done = subprocess.run(["bash", str(PLANS), "vending", *codes], cwd=self.dir, env=env, capture_output=True, text=True)
+        done = subprocess.run([sys.executable, str(PLANS), "vending", *codes], cwd=self.dir, env=env, capture_output=True, text=True)
         calls = (self.dir / ".fake" / "calls").read_text() if (self.dir / ".fake" / "calls").exists() else ""
         return done.returncode, done.stdout, calls + (summary.read_text() if summary.exists() else "")
 
