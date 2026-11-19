@@ -354,6 +354,19 @@ class UpgradeTest(SyncTest):
         self.sync(github)
         self.assertEqual(len(github.pulls[self.REPO]), 2)
 
+    def test_a_failed_update_of_the_open_pull_request_leaves_its_branch_to_try_again(self):
+        github = self.github(self.made_at())
+        self.pull(github, 3, "v0.11.0")
+        failing = github.update_pull
+        github.update_pull = lambda *args: (_ for _ in ()).throw(ConfigError("gh api PATCH pulls/3: HTTP 502"))
+        out = self.sync(github)
+        self.assertIn("no upgrade pull request: gh api PATCH pulls/3: HTTP 502", out[-1])
+        self.assertNotIn((self.REPO, "mlz/upgrade"), github.refs)  # not moved: its title and notes still say v0.11.0
+        github.update_pull = failing
+        self.sync(github)
+        self.assertEqual(github.updated, [(self.REPO, 3, f"chore: mlz-core {TARGET}")])
+        self.assertEqual(github.refs[(self.REPO, "mlz/upgrade")], "commit-2")
+
     def test_an_open_pull_request_renamed_by_its_team_is_left_as_it_is(self):
         github = self.github(self.made_at())
         self.pull(github, 4, TARGET, title="chore: mlz-core upgrade, reviewed by Kari")
