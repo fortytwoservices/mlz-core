@@ -370,7 +370,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
     needs: [check, plan]
     runs-on: ubuntu-latest
-    timeout-minutes: 15 # on Team, it waits up to ten minutes for the pull request's run to finish
+    timeout-minutes: 30 # on Team, it waits up to 25 minutes for the pull request's run to finish
     permissions:
       contents: read
       pull-requests: write # a comment on the pull request whose merge waits for approval (tools/ci/changed.py)

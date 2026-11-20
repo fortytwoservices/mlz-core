@@ -9,11 +9,15 @@ manual run, the last one merged. Its last run is the caller's workflow's (WORKFL
 waits for it to finish (WAIT seconds at most), then reads its plan artifacts (ARTIFACTS, a pattern). Refused, nothing
 applies:
 - a commit no pull request made: in a role repo, the rule on main lets none through;
+- a pull request whose run was run again after its merge: that plan is of a later Azure, which nobody approved, and
+  re-running an old merge's runs would otherwise apply it (a rollback, say);
 - a stack whose plan on main changes something that the pull request's run did not plan, or planned otherwise: Azure
   or the state changed in between, or an apply failed half way. A new pull request plans it again (replan.txt in a
   role repo, docs/pipelines.md; any pull request in a workload repo).
 A workload repo's commit that no pull request made is the MLZ App's, the landing zone's values from vending, which its
 rule on main lets through alone (tools/mlz/workload.py): applied as vending wrote it, as with Enterprise's reviewer gone.
+Only a commit an app's bot wrote, though (a person's merge whose pull request GitHub does not list yet is refused), and
+on a re-run only while it is still main's head, so that re-running an old values commit's run never rolls back.
 
 Needs GH_TOKEN (actions: read), GITHUB_REPOSITORY, GITHUB_SHA, WORKFLOW_REF (github.workflow_ref, the caller's
 workflow) and, from the command line or changed.py, the stacks whose plan on main changes something.
@@ -25,6 +29,7 @@ import difflib
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -32,7 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a
 
 from ci.gh import ConfigError, Pipeline, env  # noqa: E402
 
-WAIT, PAUSE = 600, 15  # seconds: how long a pull request's run may take to finish after the merge, and between looks
+# Seconds: how long a pull request's run may take to finish after the merge (a plan job may take 30 minutes, and main's
+# own plan took a while already), and between looks.
+WAIT, PAUSE = 1500, 15
+LOOKS = 3  # times the pull request of a commit just merged is asked for, PAUSE apart, before there is said to be none
 REPLAN = {"workload": "Open a pull request (an empty commit will do), whose run plans it again, and merge it once a code owner "
                       "approves that plan."}
 REPLAN_ROLE = ("Open a pull request that changes replan.txt (any line: say why), whose run plans every stack again, and merge "
@@ -44,6 +52,25 @@ def merged_pull(github, repo: str, sha: str, timeout: float | None = None) -> di
     merged into another branch, whose merge commit was then pushed onto main, did not make it."""
     return next((pull for pull in github.commit_pulls(repo, sha, timeout=timeout)
                  if pull.get("merged_at") and pull.get("merge_commit_sha") == sha and (pull.get("base") or {}).get("ref") == "main"), None)
+
+
+def started_after(run: dict, pull: dict) -> bool:
+    """Whether the run's latest attempt started after the pull request was merged (GitHub's UTC timestamps)."""
+    started, merged = run.get("run_started_at"), pull.get("merged_at")
+    return bool(started and merged) and datetime.fromisoformat(started.replace("Z", "+00:00")) > datetime.fromisoformat(merged.replace("Z", "+00:00"))
+
+
+def app_commit(github, repo: str, sha: str, say=print) -> bool:
+    """Whether a workload repo's commit without a pull request may apply as it is: an app's bot wrote it (the MLZ App,
+    the only one its rule lets through), and on a re-run it is still main's head."""
+    author = github.commit_author(repo, sha) or {}
+    if author.get("type") != "Bot" or not str(author.get("login", "")).endswith("[bot]"):
+        say(f"::error::No pull request made {sha[:7]}, and its author {author.get('login') or 'unknown'} is not the MLZ App; nothing is applied.")
+        return False
+    if os.environ.get("GITHUB_RUN_ATTEMPT", "1") != "1" and github.head(repo, "main") != sha:
+        say(f"::error::{sha[:7]} is no longer main's head: a re-run of its apply would roll the landing zone back; nothing is applied.")
+        return False
+    return True
 
 
 def workflow_file(workflow_ref: str) -> str:
@@ -96,8 +123,15 @@ def approved(role: str, stacks: list[str], github=None, artifacts: str | None = 
     repo, sha = env("GITHUB_REPOSITORY"), env("GITHUB_SHA")
     replan = REPLAN.get(role, REPLAN_ROLE)
     pull = merged_pull(github, repo, sha)
+    for _ in range(LOOKS - 1):  # GitHub may list a merge's pull request a little after the push
+        if pull is not None:
+            break
+        sleep(PAUSE)
+        pull = merged_pull(github, repo, sha)
     if pull is None:
         if role == "workload":
+            if not app_commit(github, repo, sha, say):
+                return False
             say("::notice::No pull request made this commit: it is the MLZ App's, the landing zone's values from vending, which the rule on "
                 "main lets through alone. Applied as vending wrote it.")
             return True
@@ -107,6 +141,10 @@ def approved(role: str, stacks: list[str], github=None, artifacts: str | None = 
     run = last_run(github, repo, workflow_file(env("WORKFLOW_REF")), pull["head"]["sha"], wait=wait, sleep=sleep, say=say)
     if run is None:
         say(f"::error::#{number} has no run on its last commit, so no plan of it was shown; nothing is applied. {replan}")
+        return False
+    if started_after(run, pull):
+        say(f"::error::#{number}'s run {run.get('html_url', run['id'])} was run again after its merge ({run.get('run_started_at')}): its "
+            f"plans are not the ones approved on the pull request; nothing is applied. {replan}")
         return False
     folder = Path.cwd() / ".mlz" / "approved"
     if not github.download_artifacts(repo, run["id"], artifacts or f"mlz-{role}-plan-*", folder):

@@ -25,9 +25,16 @@ class FakeGitHub:
     """GitHub as approved.py asks it: the commit's pull requests, the workflow's runs on a commit (one list per look),
     and each run's artifacts, as {artifact: {file: text}}."""
 
-    def __init__(self, pulls=(), runs=(), artifacts=None):
+    def __init__(self, pulls=(), runs=(), artifacts=None, author=None, head="sha1"):
         self.pulls, self.looks, self.artifacts = list(pulls), [list(r) for r in runs], artifacts or {}
+        self.author, self.main = author, head
         self.asked: list[tuple] = []
+
+    def commit_author(self, repo, sha):
+        return self.author
+
+    def head(self, repo, branch):
+        return self.main
 
     def commit_pulls(self, repo, sha, timeout=None):
         self.asked.append(("commit_pulls", repo, sha))
@@ -47,8 +54,12 @@ class FakeGitHub:
         return bool(found)
 
 
-def run(id_=41, number=12, status="completed", event="pull_request"):
-    return {"id": id_, "run_number": number, "status": status, "event": event, "html_url": f"https://example/runs/{id_}"}
+APP = {"login": "acme-mlz[bot]", "type": "Bot"}
+
+
+def run(id_=41, number=12, status="completed", event="pull_request", started="2026-11-20T09:50:00Z"):
+    return {"id": id_, "run_number": number, "status": status, "event": event, "html_url": f"https://example/runs/{id_}",
+            "run_started_at": started}
 
 
 class Case(unittest.TestCase):
@@ -111,8 +122,35 @@ class ApprovedTest(Case):
         self.reviewed("connectivity", "x\n")
         self.assertFalse(self.gate("platform", ["connectivity"], FakeGitHub([merged(sha="other")])))
         self.assertIn("::error::No pull request made sha1, so no code owner approved a plan of it", self.said[-1])
-        self.assertTrue(self.gate("workload", ["workload"], FakeGitHub([])))
+        self.assertEqual(self.slept, [approved.PAUSE] * (approved.LOOKS - 1))  # asked again: GitHub may list it late
+        self.assertTrue(self.gate("workload", ["workload"], FakeGitHub([], author=APP)))
         self.assertIn("it is the MLZ App's, the landing zone's values from vending", self.said[-1])
+
+    def test_a_pull_request_listed_late_is_still_found(self):
+        self.reviewed("workload", "x\n")
+        github = FakeGitHub([], [[run()]], {41: {"mlz-workload-plan": {"changes-workload.txt": "x\n"}}})
+        github.commit_pulls = lambda repo, sha, timeout=None, found=iter([[], [merged()]]): next(found)
+        self.assertTrue(self.gate("workload", ["workload"], github, artifacts="mlz-workload-plan"))
+        self.assertIn("#7's run showed", self.said[-1])
+
+    def test_a_workload_commit_without_a_pull_request_applies_only_as_the_app_s_and_never_rolls_back(self):
+        self.reviewed("workload", "x\n")
+        self.assertFalse(self.gate("workload", ["workload"], FakeGitHub([], author={"login": "alex", "type": "User"})))
+        self.assertIn("its author alex is not the MLZ App", self.said[-1])
+        self.assertFalse(self.gate("workload", ["workload"], FakeGitHub([], author=None)))
+        # A re-run of an older values commit's run: main has moved on, so it would roll back.
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}):
+            self.assertFalse(self.gate("workload", ["workload"], FakeGitHub([], author=APP, head="sha9")))
+            self.assertIn("sha1 is no longer main's head", self.said[-1])
+            self.assertTrue(self.gate("workload", ["workload"], FakeGitHub([], author=APP, head="sha1")))
+
+    def test_a_pull_request_s_run_run_again_after_its_merge_is_refused(self):
+        # Its plan is of a later Azure, which nobody approved: re-running an old merge's runs must not roll back.
+        self.reviewed("connectivity", "x\n")
+        github = FakeGitHub([merged()], [[run(started="2026-11-21T08:00:00Z")]], {41: {"a": {"changes-connectivity.txt": "x\n"}}})
+        self.assertFalse(self.gate("platform", ["connectivity"], github))
+        self.assertIn("was run again after its merge (2026-11-21T08:00:00Z)", self.said[-1])
+        self.assertNotIn(("download", "acme/mlz-platform", 41, "mlz-platform-plan-*"), github.asked)
 
     def test_a_pull_request_without_a_run_or_plans_applies_nothing(self):
         self.reviewed("workload", "x\n")

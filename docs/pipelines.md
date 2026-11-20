@@ -169,13 +169,16 @@ for change and value for value (each stack's `changes-<stack>.txt`, as the apply
 reviewed one). The `changed` job is the gate (`tools/ci/approved.py`), on every run on `main`, a manual one included:
 
 - It finds the pull request whose merge made the commit `main` is at, and that pull request's last run on its head
-  commit, and waits up to ten minutes for that run to finish: a pull request merged as soon as its check passed
-  may still be planning.
+  commit, and waits up to 25 minutes for that run to finish: a pull request merged as soon as its check passed
+  may still be planning. A run of it that started after the merge (run again by someone) is refused: its plan is of
+  a later Azure, which nobody approved.
 - Each stack whose plan on `main` changes something must have the same list of changes in that run's plans. A stack
   the pull request did not plan (its change did not touch it), or planned otherwise (Azure or the state changed since,
   or an apply failed half way), stops the run: nothing applies, the job fails, and its log shows the difference.
-- A commit no pull request made applies nothing: in a role repo, the ruleset `main` lets none through. The plans are
-  kept 30 days; a pull request merged after that has none to compare with.
+- A commit no pull request made applies nothing: in a role repo, the ruleset `main` lets none through. In a workload
+  repo it is the MLZ App's values, and applies as vending wrote them, but only when an app's bot wrote the commit,
+  and on a re-run only while it is still `main`'s head (an older one would roll the landing zone back). The plans
+  are kept 30 days; a pull request merged after that has none to compare with.
 - A contract pull request is a pull request like any other: its run's plan, which nobody approves, is the one its
   merge's run applies, without a person (decided 20 November 2026). On Enterprise the role's reviewer approves it.
 

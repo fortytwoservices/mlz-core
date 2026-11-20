@@ -112,6 +112,10 @@ class Pipeline:
         """The pull requests a commit belongs to: for a merge's commit on main, the one it merged."""
         return self._api(f"repos/{repo}/commits/{sha}/pulls", timeout=timeout) or []
 
+    def commit_author(self, repo: str, sha: str) -> dict | None:
+        """The GitHub account a commit is authored by ({login, type}), or None when GitHub links it to none."""
+        return self._api(f"repos/{repo}/commits/{sha}").get("author")
+
     def workflow_runs(self, repo: str, workflow: str, head_sha: str) -> list[dict]:
         """A workflow's runs on a commit (its file name, mlz.yml), newest first."""
         return (self._api(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={head_sha}&per_page=100") or {}).get("workflow_runs") or []

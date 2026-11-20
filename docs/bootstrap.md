@@ -155,9 +155,13 @@ protection rule"). On Team the approval moves to the pull request, which the rul
 
 `mlz install check` reads the organization's plan: on Team with `plan: enterprise`, or on Free, it refuses; on
 Enterprise with `plan: team` it says the apply is approved on the pull request and goes on. GitHub shows the plan only
-to its owners, so for anyone else it says so and goes on. Switching an installed customer is `plan:` in
-`bootstrap.yaml`, then `mlz install bootstrap` (the environments and `MLZ_APPROVAL`) and a governance run, whose
-contract takes the plan to vending and the workload repos.
+to its owners, so for anyone else it says so and goes on.
+
+Switching an installed customer to Team: **first** bring every repo onto a release that has the gate, the three role
+repos (`mlz upgrade`) and every workload repo (merge vending's upgrade pull request in each). A pipeline from before
+it ignores `MLZ_APPROVAL`, so once its environment loses the reviewer its applies would have no gate at all. Then set
+`plan: team` in `bootstrap.yaml`, run `mlz install bootstrap` (the environments and `MLZ_APPROVAL`), and a governance
+run, whose contract takes the plan to vending and the workload repos.
 
 ## Running it
 
