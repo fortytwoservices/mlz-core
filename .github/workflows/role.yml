@@ -14,9 +14,11 @@
 # check  every run: checks the YAML and works out what the roots read.
 # plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
 #        goes on the pull request and on the run page, where the reviewer approves the apply.
-# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply.
-# apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
-#        exactly the reviewed changes.
+# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply. On
+#        GitHub Team (MLZ_APPROVAL=pull-request), where no environment can wait for one, only if their plan is
+#        the one the merged pull request's run showed, which its code owner approved (tools/ci/approved.py).
+# apply  main: in the role's environment, after a reviewer approves (on Team, at once). Applies only if its
+#        plan makes exactly the reviewed changes.
 # publish main: offers the role's contract to the repos that read it, as a pull request each.
 # merge  a contract pull request: merges it once check and plan have passed on it.
 # drift  the daily check: one issue in the repo while a stack differs from main or its plan did not finish.
@@ -362,14 +364,17 @@ jobs:
   # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
   # reviewer and apply; a stack with nothing to change asks for no approval. Its output is one apply job
   # each, except for the platform: all its changed stacks in one job, applied in check's order (below).
+  # On GitHub Team (MLZ_APPROVAL=pull-request) it is the gate itself: it fails, and nothing applies, unless
+  # each one's plan is the one the merged pull request's run showed (tools/ci/approved.py).
   changed:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && needs.check.outputs.stacks != '[]'
     needs: [check, plan]
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15 # on Team, it waits up to ten minutes for the pull request's run to finish
     permissions:
       contents: read
       pull-requests: write # a comment on the pull request whose merge waits for approval (tools/ci/changed.py)
+      actions: read # on Team, the pull request's run and its plans (tools/ci/approved.py)
     outputs:
       stacks: ${{ steps.changed.outputs.stacks }}
       batch_of: ${{ steps.changed.outputs.batch_of }} # each stack's plan job, for its apply to download only that one
@@ -401,13 +406,16 @@ jobs:
           persist-credentials: false
 
       # With something to apply, the run waits for a reviewer, and every later run on main behind it: changed.py says
-      # why on the run's page, and on the merged pull request when a person opened it (finding 11).
+      # why on the run's page, and on the merged pull request when a person opened it (finding 11). On Team, the
+      # pull request's approval is the gate instead.
       - id: changed
         env:
           STACKS: ${{ needs.check.outputs.stacks }}
           BATCHES: ${{ needs.check.outputs.batches }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MLZ_APPROVAL: ${{ vars.MLZ_APPROVAL }} # pull-request on GitHub Team; the bootstrap sets it (docs/bootstrap.md)
+          WORKFLOW_REF: ${{ github.workflow_ref }} # the caller's workflow, whose run on the pull request showed its plan
         run: python3 .mlz-core/tools/ci/changed.py
 
   apply:
@@ -415,6 +423,8 @@ jobs:
     needs: [check, changed]
     runs-on: ${{ vars.MLZ_RUNS_ON || 'ubuntu-latest' }} # the private runner once mlz install runners sets it
     timeout-minutes: 120
+    # Its reviewer approves the apply; on GitHub Team the environment has none (changed is the gate there), and
+    # still lets only main sign in as the apply identity.
     environment: ${{ inputs.role }}
     permissions:
       contents: read

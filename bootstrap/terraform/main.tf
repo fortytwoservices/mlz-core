@@ -2,6 +2,10 @@ locals {
   customer = yamldecode(file(var.customer_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
+  # Who approves an apply (docs/bootstrap.md, GitHub plan): on Enterprise, github.reviewers in each role's environment;
+  # on Team, which allows required reviewers on an environment in a private repo only on Enterprise, the pull
+  # request's code owner, and the pipeline applies only the plan that pull request's run showed (tools/ci/approved.py).
+  approval = try(local.github.plan, null) == "team" ? "pull-request" : "environment"
   # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
   # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
   names = jsondecode(file(var.names_file))
@@ -273,8 +277,8 @@ resource "azapi_resource" "identity" {
 }
 
 # Which GitHub workflows may sign in as each identity. A plan identity trusts pull requests, and main for
-# the scheduled drift check; an apply identity trusts only its role's environment, which waits for a
-# reviewer and accepts only main. Azure takes one credential write per identity at a time, hence two
+# the scheduled drift check; an apply identity trusts only its role's environment, which accepts only main
+# and, on Enterprise, waits for a reviewer. Azure takes one credential write per identity at a time, hence two
 # resources for the plan identities' two credentials.
 resource "azapi_resource" "credential" {
   for_each = local.identities
@@ -382,7 +386,7 @@ resource "azapi_resource" "state_operator" {
   }
 }
 
-# GitHub: the repos, the people who approve applies, and the settings the workflows read.
+# GitHub: the repos, the people who approve applies (on Enterprise), and the settings the workflows read.
 
 data "github_organization" "customer" {
   name         = local.github.organization
@@ -395,19 +399,22 @@ data "github_repository" "role" {
 }
 
 data "github_user" "reviewer" {
-  for_each = toset(local.github.reviewers)
+  for_each = local.approval == "environment" ? toset(try(local.github.reviewers, [])) : toset([])
   username = each.key
 }
 
-# The environment each apply runs in: a reviewer approves it, and only main may use it.
+# The environment each apply runs in: only main may use it, and on Enterprise a reviewer approves it.
 resource "github_repository_environment" "apply" {
   for_each = local.roles
 
   repository  = local.github.repositories[each.key]
   environment = each.key
 
-  reviewers {
-    users = [for user in data.github_user.reviewer : tonumber(user.id)]
+  dynamic "reviewers" {
+    for_each = local.approval == "environment" ? [true] : []
+    content {
+      users = [for user in data.github_user.reviewer : tonumber(user.id)]
+    }
   }
 
   deployment_branch_policy {
@@ -417,8 +424,12 @@ resource "github_repository_environment" "apply" {
 
   lifecycle {
     precondition {
-      condition     = length(local.github.reviewers) > 0
-      error_message = "github.reviewers in bootstrap.yaml is empty: every apply needs someone to approve it."
+      condition     = contains(["enterprise", "team"], try(local.github.plan, "enterprise"))
+      error_message = "github.plan in bootstrap.yaml is enterprise or team: the customer's GitHub plan."
+    }
+    precondition {
+      condition     = local.approval != "environment" || length(try(local.github.reviewers, [])) > 0
+      error_message = "github.reviewers in bootstrap.yaml is empty: on GitHub Enterprise, every apply needs someone to approve it."
     }
   }
 }
@@ -435,7 +446,7 @@ resource "github_repository_environment_deployment_policy" "main" {
 # identity inside its environment, so a workflow always signs in as the identity its job is trusted for.
 resource "github_actions_variable" "role" {
   for_each = merge([for role in local.roles : {
-    for name, value in {
+    for name, value in merge({
       AZURE_TENANT_ID         = local.tenant_id
       AZURE_SUBSCRIPTION_ID   = trimprefix(local.management, "/subscriptions/")
       AZURE_CLIENT_ID         = azapi_resource.identity["${role}-plan"].output.properties.clientId
@@ -443,7 +454,8 @@ resource "github_actions_variable" "role" {
       TFSTATE_CONTAINER       = role
       # The three repos, for the pipeline that offers a contract to the repos that read it.
       MLZ_REPOSITORIES = jsonencode({ for r in local.roles : r => "${local.github.organization}/${local.github.repositories[r]}" })
-    } : "${role}/${name}" => { role = role, name = name, value = value }
+      # On GitHub Team only: the pipeline's gate on an apply (tools/ci/approved.py). Unset, the environment's reviewer.
+    }, local.approval == "pull-request" ? { MLZ_APPROVAL = local.approval } : {}) : "${role}/${name}" => { role = role, name = name, value = value }
   }]...)
 
   repository    = local.github.repositories[each.value.role]

@@ -24,6 +24,10 @@ locals {
   # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
   # the plan identity plans its pull requests.
   subject = local.github == null || local.decommission ? null : "repo:${local.github.organization}@${one(data.github_organization.customer[*].id)}/${local.github.repo}@${local.repo_id}"
+  # Who approves the repo's applies: its team, in the apply environment, on Enterprise; on GitHub Team, which has no
+  # reviewers on an environment in a private repo, its pull requests' code owner (tools/ci/approved.py). From
+  # bootstrap.yaml's github.plan, through governance's contract (tools/mlz/vending.py).
+  approval = try(local.github.approval, null) == "pull-request" ? "pull-request" : "environment"
 }
 
 # IDs only: summary_only, so the provider lists none of the organization's repos and members.
@@ -81,7 +85,8 @@ data "github_team" "owner" {
   summary_only = true # its ID: none of its members and repos
 }
 
-# The owning team maintains the repo, and approves its applies.
+# The owning team maintains the repo, and approves its applies: in its apply environment, or on GitHub Team its pull
+# requests, as their code owner.
 resource "github_team_repository" "owner" {
   count = local.repo_made ? 1 : 0
 
@@ -98,8 +103,11 @@ resource "github_repository_environment" "apply" {
   # GitHub takes a reviewer that has access already: the team's, above.
   depends_on = [github_team_repository.owner]
 
-  reviewers {
-    teams = [tonumber(data.github_team.owner[0].id)]
+  dynamic "reviewers" {
+    for_each = local.approval == "environment" ? [true] : []
+    content {
+      teams = [tonumber(data.github_team.owner[0].id)]
+    }
   }
 
   deployment_branch_policy {
@@ -122,14 +130,15 @@ data "azapi_client_config" "current" {}
 # IDs and names only, no secrets. AZURE_CLIENT_ID is the plan identity for the repo, and the deploy identity inside
 # its apply environment, so a workflow always signs in as the identity its job is trusted for.
 resource "github_actions_variable" "workload" {
-  for_each = local.repo_made ? {
+  for_each = local.repo_made ? merge({
     AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
     AZURE_SUBSCRIPTION_ID   = local.subscription_id
     AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
     TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
     TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
     TFSTATE_CONTAINER       = azapi_resource.state_container.name
-  } : {}
+    # On GitHub Team only: the pipeline's gate on an apply (.github/workflows/workload.yml). Unset, the environment's.
+  }, local.approval == "pull-request" ? { MLZ_APPROVAL = local.approval } : {}) : {}
 
   repository    = github_repository.workload["made"].name
   variable_name = each.key

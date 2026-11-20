@@ -10,8 +10,9 @@ token for the platform (tools/ci/github_meta.py). Unset, mlz firewall fetches it
 Plan only what this change touches: the stacks whose rendered config differs from the base commit's, rendered here
 with the same mlz-core. The base is the commit before: on a pull request, its merge commit's first parent, the base
 branch; on a push, the commit main was at (EVENT_BEFORE; a push of several commits plans everything). A changed
-pipeline file (a new mlz-core release), a base that does not check, the daily check and a manual run plan every stack
-(docs/pipelines.md).
+pipeline file (a new mlz-core release), a changed replan.txt, a base that does not check, the daily check and a manual
+run plan every stack (docs/pipelines.md). replan.txt is the way to plan every stack in a pull request, which on GitHub
+Team is the only approval an apply has (tools/ci/approved.py): after drift, or an apply that failed half way.
 """
 
 from __future__ import annotations
@@ -26,6 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a
 
 from ci.run_mlz import mlz  # noqa: E402
 
+# Any change to it plans every stack, on the pull request and on main alike (above).
+REPLAN = "replan.txt"
 # The base's configs, which the plan comments compare each stack's settings with (comment.py, mlz diff).
 BASE_CONFIGS = ("platform.json", "firewall.json", "vending", "rendered/config.json")
 
@@ -63,6 +66,8 @@ def check(role: str) -> int:
         return every("this push brings more than one commit", stacks)
     if git("diff", "--quiet", base, "HEAD", "--", ".github/workflows/").returncode != 0:
         return every("the pipeline changed (a new mlz-core release, for one)", stacks)
+    if git("diff", "--quiet", base, "HEAD", "--", REPLAN).returncode != 0:
+        return every(f"{REPLAN} changed", stacks)
     copy = Path(os.environ.get("RUNNER_TEMP") or work) / "mlz-base"
     shutil.rmtree(copy, ignore_errors=True)
     # A copy an earlier run left on this runner is gone from disk, and must go from git's list too.

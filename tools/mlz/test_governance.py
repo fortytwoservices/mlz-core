@@ -240,6 +240,18 @@ class RenderTest(unittest.TestCase):
         with self.assertRaisesRegex(rl.ConfigError, "bootstrap.yaml: github.bypass_team is \\['demo-admins'\\]: the slug"):
             rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
 
+    def test_the_contract_carries_a_team_plan_only(self):
+        # On GitHub Team, vending's workload repos are approved on their pull requests (docs/vending.md); on Enterprise, the
+        # default, the contract stays as it was.
+        _, out = self.render(self.BASE)
+        bootstrap = self.dir / "bootstrap.yaml"
+        for plan, github in (("team", {"bypass_team": "demo-admins", "plan": "team"}), ("enterprise", {"bypass_team": "demo-admins"})):
+            bootstrap.write_text(f"github:\n  plan: {plan}\n  bypass_team: demo-admins\n")
+            self.assertEqual(rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)["github"], github)
+        bootstrap.write_text("github:\n  plan: business\n")
+        with self.assertRaisesRegex(rl.ConfigError, "bootstrap.yaml: github.plan is enterprise or team, the customer's GitHub plan, not 'business'"):
+            rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
+
     def test_rendering_twice_leaves_no_stale_files(self):
         self.render(self.BASE)
         _, out = self.render(self.BASE + "tags:\n  required: [Owner]\n")

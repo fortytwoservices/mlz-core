@@ -2,7 +2,9 @@
 # (docs/vending.md). The repo's Terraform is at its top and reads mlz.auto.tfvars.json, the landing zone's values,
 # which vending keeps up to date. Every run plans, as the plan identity, from a copy of the state in the landing
 # zone's own account; on main, the apply then runs in the apply environment, as the deploy identity, once the
-# owning team approves, and only if its plan makes exactly the changes the reviewed one showed. The scripts are
+# owning team approves, and only if its plan makes exactly the changes the reviewed one showed. On GitHub Team
+# (MLZ_APPROVAL=pull-request), where no environment can wait for the team, its approval is the merged pull request's:
+# the apply goes on only if main's plan is the one that pull request's run showed (tools/ci/approved.py). The scripts are
 # role.yml's, with the role "workload" (tools/mlz/stacks.py: its root is the repo's top).
 name: mlz workload
 
@@ -115,7 +117,8 @@ jobs:
           if [[ $STATUS == 3 ]]; then echo "::error::The plan is refused; the plan above says why."; exit 1; fi
 
   apply:
-    # main only, and only when the plan changes something. The apply environment waits for the owning team.
+    # main only, and only when the plan changes something. The apply environment waits for the owning team (on
+    # GitHub Team it has no reviewer, and the step below is the gate).
     if: >-
       github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && needs.plan.outputs.status == '2'
@@ -126,6 +129,7 @@ jobs:
     permissions:
       contents: read
       id-token: write # signs in as the deploy identity, which only this environment may use
+      actions: read # on Team, the pull request's run and its plan (tools/ci/approved.py)
     concurrency:
       group: mlz-workload-apply
       cancel-in-progress: false
@@ -153,6 +157,16 @@ jobs:
         with:
           terraform_version: 1.17.0
           terraform_wrapper: false
+
+      # On GitHub Team: main's plan must be the one the merged pull request's run showed. A commit no pull request made
+      # is the MLZ App's, the landing zone's values from vending, and applies as it is.
+      - name: Match the plan with its pull request's
+        if: vars.MLZ_APPROVAL == 'pull-request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          ARTIFACTS: mlz-workload-plan
+        run: python3 .mlz-core/tools/ci/approved.py workload workload
 
       - name: Apply
         run: python3 .mlz-core/tools/ci/apply.py workload workload

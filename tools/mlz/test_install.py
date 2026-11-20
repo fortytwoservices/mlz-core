@@ -843,14 +843,29 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on a branch up to date"):
             install.step_check(StrictOnlyBypassable(**ready, strict=False), self.folder, self.out)
 
-    def test_check_refuses_an_organization_not_on_enterprise(self):
+    def test_check_matches_the_organization_s_plan_with_bootstrap_yaml_s(self):
         ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
-        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's team plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer"):
+        # On Team, the environments' reviewers are refused by GitHub: bootstrap.yaml must say team.
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's team plan, but bootstrap.yaml's github.plan says enterprise: .* Set github.plan: team"):
             install.step_check(FakeGitHub(**ready, org_plan="team"), self.folder, self.out)
+        bootstrap = self.folder / "bootstrap.yaml"
+        bootstrap.write_text(BOOTSTRAP.replace("github:\n", "github:\n  plan: team\n", 1))
+        install.step_check(FakeGitHub(**ready, org_plan="team"), self.folder, self.out)
+        self.assertIn("acme: on GitHub Team, so each apply is approved on its pull request", self.printed)
+        # Enterprise with team said: allowed, the weaker gate named.
+        install.step_check(FakeGitHub(**ready, org_plan="enterprise"), self.folder, self.out)
+        self.assertIn("acme: on GitHub Enterprise, but bootstrap.yaml's github.plan says team: each apply is approved on its pull request, "
+                      "not by a reviewer in its environment. Set github.plan: enterprise for the reviewer.", self.printed)
+        # Free has no environments in a private repo, whatever bootstrap.yaml says.
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's free plan. MLZ needs GitHub Team or Enterprise"):
+            install.step_check(FakeGitHub(**ready, org_plan="free"), self.folder, self.out)
         # Only owners see the plan: said, not refused.
         install.step_check(FakeGitHub(**ready, org_plan=None), self.folder, self.out)
-        self.assertIn("acme: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.", self.printed)
+        self.assertIn("acme: its GitHub plan is shown to its owners only, so it is not checked here; bootstrap.yaml says team.", self.printed)
+        bootstrap.write_text(BOOTSTRAP.replace("github:\n", "github:\n  plan: business\n", 1))
+        with self.assertRaisesRegex(ConfigError, "github.plan is enterprise or team, the customer's GitHub plan, not 'business'"):
+            install.step_check(FakeGitHub(**ready, org_plan="enterprise"), self.folder, self.out)
 
     def test_check_lists_every_missing_piece(self):
         github = FakeGitHub(existing=["acme/mlz-governance", "acme/mlz-platform"],

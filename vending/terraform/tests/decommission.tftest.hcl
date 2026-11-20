@@ -222,6 +222,27 @@ run "with_a_repo" {
   }
 }
 
+# On GitHub Team (bootstrap.yaml's github.plan, through governance's contract): no reviewer in the apply environment,
+# which only main may still use; the pipeline's gate is the pull request's (MLZ_APPROVAL, tools/ci/approved.py).
+run "with_a_repo_on_github_team" {
+  command = plan
+  variables {
+    config_file = "tests/with-repo-team.json"
+  }
+  override_resource {
+    target = github_repository.workload["made"]
+    values = { repo_id = 2002 }
+  }
+  assert {
+    condition     = length(github_repository_environment.apply[0].reviewers) == 0 && github_repository_environment_deployment_policy.main[0].branch_pattern == "main"
+    error_message = "On GitHub Team the apply environment has no reviewer, and still only main may apply."
+  }
+  assert {
+    condition     = github_actions_variable.workload["MLZ_APPROVAL"].value == "pull-request" && length(github_actions_variable.workload) == 7
+    error_message = "On GitHub Team the repo's pipeline is told its gate is the pull request's."
+  }
+}
+
 run "with_an_existing_repo" {
   command = plan
   variables {

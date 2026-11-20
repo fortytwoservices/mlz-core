@@ -713,7 +713,8 @@ def creates_repo(lz: dict) -> bool:
 
 def github_config(lz: dict, names: dict, governance: dict | None = None) -> dict | None:
     """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None.
-    For one vending makes, governance's bypass team too (bootstrap.yaml's), which tools/mlz/workload.py gives its rules."""
+    For one vending makes, governance's bypass team too (bootstrap.yaml's), which tools/mlz/workload.py gives its rules,
+    and on GitHub Team its approval, by pull request (bootstrap.yaml's github.plan)."""
     github = lz["settings"].get("github")
     if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
         return None  # check() reports a github that is not a group of settings
@@ -721,7 +722,9 @@ def github_config(lz: dict, names: dict, governance: dict | None = None) -> dict
     made = creates_repo(lz)
     return {"organization": github["organization"], "repo": repo, "create": made, "team": github.get("team"),
             "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending.",
-            **({"bypass_team": ((governance or {}).get("github") or {}).get("bypass_team")} if made else {})}
+            **({"bypass_team": ((governance or {}).get("github") or {}).get("bypass_team")} if made else {}),
+            # On GitHub Team, no reviewer in its apply environment: its pull requests' approval is the gate (docs/vending.md).
+            **({"approval": "pull-request"} if made and ((governance or {}).get("github") or {}).get("plan") == "team" else {})}
 
 
 def short_name(lz: dict) -> str:

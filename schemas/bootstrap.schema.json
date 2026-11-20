@@ -5,13 +5,22 @@
   "type": "object",
   "properties": {
     "github": {
-      "description": "The customer's GitHub organization, repos, platform team, reviewers and runners.",
+      "description": "The customer's GitHub organization and plan, repos, platform team, reviewers and runners.",
       "type": "object",
       "properties": {
         "organization": {
           "type": "string",
           "description": "The customer's GitHub organization.",
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
+        "plan": {
+          "type": "string",
+          "description": "The customer's GitHub plan, which decides who approves an apply. enterprise: github.reviewers, in each role's environment (the default). team: GitHub allows reviewers on an environment in a private repo only on Enterprise, so the pull request's code owner approves its plan, and the pipeline applies only that plan.",
+          "enum": [
+            "enterprise",
+            "team"
+          ],
+          "default": "enterprise"
         },
         "repositories": {
           "description": "The three repos, by role, and the organization's copy of mlz-core.",
@@ -48,7 +57,7 @@
           "pattern": "^[a-z0-9][a-z0-9-]*$"
         },
         "reviewers": {
-          "description": "GitHub users who approve every apply.",
+          "description": "GitHub users who approve every apply, on GitHub Enterprise (github.plan). Not used on Team.",
           "type": "array",
           "items": {
             "type": "string"

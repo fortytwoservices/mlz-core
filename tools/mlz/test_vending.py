@@ -715,6 +715,11 @@ class VendingTest(unittest.TestCase):
         configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins"}}, PLATFORM)
         self.assertEqual(configs["payments-dev"]["github"]["bypass_team"], "acme-admins")
         self.assertNotIn("bypass_team", configs["payments-prod"]["github"])
+        self.assertNotIn("approval", configs["payments-dev"]["github"])  # Enterprise: the apply environment's reviewer
+        # On GitHub Team (bootstrap.yaml's github.plan), a repo vending makes is approved on its pull requests.
+        configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins", "plan": "team"}}, PLATFORM)
+        self.assertEqual(configs["payments-dev"]["github"]["approval"], "pull-request")
+        self.assertNotIn("approval", configs["payments-prod"]["github"])
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
 

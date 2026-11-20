@@ -9,13 +9,14 @@ region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, platform tea
 # bootstrap.yaml
 github:
   organization: demo-org
+  plan: enterprise                 # the organization's GitHub plan: enterprise (the default) or team
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
   bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
-  reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+  reviewers: [demo-platform-lead]  # GitHub users who approve every apply (Enterprise; not used on Team)
   runners:                         # where the pipelines' Azure jobs run (mlz install runners)
     kind: self-hosted              # self-hosted (the default) or github-hosted
     size: Standard_D2ds_v6         # an Azure VM size (the default); for github-hosted, GitHub's: 2-core, 4-core
@@ -39,7 +40,7 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Runners' vault | `kv-acme-mlz-pd-nwe-01`, for self-hosted runners: the runner App's private key and nothing else. Roles only, given to nobody but the runners' identity; purge protection; a firewall that admits no address, and a private endpoint in management's `snet-private-endpoints` (`pep-acme-mlz-vault-pd-nwe-01`) with its name in the hub's `privatelink.vaultcore.azure.net` zone. Made on the same run as the state account's endpoint; set `names.key_vault` for a name taken elsewhere. |
 | Self-hosted runners | `vmss-acme-mlz-pd-nwe-01` in management's `snet-runners`, with `id-acme-mlz-runners-pd-nwe-01` and `nsg-acme-mlz-runners-pd-nwe-01` ([az-tf-mlz-github-runners](https://github.com/fortytwoservices/az-tf-mlz-github-runners)): made once the runner App's key is in the vault ([private runners](#private-runners)). |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
-| GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
+| GitHub, per repo | The environment the role applies in, which accepts only `main` and, on Enterprise, waits for a reviewer; the repository variables the workflows read (`MLZ_APPROVAL` on Team). |
 
 ## Names
 
@@ -123,15 +124,40 @@ who created it normally has.
 Vending does not create subscriptions yet; it adopts existing ones. For EA and MCA customers it could
 create them itself, and then the handover step disappears for them.
 
-## GitHub Enterprise
+## GitHub plan
 
-MLZ needs the customer's GitHub organization on **GitHub Enterprise**. Every apply waits for a reviewer: the role
-repos' environments, and the landing zones' workload repos' `apply` environments. GitHub allows required reviewers
-on an environment in a private repo only on Enterprise; on Free, Pro and Team only in public repos (GitHub Docs,
-"Managing environments for deployment", availability). Tested on 13 November 2026 in a test organization on Free:
-GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers protection rule").
-`mlz install check` reads the organization's plan and refuses another one; GitHub shows the plan only to its
-owners, so for anyone else it says so and goes on.
+MLZ needs the customer's GitHub organization on **GitHub Team or Enterprise**: every apply runs in an environment,
+which only `main` may use and whose identity only that environment may sign in as, and GitHub has environments, their
+variables and their branch policies in a private repo only on Pro, Team and Enterprise. `bootstrap.yaml`'s
+`github.plan` says which, and decides who approves an apply:
+
+| | Enterprise (`plan: enterprise`, the default) | Team (`plan: team`) |
+|---|---|---|
+| Who approves an apply | `github.reviewers`, in the role's environment; the landing zone's team in a workload repo's `apply` environment | The pull request's code owner: the platform team, or the landing zone's team |
+| What gets applied | The plan of the run on `main`, which the reviewer saw on its page | The plan of the run on `main`, only if it is the one the merged pull request's run showed, change for change and value for value ([pipelines](pipelines.md#approval-on-github-team)) |
+| The environments | Reviewer and branch policy (`main`) | Branch policy (`main`) only |
+
+GitHub allows required reviewers on an environment in a private repo only on Enterprise; on Free, Pro and Team only in
+public repos (GitHub Docs, "Managing environments for deployment", availability). Tested on 13 November 2026 in a test
+organization on Free: GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers
+protection rule"). On Team the approval moves to the pull request, which the ruleset `main` already requires
+([pipelines](pipelines.md#code-owners)). What Team gives up:
+
+- **Nobody sees the plan of the run on `main` before it applies.** The pipeline applies it only when it is the plan the
+  pull request showed, so a change in Azure or the state between the two stops the apply instead.
+- **The contracts apply without a person.** A contract pull request merges itself, as on Enterprise, and its run on
+  `main` applies once its plan matches the one its pull request's run showed. On Enterprise the role's reviewer
+  approves that apply.
+- **The MLZ App's commits of a landing zone's values** (`mlz.auto.tfvars.json`, which reach a workload repo's `main`
+  without a pull request) apply as vending wrote them, without the team's approval.
+- **The bypass team's merges** apply with nobody else's approval; GitHub records each bypass (the repo's Insights, Rules).
+- **Team synchronization** of a team with an Entra ID group needs SAML single sign-on, which is Enterprise Cloud's.
+
+`mlz install check` reads the organization's plan: on Team with `plan: enterprise`, or on Free, it refuses; on
+Enterprise with `plan: team` it says the apply is approved on the pull request and goes on. GitHub shows the plan only
+to its owners, so for anyone else it says so and goes on. Switching an installed customer is `plan:` in
+`bootstrap.yaml`, then `mlz install bootstrap` (the environments and `MLZ_APPROVAL`) and a governance run, whose
+contract takes the plan to vending and the workload repos.
 
 ## Running it
 
@@ -190,7 +216,7 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
      request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` or `pipeline-files` is left
      as it is.
-2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
+2. **`check`** confirms the organization's GitHub plan is the one `github.plan` says ([above](#github-plan)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
    and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
@@ -390,7 +416,7 @@ organization or repo does not use immutable subjects yet; turn them on before th
 - 3 November 2026, in the TCAF canary tenant (root `mlz`, repos `fortytwoservices/mlz-canary-*`): 69
   resources, then a plan with no changes, and the state moved into the account. Checked in Azure: each
   identity holds exactly the rights in the table above, and trusts exactly its subjects. Checked in
-  GitHub: each environment waits for the reviewer and accepts only `main`; the repository variables name
+  GitHub: each environment waits for the reviewer and accepts only `main` (Enterprise); the repository variables name
   the plan identities and each environment's `AZURE_CLIENT_ID` the apply identity.
 - Met on the way: every storage account comes with its blob service, so the bootstrap sets it rather than
   creating it; and Azure stores a built-in role's ID in the subscription's own form when the assignment is

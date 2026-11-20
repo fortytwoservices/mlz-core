@@ -21,6 +21,7 @@ permissions:
   id-token: write
   pull-requests: write
   issues: write # the daily check's drift issue
+  actions: read # on GitHub Team, the merged pull request's run and its plans, which the apply must match
 
 jobs:
   # The job's name is in its checks' names: main's ruleset requires vending / check to pass before a merge.
