@@ -95,13 +95,29 @@ resource "github_team_repository" "owner" {
   permission = "maintain"
 }
 
+# On GitHub Team only: the pipeline's gate on an apply (.github/workflows/workload.yml); unset, the environment's is.
+# A resource of its own, which the environment depends on: made before it loses its reviewer, and removed only once it
+# has it back (create_before_destroy; it reaches the repo, the one resource this depends on, whose replacement would
+# then fail on its name rather than delete it first), so that a switch of github.plan leaves no moment with neither gate.
+resource "github_actions_variable" "approval" {
+  for_each = local.repo_made && local.approval == "pull-request" ? { made = true } : {}
+
+  repository    = github_repository.workload["made"].name
+  variable_name = "MLZ_APPROVAL"
+  value         = local.approval
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "github_repository_environment" "apply" {
   count = local.repo_made ? 1 : 0
 
   repository  = github_repository.workload["made"].name
   environment = "apply"
-  # GitHub takes a reviewer that has access already: the team's, above.
-  depends_on = [github_team_repository.owner]
+  # GitHub takes a reviewer that has access already: the team's, above. The gate on Team before the reviewer goes.
+  depends_on = [github_team_repository.owner, github_actions_variable.approval]
 
   dynamic "reviewers" {
     for_each = local.approval == "environment" ? [true] : []
@@ -130,15 +146,14 @@ data "azapi_client_config" "current" {}
 # IDs and names only, no secrets. AZURE_CLIENT_ID is the plan identity for the repo, and the deploy identity inside
 # its apply environment, so a workflow always signs in as the identity its job is trusted for.
 resource "github_actions_variable" "workload" {
-  for_each = local.repo_made ? merge({
+  for_each = local.repo_made ? {
     AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
     AZURE_SUBSCRIPTION_ID   = local.subscription_id
     AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
     TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
     TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
     TFSTATE_CONTAINER       = azapi_resource.state_container.name
-    # On GitHub Team only: the pipeline's gate on an apply (.github/workflows/workload.yml). Unset, the environment's.
-  }, local.approval == "pull-request" ? { MLZ_APPROVAL = local.approval } : {}) : {}
+  } : {}
 
   repository    = github_repository.workload["made"].name
   variable_name = each.key

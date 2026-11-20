@@ -25,10 +25,19 @@ class FakeGitHub:
     """GitHub as approved.py asks it: the commit's pull requests, the workflow's runs on a commit (one list per look),
     and each run's artifacts, as {artifact: {file: text}}."""
 
-    def __init__(self, pulls=(), runs=(), artifacts=None, author=None, head="sha1"):
+    def __init__(self, pulls=(), runs=(), artifacts=None, author=None, head="sha1", rules=({"type": "pull_request"},), now=None):
         self.pulls, self.looks, self.artifacts = list(pulls), [list(r) for r in runs], artifacts or {}
-        self.author, self.main = author, head
+        self.author, self.main, self.rules, self.now = author, head, list(rules), now or {}
         self.asked: list[tuple] = []
+        self.listed: dict = {}
+
+    def branch_rules(self, repo, branch):
+        self.asked.append(("branch_rules", repo, branch))
+        return self.rules
+
+    def workflow_run(self, repo, run_id):
+        # As it is now: as listed, unless a re-run (now) has changed it since.
+        return self.now.get(run_id) or self.listed[run_id]
 
     def commit_author(self, repo, sha):
         return self.author
@@ -42,13 +51,17 @@ class FakeGitHub:
 
     def workflow_runs(self, repo, workflow, head_sha):
         self.asked.append(("workflow_runs", repo, workflow, head_sha))
-        return self.looks.pop(0) if len(self.looks) > 1 else (self.looks[0] if self.looks else [])
+        found = self.looks.pop(0) if len(self.looks) > 1 else (self.looks[0] if self.looks else [])
+        self.listed.update({run["id"]: run for run in found})
+        return found
 
     def download_artifacts(self, repo, run_id, pattern, folder):
         self.asked.append(("download", repo, run_id, pattern))
         found = self.artifacts.get(run_id, {})
         for artifact, files in found.items():
-            for name, text in files.items():
+            for name, text in ({approved.STAMP: "7\n"} | files).items():
+                if text is None:  # a plan job of a release from before the stamp
+                    continue
                 (folder / artifact).mkdir(parents=True, exist_ok=True)
                 (folder / artifact / name).write_text(text)
         return bool(found)
@@ -57,9 +70,9 @@ class FakeGitHub:
 APP = {"login": "acme-mlz[bot]", "type": "Bot"}
 
 
-def run(id_=41, number=12, status="completed", event="pull_request", started="2026-11-20T09:50:00Z"):
+def run(id_=41, number=12, status="completed", event="pull_request", started="2026-11-20T09:50:00Z", attempt=1):
     return {"id": id_, "run_number": number, "status": status, "event": event, "html_url": f"https://example/runs/{id_}",
-            "run_started_at": started}
+            "run_started_at": started, "run_attempt": attempt}
 
 
 class Case(unittest.TestCase):
@@ -151,6 +164,31 @@ class ApprovedTest(Case):
         self.assertFalse(self.gate("platform", ["connectivity"], github))
         self.assertIn("was run again after its merge (2026-11-21T08:00:00Z)", self.said[-1])
         self.assertNotIn(("download", "acme/mlz-platform", 41, "mlz-platform-plan-*"), github.asked)
+
+    def test_plans_of_another_pull_request_or_unmarked_apply_nothing(self):
+        # Another pull request's run on the same head commit, into another branch: its plans name it, not #7.
+        self.reviewed("connectivity", "x\n")
+        github = FakeGitHub([merged()], [[run()]], {41: {"mlz-platform-plan-connectivity": {"changes-connectivity.txt": "x\n", approved.STAMP: "9\n"}}})
+        self.assertFalse(self.gate("platform", ["connectivity"], github))
+        self.assertIn("do not say they are its own (mlz-platform-plan-connectivity)", self.said[-1])
+        github = FakeGitHub([merged()], [[run()]], {41: {"mlz-platform-plan-connectivity": {"changes-connectivity.txt": "x\n", approved.STAMP: None}}})
+        self.assertFalse(self.gate("platform", ["connectivity"], github))
+        self.assertIn("of a release that did not mark them yet", self.said[-1])
+
+    def test_a_re_run_while_the_plans_are_read_applies_nothing(self):
+        self.reviewed("connectivity", "x\n")
+        artifacts = {41: {"mlz-platform-plan-connectivity": {"changes-connectivity.txt": "x\n"}}}
+        github = FakeGitHub([merged()], [[run()]], artifacts, now={41: run(attempt=2, started="2026-11-21T08:00:00Z")})
+        self.assertFalse(self.gate("platform", ["connectivity"], github))
+        self.assertIn("was run again while its plans were read", self.said[-1])
+
+    def test_a_workload_commit_without_a_pull_request_needs_a_rule_on_main_that_asks_for_one(self):
+        # Without it anyone who may push could have made it, with a bot's email as its author.
+        self.reviewed("workload", "x\n")
+        github = FakeGitHub([], author=APP, rules=[{"type": "deletion"}])
+        self.assertFalse(self.gate("workload", ["workload"], github))
+        self.assertIn("no rule on main asks for one", self.said[-1])
+        self.assertIn(("branch_rules", "acme/mlz-platform", "main"), github.asked)
 
     def test_a_pull_request_without_a_run_or_plans_applies_nothing(self):
         self.reviewed("workload", "x\n")

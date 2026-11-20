@@ -217,7 +217,7 @@ run "with_a_repo" {
     error_message = "The repo's default branch is main, renamed from whatever the organization's default made, and only main may apply."
   }
   assert {
-    condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01"
+    condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01" && length(github_actions_variable.approval) == 0
     error_message = "The repo's variables name its subscription, its plan identity and its state."
   }
 }
@@ -238,7 +238,7 @@ run "with_a_repo_on_github_team" {
     error_message = "On GitHub Team the apply environment has no reviewer, and still only main may apply."
   }
   assert {
-    condition     = github_actions_variable.workload["MLZ_APPROVAL"].value == "pull-request" && length(github_actions_variable.workload) == 7
+    condition     = github_actions_variable.approval["made"].value == "pull-request" && length(github_actions_variable.workload) == 6
     error_message = "On GitHub Team the repo's pipeline is told its gate is the pull request's."
   }
 }

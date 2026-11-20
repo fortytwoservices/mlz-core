@@ -271,6 +271,14 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: python3 .mlz-core/tools/ci/plans.py "$ROLE" $STACKS # one argument per stack
 
+      # On a pull request, its number with its plans: on GitHub Team, main's run applies only the plans of the pull
+      # request it merged, and another pull request's run on the same commit (into another branch) has other plans.
+      - name: Mark the plans as the pull request's
+        if: always() && github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: mkdir -p .mlz && echo "$PR_NUMBER" > .mlz/pull-request.txt
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -280,6 +288,7 @@ jobs:
             .mlz/summary-*.md
             .mlz/changes-*.txt
             .mlz/version-*.txt
+            .mlz/pull-request.txt
           if-no-files-found: ignore
           include-hidden-files: true
           overwrite: true # a re-run of a group whose plans partly failed replaces what the failed attempt uploaded

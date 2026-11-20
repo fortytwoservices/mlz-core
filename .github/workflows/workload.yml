@@ -89,6 +89,14 @@ jobs:
         if: steps.plan.outputs.status != '1'
         run: cat .mlz/summary-workload.md >> "$GITHUB_STEP_SUMMARY"
 
+      # On a pull request, its number with its plan: on GitHub Team, main's run applies only the plan of the pull
+      # request it merged, and another pull request's run on the same commit (into another branch) has another plan.
+      - name: Mark the plan as the pull request's
+        if: steps.plan.outputs.status != '1' && github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: echo "$PR_NUMBER" > .mlz/pull-request.txt
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.plan.outputs.status != '1'
         with:
@@ -98,6 +106,7 @@ jobs:
             .mlz/summary-workload.md
             .mlz/changes-workload.txt
             .mlz/version-workload.txt
+            .mlz/pull-request.txt
           include-hidden-files: true
           retention-days: 30
 
@@ -130,6 +139,7 @@ jobs:
       contents: read
       id-token: write # signs in as the deploy identity, which only this environment may use
       actions: read # on Team, the pull request's run and its plan (tools/ci/approved.py)
+      pull-requests: read # on Team, the pull request whose merge made the commit (tools/ci/approved.py)
     concurrency:
       group: mlz-workload-apply
       cancel-in-progress: false

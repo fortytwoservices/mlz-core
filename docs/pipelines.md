@@ -170,13 +170,18 @@ reviewed one). The `changed` job is the gate (`tools/ci/approved.py`), on every 
 
 - It finds the pull request whose merge made the commit `main` is at, and that pull request's last run on its head
   commit, and waits up to 25 minutes for that run to finish: a pull request merged as soon as its check passed
-  may still be planning. A run of it that started after the merge (run again by someone) is refused: its plan is of
-  a later Azure, which nobody approved.
+  may still be planning. A run of it that started after the merge (run again by someone), before or while the gate
+  reads its plans, is refused: its plan is of a later Azure, which nobody approved.
+- Each plan job of a pull request's run puts the pull request's number with its plans (`pull-request.txt`), and the
+  gate refuses plans that name another: two pull requests on the same commit, one into another branch, have different
+  plans. A pull request planned by a release from before this mark has none, and its merge must plan again.
 - Each stack whose plan on `main` changes something must have the same list of changes in that run's plans. A stack
   the pull request did not plan (its change did not touch it), or planned otherwise (Azure or the state changed since,
   or an apply failed half way), stops the run: nothing applies, the job fails, and its log shows the difference.
 - A commit no pull request made applies nothing: in a role repo, the ruleset `main` lets none through. In a workload
-  repo it is the MLZ App's values, and applies as vending wrote them, but only when an app's bot wrote the commit,
+  repo it is the MLZ App's values, and applies as vending wrote them, but only while a rule on `main` asks for a pull
+  request (a commit's author is only the email it names, which anyone may set to a bot's, so it is vending's rule,
+  which lets nobody but the App push to `main`, that proves it the App's), only when an app's bot wrote the commit,
   and on a re-run only while it is still `main`'s head (an older one would roll the landing zone back). The plans
   are kept 30 days; a pull request merged after that has none to compare with.
 - A contract pull request is a pull request like any other: its run's plan, which nobody approves, is the one its
@@ -190,7 +195,7 @@ one stack, any pull request does, an empty commit included.
 The environments stay, with no reviewer: only `main` may use them, and only a job in one may sign in as the apply
 identity. The bootstrap sets `MLZ_APPROVAL: pull-request` on each repo, and vending on each workload repo it makes;
 without it the environment's reviewer is the gate. The callers' `mlz.yml` grant `actions: read`, for the pull
-request's run and its plans.
+request's run and its plans (and `pull-requests`, which they grant already, for the pull request).
 
 ## A plan that deletes a firewall policy is refused
 

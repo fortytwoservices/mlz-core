@@ -365,7 +365,9 @@ changes in Azure.
   request's own workflow reaches only the plan identity, which trusts the repo's pull requests by design and reads
   only its own landing zone. `main`'s workflow changes only through a reviewed pull request, like everything else.
 - A ruleset named `main` or `main-checks` that the repo has already is left as it is, and each run says so when it is
-  not the one vending makes.
+  not the one vending makes. On GitHub Team it warns of a `main` of the repo's own: the pipeline applies a commit
+  without a pull request as the App's values only while a rule on `main` asks for one, and cannot see who else that
+  rule lets push ([pipelines](pipelines.md#approval-on-github-team)).
 
 For a team that pushed straight to `main`: pushes are refused, and a change needs a pull request that another member of
 the team approves. A team of one needs a second member, or the bypass team. A pull request behind `main` needs

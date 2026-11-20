@@ -183,6 +183,12 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
                                "nobody but the MLZ App may bypass it, for its commits of the landing zone's values"))
         elif not same_ruleset(found[ruleset["name"]], ruleset):
             out(f"{repo}: has a ruleset named {ruleset['name']} that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)")
+            if ruleset["name"] == "main" and config.get("approval") == "pull-request":
+                # On Team, the pipeline applies a commit without a pull request (the MLZ App's values) only while a rule
+                # on main asks for one, and cannot see who else that rule lets push: vending's lets only the App.
+                out(f"::warning::{repo}: on GitHub Team, its pipeline trusts a commit to main without a pull request as the MLZ App's values "
+                    "only because main's rule lets nobody else push there. Its own ruleset main may let others push, or none at all "
+                    "(then the App's commits do not apply either): make it vending's, or check who may bypass it.")
 
 
 def same_ruleset(found: dict, wanted: dict) -> bool:

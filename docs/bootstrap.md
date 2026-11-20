@@ -159,9 +159,12 @@ to its owners, so for anyone else it says so and goes on.
 
 Switching an installed customer to Team: **first** bring every repo onto a release that has the gate, the three role
 repos (`mlz upgrade`) and every workload repo (merge vending's upgrade pull request in each). A pipeline from before
-it ignores `MLZ_APPROVAL`, so once its environment loses the reviewer its applies would have no gate at all. Then set
-`plan: team` in `bootstrap.yaml`, run `mlz install bootstrap` (the environments and `MLZ_APPROVAL`), and a governance
-run, whose contract takes the plan to vending and the workload repos.
+it ignores `MLZ_APPROVAL`, so once its environment loses the reviewer its applies would have no gate at all. Then
+cancel any run that waits for a reviewer's approval (it passed no gate of Team's, and nobody may be left to approve
+it), set `plan: team` in `bootstrap.yaml`, run `mlz install bootstrap` (the environments and `MLZ_APPROVAL`), and a
+governance run, whose contract takes the plan to vending and the workload repos. Each apply of the bootstrap and of
+vending sets `MLZ_APPROVAL` before it takes an environment's reviewer away, and back on Enterprise gives the reviewer
+back before it removes `MLZ_APPROVAL`, so no moment has neither gate.
 
 ## Running it
 

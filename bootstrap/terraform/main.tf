@@ -403,12 +403,29 @@ data "github_user" "reviewer" {
   username = each.key
 }
 
+# On GitHub Team only: the pipeline's gate on an apply (tools/ci/approved.py); unset, the environment's reviewer is.
+# A resource of its own, which the environments depend on: made before they lose their reviewer, and removed only
+# once they have it back (create_before_destroy; it reaches the resources this one depends on, and there are none),
+# so that a switch of github.plan leaves no moment with neither gate.
+resource "github_actions_variable" "approval" {
+  for_each = local.approval == "pull-request" ? local.roles : toset([])
+
+  repository    = local.github.repositories[each.key]
+  variable_name = "MLZ_APPROVAL"
+  value         = local.approval
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # The environment each apply runs in: only main may use it, and on Enterprise a reviewer approves it.
 resource "github_repository_environment" "apply" {
   for_each = local.roles
 
   repository  = local.github.repositories[each.key]
   environment = each.key
+  depends_on  = [github_actions_variable.approval] # the gate on Team before the reviewer goes, and back
 
   dynamic "reviewers" {
     for_each = local.approval == "environment" ? [true] : []
@@ -446,7 +463,7 @@ resource "github_repository_environment_deployment_policy" "main" {
 # identity inside its environment, so a workflow always signs in as the identity its job is trusted for.
 resource "github_actions_variable" "role" {
   for_each = merge([for role in local.roles : {
-    for name, value in merge({
+    for name, value in {
       AZURE_TENANT_ID         = local.tenant_id
       AZURE_SUBSCRIPTION_ID   = trimprefix(local.management, "/subscriptions/")
       AZURE_CLIENT_ID         = azapi_resource.identity["${role}-plan"].output.properties.clientId
@@ -454,8 +471,7 @@ resource "github_actions_variable" "role" {
       TFSTATE_CONTAINER       = role
       # The three repos, for the pipeline that offers a contract to the repos that read it.
       MLZ_REPOSITORIES = jsonencode({ for r in local.roles : r => "${local.github.organization}/${local.github.repositories[r]}" })
-      # On GitHub Team only: the pipeline's gate on an apply (tools/ci/approved.py). Unset, the environment's reviewer.
-    }, local.approval == "pull-request" ? { MLZ_APPROVAL = local.approval } : {}) : "${role}/${name}" => { role = role, name = name, value = value }
+    } : "${role}/${name}" => { role = role, name = name, value = value }
   }]...)
 
   repository    = local.github.repositories[each.value.role]
