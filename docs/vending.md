@@ -262,8 +262,12 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
   code and history stay. The merge settings are set when the repo is made and then left to the team: GitHub shows
   them only to a token with Administration: write, and vending's plans read with a read-only one.
 - **Its team**: `github.team`, required for a repo vending makes, set once per workload in `workload-defaults.yaml`. The team
-  maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. Every apply in MLZ
-  waits for a reviewer, which GitHub allows in a private repo only on GitHub Enterprise (`docs/bootstrap.md`).
+  maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. GitHub allows a reviewer
+  on an environment in a private repo only on Enterprise: on GitHub Team (`bootstrap.yaml`'s `github.plan: team`, which
+  governance's contract carries as `github.plan`) the environment has none, and the team approves each apply as the
+  code owner of its pull request; `main`'s run applies only the plan that pull request's run showed (`docs/bootstrap.md`,
+  GitHub plan; `docs/pipelines.md`, Approval on GitHub Team). The MLZ App's commits of the landing zone's values apply
+  as vending wrote them.
 - **Its identities**: a plan identity, `id-acme-pay-plan-pd-nwe-01`, Reader on the subscription, trusted for the
   repo's pull requests; the deploy identity, Contributor, trusted for its `apply` environment. Both trust GitHub's
   immutable subjects, `repo:<organization>@<id>/<repo>@<id>`, as the role repos' identities do, so a renamed or
@@ -277,7 +281,7 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
   assignment's storage rule (`StorageDenyPaasPublicIP`) and nothing else.
 - **Its variables**: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID` (the plan identity; inside the
   `apply` environment, the deploy identity) and `TFSTATE_RESOURCE_GROUP`, `TFSTATE_STORAGE_ACCOUNT`,
-  `TFSTATE_CONTAINER`. No secrets.
+  `TFSTATE_CONTAINER`; on GitHub Team, `MLZ_APPROVAL` (`pull-request`). No secrets.
 
 An existing repo (`github.repo`) is the team's own: vending makes nothing in it, and its identities trust it the same
 way, so its workflows sign in from its `apply` environment and its pull requests.
@@ -361,7 +365,9 @@ changes in Azure.
   request's own workflow reaches only the plan identity, which trusts the repo's pull requests by design and reads
   only its own landing zone. `main`'s workflow changes only through a reviewed pull request, like everything else.
 - A ruleset named `main` or `main-checks` that the repo has already is left as it is, and each run says so when it is
-  not the one vending makes.
+  not the one vending makes. On GitHub Team it warns of a `main` of the repo's own: the pipeline applies a commit
+  without a pull request as the App's values only while a rule on `main` asks for one, and cannot see who else that
+  rule lets push ([pipelines](pipelines.md#approval-on-github-team)).
 
 For a team that pushed straight to `main`: pushes are refused, and a change needs a pull request that another member of
 the team approves. A team of one needs a second member, or the bypass team. A pull request behind `main` needs

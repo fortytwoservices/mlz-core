@@ -1,5 +1,6 @@
 # This repo's pipeline: mlz-core's workload workflow, at the release pinned below. Pull requests plan; main plans,
-# then applies once the owning team approves the apply environment. Variables come from vending (docs/vending.md).
+# then applies once the owning team approves the apply environment (on GitHub Team: once main's plan is the one the
+# merged pull request showed). Variables come from vending (docs/vending.md).
 name: mlz
 
 on:
@@ -17,6 +18,7 @@ permissions:
   contents: read
   id-token: write
   pull-requests: write
+  actions: read # on GitHub Team, the merged pull request's run and its plan, which the apply must match
 
 jobs:
   workload:

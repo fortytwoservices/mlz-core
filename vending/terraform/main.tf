@@ -24,6 +24,10 @@ locals {
   # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
   # the plan identity plans its pull requests.
   subject = local.github == null || local.decommission ? null : "repo:${local.github.organization}@${one(data.github_organization.customer[*].id)}/${local.github.repo}@${local.repo_id}"
+  # Who approves the repo's applies: its team, in the apply environment, on Enterprise; on GitHub Team, which has no
+  # reviewers on an environment in a private repo, its pull requests' code owner (tools/ci/approved.py). From
+  # bootstrap.yaml's github.plan, through governance's contract (tools/mlz/vending.py).
+  approval = try(local.github.approval, null) == "pull-request" ? "pull-request" : "environment"
 }
 
 # IDs only: summary_only, so the provider lists none of the organization's repos and members.
@@ -81,7 +85,8 @@ data "github_team" "owner" {
   summary_only = true # its ID: none of its members and repos
 }
 
-# The owning team maintains the repo, and approves its applies.
+# The owning team maintains the repo, and approves its applies: in its apply environment, or on GitHub Team its pull
+# requests, as their code owner.
 resource "github_team_repository" "owner" {
   count = local.repo_made ? 1 : 0
 
@@ -90,16 +95,35 @@ resource "github_team_repository" "owner" {
   permission = "maintain"
 }
 
+# On GitHub Team only: the pipeline's gate on an apply (.github/workflows/workload.yml); unset, the environment's is.
+# A resource of its own, which the environment depends on: made before it loses its reviewer, and removed only once it
+# has it back (create_before_destroy; it reaches the repo, the one resource this depends on, whose replacement would
+# then fail on its name rather than delete it first), so that a switch of github.plan leaves no moment with neither gate.
+resource "github_actions_variable" "approval" {
+  for_each = local.repo_made && local.approval == "pull-request" ? { made = true } : {}
+
+  repository    = github_repository.workload["made"].name
+  variable_name = "MLZ_APPROVAL"
+  value         = local.approval
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "github_repository_environment" "apply" {
   count = local.repo_made ? 1 : 0
 
   repository  = github_repository.workload["made"].name
   environment = "apply"
-  # GitHub takes a reviewer that has access already: the team's, above.
-  depends_on = [github_team_repository.owner]
+  # GitHub takes a reviewer that has access already: the team's, above. The gate on Team before the reviewer goes.
+  depends_on = [github_team_repository.owner, github_actions_variable.approval]
 
-  reviewers {
-    teams = [tonumber(data.github_team.owner[0].id)]
+  dynamic "reviewers" {
+    for_each = local.approval == "environment" ? [true] : []
+    content {
+      teams = [tonumber(data.github_team.owner[0].id)]
+    }
   }
 
   deployment_branch_policy {

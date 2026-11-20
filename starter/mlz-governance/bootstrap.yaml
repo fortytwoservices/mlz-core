@@ -3,13 +3,14 @@
 
 github:
   organization: demo-org
+  plan: enterprise                 # the organization's GitHub plan: enterprise, or team (each apply approved on its pull request)
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos and approves their changes
   bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
-  reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+  reviewers: [demo-platform-lead]  # GitHub users who approve every apply (Enterprise; not used on Team)
 
 # People who may run Terraform by hand against the state (the bootstrap itself, break-glass work),
 # by name: their Entra object IDs.

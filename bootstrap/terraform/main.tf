@@ -2,6 +2,10 @@ locals {
   customer = yamldecode(file(var.customer_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
+  # Who approves an apply (docs/bootstrap.md, GitHub plan): on Enterprise, github.reviewers in each role's environment;
+  # on Team, which allows required reviewers on an environment in a private repo only on Enterprise, the pull
+  # request's code owner, and the pipeline applies only the plan that pull request's run showed (tools/ci/approved.py).
+  approval = try(local.github.plan, null) == "team" ? "pull-request" : "environment"
   # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
   # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
   names = jsondecode(file(var.names_file))
@@ -273,8 +277,8 @@ resource "azapi_resource" "identity" {
 }
 
 # Which GitHub workflows may sign in as each identity. A plan identity trusts pull requests, and main for
-# the scheduled drift check; an apply identity trusts only its role's environment, which waits for a
-# reviewer and accepts only main. Azure takes one credential write per identity at a time, hence two
+# the scheduled drift check; an apply identity trusts only its role's environment, which accepts only main
+# and, on Enterprise, waits for a reviewer. Azure takes one credential write per identity at a time, hence two
 # resources for the plan identities' two credentials.
 resource "azapi_resource" "credential" {
   for_each = local.identities
@@ -382,7 +386,7 @@ resource "azapi_resource" "state_operator" {
   }
 }
 
-# GitHub: the repos, the people who approve applies, and the settings the workflows read.
+# GitHub: the repos, the people who approve applies (on Enterprise), and the settings the workflows read.
 
 data "github_organization" "customer" {
   name         = local.github.organization
@@ -395,19 +399,39 @@ data "github_repository" "role" {
 }
 
 data "github_user" "reviewer" {
-  for_each = toset(local.github.reviewers)
+  for_each = local.approval == "environment" ? toset(try(local.github.reviewers, [])) : toset([])
   username = each.key
 }
 
-# The environment each apply runs in: a reviewer approves it, and only main may use it.
+# On GitHub Team only: the pipeline's gate on an apply (tools/ci/approved.py); unset, the environment's reviewer is.
+# A resource of its own, which the environments depend on: made before they lose their reviewer, and removed only
+# once they have it back (create_before_destroy; it reaches the resources this one depends on, and there are none),
+# so that a switch of github.plan leaves no moment with neither gate.
+resource "github_actions_variable" "approval" {
+  for_each = local.approval == "pull-request" ? local.roles : toset([])
+
+  repository    = local.github.repositories[each.key]
+  variable_name = "MLZ_APPROVAL"
+  value         = local.approval
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# The environment each apply runs in: only main may use it, and on Enterprise a reviewer approves it.
 resource "github_repository_environment" "apply" {
   for_each = local.roles
 
   repository  = local.github.repositories[each.key]
   environment = each.key
+  depends_on  = [github_actions_variable.approval] # the gate on Team before the reviewer goes, and back
 
-  reviewers {
-    users = [for user in data.github_user.reviewer : tonumber(user.id)]
+  dynamic "reviewers" {
+    for_each = local.approval == "environment" ? [true] : []
+    content {
+      users = [for user in data.github_user.reviewer : tonumber(user.id)]
+    }
   }
 
   deployment_branch_policy {
@@ -417,8 +441,12 @@ resource "github_repository_environment" "apply" {
 
   lifecycle {
     precondition {
-      condition     = length(local.github.reviewers) > 0
-      error_message = "github.reviewers in bootstrap.yaml is empty: every apply needs someone to approve it."
+      condition     = contains(["enterprise", "team"], try(local.github.plan, "enterprise"))
+      error_message = "github.plan in bootstrap.yaml is enterprise or team: the customer's GitHub plan."
+    }
+    precondition {
+      condition     = local.approval != "environment" || length(try(local.github.reviewers, [])) > 0
+      error_message = "github.reviewers in bootstrap.yaml is empty: on GitHub Enterprise, every apply needs someone to approve it."
     }
   }
 }

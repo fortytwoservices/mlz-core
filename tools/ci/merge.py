@@ -1,6 +1,7 @@
 """merge.py: merges a contract pull request (from tools/ci/publish.py or mlz install publish) once this run has checked
 and planned it. A person's merge would add no control: the run on main that the merge starts still waits for this
-role's reviewer before it applies. A contract this run did not accept stays open, so main only ever gets one its own
+role's reviewer before it applies (on GitHub Team it applies, without a person, only the plan this run made:
+tools/ci/approved.py). A contract this run did not accept stays open, so main only ever gets one its own
 run has checked. Needs GH_TOKEN for an app that may write to this repo, GITHUB_REPOSITORY, PR_NUMBER, HEAD_SHA (the
 commit this run checked) and BASE_REF (the branch it merges into). The branch stays: publish.py starts it again from
 main for the next contract, so deleting it here could take a newer one with it.

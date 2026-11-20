@@ -144,7 +144,11 @@ def checks_ruleset(role: str, app_id: int | None = None, check: str | None = Non
     }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+GITHUB_SETTINGS = ("organization", "plan", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+# bootstrap.yaml's github.plan: the customer's GitHub plan, which decides who approves an apply (docs/bootstrap.md). On
+# Enterprise, github.reviewers in each role's environment; on Team, which allows required reviewers on an environment
+# in a private repo only on Enterprise, the pull request's code owner (tools/ci/approved.py).
+GITHUB_PLANS = ("enterprise", "team")
 # bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
 # a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
 RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
@@ -220,6 +224,14 @@ def runner_settings(bootstrap: dict) -> dict:
     if problems:
         raise ConfigError("\n  ".join(problems))
     return {"kind": kind, "size": size, "instances": instances, "app_client_id": client_id, "image": image}
+
+
+def github_plan(bootstrap: dict) -> str:
+    """bootstrap.yaml's github.plan: enterprise (the default) or team."""
+    plan = (bootstrap.get("github") or {}).get("plan", "enterprise")
+    if plan not in GITHUB_PLANS:
+        raise ConfigError(f"bootstrap.yaml: github.plan is enterprise or team, the customer's GitHub plan, not {plan!r}.")
+    return plan
 
 
 def repositories(bootstrap: dict) -> dict[str, str]:
@@ -456,17 +468,25 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
     customer, bootstrap = settings(folder)
     out(f"names: the state account will be {bootstrap_names(customer, bootstrap)['storage_account']}")
     problems = []
-    # Every apply waits for a reviewer, in the role repos and the workload repos alike, and GitHub allows required
-    # reviewers on an environment in a private repo only on GitHub Enterprise (docs/bootstrap.md).
-    org = (bootstrap.get("github") or {}).get("organization")
+    # On Enterprise every apply waits for a reviewer in its environment, in the role repos and the workload repos alike,
+    # which GitHub allows in a private repo only on Enterprise; on Team the pull request's approval is the gate, and
+    # the environments keep only their branch policy, which Team has. Free has no environments in private repos at all
+    # (docs/bootstrap.md, GitHub plan).
+    org, wanted = (bootstrap.get("github") or {}).get("organization"), github_plan(bootstrap)
     plan = github.plan(org) if org else None
     if plan is None and org:
-        out(f"{org}: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.")
-    elif plan and plan != "enterprise":
-        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer, which GitHub "
-                        "allows on an environment in a private repo only on Enterprise.")
+        out(f"{org}: its GitHub plan is shown to its owners only, so it is not checked here; bootstrap.yaml says {wanted}.")
+    elif plan == wanted:
+        out(f"{org}: on GitHub {wanted.capitalize()}" + (", so each apply is approved on its pull request" if wanted == "team" else ""))
+    elif plan == "enterprise":
+        out(f"{org}: on GitHub Enterprise, but bootstrap.yaml's github.plan says team: each apply is approved on its pull request, "
+            "not by a reviewer in its environment. Set github.plan: enterprise for the reviewer.")
+    elif plan == "team":
+        problems.append(f"{org}: on GitHub's team plan, but bootstrap.yaml's github.plan says enterprise: GitHub allows the environments' "
+                        "reviewers in a private repo only on Enterprise. Set github.plan: team, and each apply is approved on its pull request.")
     else:
-        out(f"{org}: on GitHub Enterprise")
+        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Team or Enterprise: GitHub has environments in a private "
+                        "repo, which every apply runs in, only on those.")
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")

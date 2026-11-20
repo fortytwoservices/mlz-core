@@ -491,6 +491,19 @@ class RuleTest(SyncTest):
         out = self.sync(github)
         self.assertEqual([r["name"] for r in github.made_rulesets[self.REPO]], ["main", "main-checks"])
         self.assertIn(f"{self.REPO}: has a ruleset named main that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)", out)
+        self.assertFalse(any("on GitHub Team" in line for line in out))  # Enterprise: the environment's reviewer still gates its applies
+
+    def test_on_github_team_a_main_ruleset_of_the_repo_s_own_is_warned_about(self):
+        # Its pipeline trusts a commit without a pull request only because main's rule lets nobody but the App push.
+        own = {"name": "main", "target": "branch", "enforcement": "active", "rules": [{"type": "deletion"}]}
+        github = self.made()
+        github.made_rulesets[self.REPO] = [own]
+        config = json.loads((self.configs / "payments-prod.json").read_text())
+        config["github"]["approval"] = "pull-request"
+        (self.configs / "payments-prod.json").write_text(json.dumps(config))
+        out = self.sync(github)
+        self.assertTrue(any(line.startswith(f"::warning::{self.REPO}: on GitHub Team, its pipeline trusts a commit to main without a pull request")
+                            for line in out))
 
     def test_without_the_app_s_id_no_rule_is_made_and_the_values_still_go(self):
         github = self.made()

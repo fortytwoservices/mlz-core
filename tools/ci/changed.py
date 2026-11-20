@@ -4,7 +4,9 @@ download only that one. Reads STACKS and BATCHES (JSON, from check), ROLE, and .
 writes stacks= and batch_of= to GITHUB_OUTPUT, and a line to GITHUB_STEP_SUMMARY. Was role.yml's inline Python.
 
 A run with something to apply then waits for a reviewer in the role's environment, and every later run on main queues
-behind it (finding 11). GitHub tells the reviewers itself; this says why, where people look (waiting):
+behind it (finding 11). Where no environment can wait for one (MLZ_APPROVAL=pull-request, on GitHub Team), the gate is
+approved.py's instead: main's plan must be the one the merged pull request's run showed, or nothing applies and the job
+fails. GitHub tells the reviewers itself; this says why, where people look (waiting):
 - on the run's page, always: what started the run, what it applies, where it waits;
 - on the pull request whose merge started it, when a person opened it: one comment, on the run's first attempt only.
   A contract pull request, or any other one an app opened, gets none: nobody reads it. Neither does a push without a
@@ -24,7 +26,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
 
-from ci.gh import Pipeline  # noqa: E402
+from ci import approved  # noqa: E402
+from ci.approved import merged_pull  # noqa: E402,F401: changed.merged_pull, as before
+from ci.gh import ConfigError, Pipeline  # noqa: E402
 
 # A contract pull request, by its branch (publish.py, and mlz install publish for the bootstrap's, opened with an
 # engineer's own login). Its merge may be the merge job's or a person's, where a ruleset asks for a review.
@@ -40,13 +44,6 @@ def changes(stack: str) -> bool:
     """A missing list counts as changes: the apply then stops on it."""
     path = pathlib.Path(f".mlz/reviewed/changes-{stack}.txt")
     return not path.exists() or path.read_text().strip() != ""
-
-
-def merged_pull(github: Pipeline, repo: str, sha: str) -> dict | None:
-    """The pull request whose merge made this commit on main, or None for a push without one. Merged into main: one merged
-    into another branch, whose merge commit was then pushed onto main, did not start this run."""
-    return next((pull for pull in github.commit_pulls(repo, sha, timeout=DEADLINE)
-                 if pull.get("merged_at") and pull.get("merge_commit_sha") == sha and (pull.get("base") or {}).get("ref") == "main"), None)
 
 
 def head_title() -> str:
@@ -92,7 +89,7 @@ def waiting(role: str, stacks: list[str], github: Pipeline | None = None, say=pr
     pull = None
     if event == "push":
         try:
-            pull = merged_pull(github or Pipeline(), os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"])
+            pull = merged_pull(github or Pipeline(), os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_SHA"], timeout=DEADLINE)
         except Exception as error:  # noqa: BLE001: the note goes out without it; the apply is never held up by it
             say(f"::notice::The pull request this push merged could not be found ({error}); the run's page says why it waits.")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
@@ -110,24 +107,38 @@ def waiting(role: str, stacks: list[str], github: Pipeline | None = None, say=pr
         say(f"::notice::Could not comment on #{pull['number']} ({error}); the run's page says why it waits.")
 
 
-def main(github: Pipeline | None = None, say=print) -> None:
+def main(github: Pipeline | None = None, say=print) -> int:
     stacks = json.loads(os.environ["STACKS"])
     batch_of = {stack: batch["id"] for batch in json.loads(os.environ["BATCHES"]) for stack in batch["stacks"].split()}
     changed = [stack for stack in stacks if changes(stack)]
     unchanged = [stack for stack in stacks if stack not in changed]
+    by_pull_request = os.environ.get("MLZ_APPROVAL") == "pull-request"
+    if by_pull_request and not approved.approved(os.environ["ROLE"], changed, github, say=say):
+        with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+            out.write(f"Nothing is applied: the plan of {', '.join(changed)} on main is not the one its pull request's run showed; "
+                      "the log says why and what to do.\n")
+        return 1
     jobs = [" ".join(changed)] if os.environ["ROLE"] == "platform" and changed else changed
     with open(os.environ["GITHUB_OUTPUT"], "a") as out:
         out.write(f"stacks={json.dumps(jobs)}\n")
         out.write(f"batch_of={json.dumps(batch_of)}\n")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
-        out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
-    if changed:
+        if by_pull_request:
+            out.write(f"To apply: {', '.join(changed) or 'nothing'}, as its pull request's run showed. No changes: {', '.join(unchanged) or 'none'}.\n")
+        else:
+            out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
+    if changed and not by_pull_request:
         try:
             waiting(os.environ["ROLE"], changed, github, say)
         except Exception as error:  # noqa: BLE001: the outputs are written; nothing here may skip the apply
             say(f"::notice::Could not say why the run waits ({error}); it waits for approval in the {os.environ['ROLE']} environment all the same.")
+    return 0
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
-    main()
+    try:
+        sys.exit(main())
+    except ConfigError as error:  # the gate could not ask GitHub (approved.py): nothing applies
+        print(f"::error::{error}; nothing is applied.", file=sys.stderr)
+        sys.exit(1)

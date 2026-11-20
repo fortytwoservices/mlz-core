@@ -112,6 +112,34 @@ class Pipeline:
         """The pull requests a commit belongs to: for a merge's commit on main, the one it merged."""
         return self._api(f"repos/{repo}/commits/{sha}/pulls", timeout=timeout) or []
 
+    def commit_author(self, repo: str, sha: str) -> dict | None:
+        """The GitHub account a commit is authored by ({login, type}), or None when GitHub links it to none."""
+        return self._api(f"repos/{repo}/commits/{sha}").get("author")
+
+    def workflow_runs(self, repo: str, workflow: str, head_sha: str) -> list[dict]:
+        """A workflow's runs on a commit (its file name, mlz.yml), newest first."""
+        return (self._api(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={head_sha}&per_page=100") or {}).get("workflow_runs") or []
+
+    def workflow_run(self, repo: str, run_id: int) -> dict:
+        """A workflow run as it is now: its latest attempt (run_attempt) and when that started (run_started_at)."""
+        return self._api(f"repos/{repo}/actions/runs/{run_id}")
+
+    def branch_rules(self, repo: str, branch: str) -> list[dict]:
+        """The rules of the repo's active rulesets that apply to the branch ({type, parameters, ...}); the run's token
+        reads them with the metadata every token has."""
+        return self._pages(f"repos/{repo}/rules/branches/{branch}")
+
+    def download_artifacts(self, repo: str, run_id: int, pattern: str, folder: Path) -> bool:
+        """A run's artifacts whose names match the pattern, each into a folder of its own under folder; False when it has
+        none (gh says so), and a ConfigError for any other failure."""
+        run = subprocess.run(["gh", "run", "download", str(run_id), "--repo", repo, "--pattern", pattern, "--dir", str(folder)],
+                             capture_output=True, text=True)
+        if run.returncode:
+            if "no valid artifacts" in run.stderr or "no artifact matches" in run.stderr:
+                return False
+            raise ConfigError(f"gh run download {run_id}: {run.stderr.strip() or run.stdout.strip()}")
+        return any(folder.rglob("*"))
+
     def close_pull(self, repo: str, number: int, comment: str) -> None:
         """Closes a pull request with a comment, and deletes its branch, as gh pr close --delete-branch does."""
         pull = self._api(f"repos/{repo}/pulls/{number}")

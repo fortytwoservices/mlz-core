@@ -217,8 +217,29 @@ run "with_a_repo" {
     error_message = "The repo's default branch is main, renamed from whatever the organization's default made, and only main may apply."
   }
   assert {
-    condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01"
+    condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01" && length(github_actions_variable.approval) == 0
     error_message = "The repo's variables name its subscription, its plan identity and its state."
+  }
+}
+
+# On GitHub Team (bootstrap.yaml's github.plan, through governance's contract): no reviewer in the apply environment,
+# which only main may still use; the pipeline's gate is the pull request's (MLZ_APPROVAL, tools/ci/approved.py).
+run "with_a_repo_on_github_team" {
+  command = plan
+  variables {
+    config_file = "tests/with-repo-team.json"
+  }
+  override_resource {
+    target = github_repository.workload["made"]
+    values = { repo_id = 2002 }
+  }
+  assert {
+    condition     = length(github_repository_environment.apply[0].reviewers) == 0 && github_repository_environment_deployment_policy.main[0].branch_pattern == "main"
+    error_message = "On GitHub Team the apply environment has no reviewer, and still only main may apply."
+  }
+  assert {
+    condition     = github_actions_variable.approval["made"].value == "pull-request" && length(github_actions_variable.workload) == 6
+    error_message = "On GitHub Team the repo's pipeline is told its gate is the pull request's."
   }
 }
 
