@@ -50,7 +50,8 @@ PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo's pipeline
 # key). Enterprise's pipeline has neither, so it is the starter's byte for byte.
 TEAM_PERMISSION = "  actions: read # GitHub Team: workload.yml's gate reads the pull request's run (docs/vending.md)\n"
 TEAM_APPROVAL = "      approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/vending.md)\n"
-KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
+KEY = re.compile(r"^ {4}(\w+)\s*=\s*(?P<type>\S*)", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
+OBJECT = re.compile(r"^ {2}type\s*=\s*object\(\{(?P<keys>.*?)^ {2}\}\)", re.M | re.S)  # its type, not its validation blocks
 MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
 
 
@@ -111,10 +112,17 @@ def plan_wanted(config: dict) -> str:
     return "team" if config.get("approval") == "pull-request" else "enterprise"
 
 
-def mlz_keys(variables: str) -> set[str]:
-    """The keys variable "mlz" declares in a variables.tf, not another variable's."""
+def mlz_attributes(variables: str) -> dict[str, bool]:
+    """The keys variable "mlz"'s object type declares in a variables.tf (not another variable's, nor a validation
+    block's), each with whether Terraform requires it: one declared optional(...) it does not."""
     block = MLZ_VARIABLE.search(variables)
-    return set(KEY.findall(block["body"])) if block else set()
+    found = OBJECT.search(block["body"]) if block else None
+    return {key[1]: not key["type"].startswith("optional(") for key in KEY.finditer(found["keys"])} if found else {}
+
+
+def mlz_keys(variables: str) -> set[str]:
+    """The keys variable "mlz" declares in a variables.tf."""
+    return set(mlz_attributes(variables))
 
 
 def starter() -> dict[str, str]:
@@ -426,8 +434,8 @@ def upgrade_body(current: str, target: str, releases: dict[str, str], changes: d
     if kept or naming:
         lines += ["", "**Left as they are**, since they are this repo's own now:"]
     for name, text in sorted(kept.items()):
-        ours, theirs = (mlz_keys(starter()[name]), mlz_keys(text)) if name == "variables.tf" else (set(), set())
-        gained, lost = sorted(ours - theirs), sorted(theirs - ours)
+        ours, theirs = (mlz_keys(starter()[name]), mlz_attributes(text)) if name == "variables.tf" else (set(), {})
+        gained, lost = sorted(ours - set(theirs)), sorted(key for key, required in theirs.items() if required and key not in ours)
         if lost:
             # Terraform requires each attribute a type declares (checked with Terraform 1.17.0): such a key stops the plan.
             lines += [f"- `{name}`: its `variable \"mlz\"` declares {', '.join(f'`{key}`' for key in lost)}, which the values vending writes "

@@ -330,9 +330,9 @@ changes in Azure.
   and `mlz.auto.tfvars.json`. For `variables.tf`, it names the keys the release's `variable "mlz"` declares and the
   repo's does not. Terraform drops the values a type does not declare, without an error or a warning (checked with
   Terraform 1.17.0), so nothing breaks, and the team takes the new block from `starter/mlz-workload/variables.tf` of
-  that release when it wants them. A key the repo's block declares and the values no longer carry is another matter:
-  Terraform requires each one (`attribute "location" is required`, checked with Terraform 1.17.0), so the pull request
-  names it as what stops the plan until the team takes the new block. It also names each place the repo's own
+  that release when it wants them. A key the repo's block declares and the values no longer carry is another matter,
+  unless it is `optional(...)`: Terraform requires each other one (`attribute "location" is required`, checked with
+  Terraform 1.17.0), so the pull request names it as what stops the plan until the team takes the new block. It also names each place the repo's own
   Terraform pins mlz-core's naming module at another release: moving that may rename resources, so it is the team's
   change. A pin before v0.15.0 stops at the module's check on the values vending writes from v0.15.0, which carry the
   region's name in `region` and its code in `region_code`.

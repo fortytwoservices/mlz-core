@@ -327,6 +327,20 @@ class UpgradeTest(SyncTest):
                       "so this repo's plan fails on it until you take the block", body)
         self.assertNotIn("Terraform drops", body)
 
+    def test_a_validation_block_or_an_optional_key_is_not_named_as_what_stops_the_plan(self):
+        # A validation block's condition and error_message are no keys of the type; and an optional(...) key the values do
+        # not carry is one Terraform fills with its default, so the plan goes on.
+        validation = ('  validation {\n    condition     = length(var.mlz.landing_zone) > 0\n'
+                      '    error_message = "The landing zone has a key."\n  }\n')
+        own = workload.starter()["variables.tf"].replace("  })\n}\n", "    location = optional(string) # ours\n  })\n" + validation + "}\n")
+        self.assertEqual(workload.mlz_attributes(own)["location"], False)
+        self.assertNotIn("condition", workload.mlz_keys(own))
+        github = self.github(self.made_at(**{"variables.tf": own}))
+        self.sync(github)
+        body = github.pulls[self.REPO][0]["body"]
+        self.assertIn(f"- `variables.tf`: `{TARGET}`'s starter has another version", body)
+        self.assertNotIn("plan fails", body)
+
     def test_a_file_new_in_the_release_is_added_and_one_the_team_removed_stays_removed(self):
         made = self.made_at()
         del made["terraform.tf"]  # the team's own backend now
