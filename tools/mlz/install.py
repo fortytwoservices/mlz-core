@@ -50,7 +50,7 @@ from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
+from .upgrade import CALL, EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -1361,19 +1361,40 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     return made
 
 
+def calls_role_alone(pipeline: str | None) -> list[str] | None:
+    """A pipeline's jobs when they are other than one job calling mlz-core's role.yml; None when that is all it has.
+    The keys of its jobs: mapping, at two spaces, up to the next key at the top."""
+    start = re.search(r"^jobs:[ \t]*(#[^\n]*)?$", pipeline or "", re.M)
+    body = re.split(r"^\S", (pipeline or "")[start.end():], maxsplit=1, flags=re.M)[0] if start else ""
+    jobs = re.findall(r"^  ([\w-]+):", body, re.M)
+    return None if len(jobs) == 1 and any(CALL.match(line) for line in body.splitlines()) else jobs
+
+
 def other_workflows(github, repo: str) -> list[str]:
-    """Workflows a repo already has besides its pipeline, which pipeline-files does not take away: on main, any file in
-    .github/workflows/ but mlz.yml; on any other branch, any change under .github/ since it left main (a branch pushed
-    before the ruleset keeps it). On Team, where a runner group may admit every workflow of the repo, each could reach
-    the runners."""
+    """Workflows a repo has besides its pipeline's one call of role.yml, which pipeline-files does not take away: on the
+    default branch, any file in .github/workflows/ but mlz.yml, and any job in mlz.yml but the one that calls role.yml;
+    on any other branch, a .github/ that is not the default branch's, file for file (a branch pushed before the ruleset
+    keeps what it had, a workflow main removed since included), but an mlz.yml that only calls role.yml at another
+    release, as a branch from before an upgrade has. On Team, where a runner group may admit every workflow of the repo,
+    each could reach the runners."""
     branch = github.default_branch(repo)
     found = [f"{repo}: {path} on {branch} is a workflow besides the pipeline; remove it, or keep the runners off Team's fallback."
              for path in github.folder(repo, ".github/workflows", branch) if path != WORKFLOW]
+    pipeline = github.file(repo, WORKFLOW, branch)[0]
+    jobs = calls_role_alone(pipeline) if pipeline is not None else None
+    if jobs is not None:
+        found.append(f"{repo}: its {WORKFLOW} on {branch} has {', '.join(jobs) or 'no'} job{'s' if len(jobs) != 1 else ''}, not the one that calls "
+                     "mlz-core's role.yml alone; mlz upgrade writes it as it should be.")
+    tree = {path: github.file(repo, path, branch)[1] for path in github.folder(repo, ".github", branch)}
     for other in github.branch_names(repo):
-        changed = [path for path in github.changed_paths(repo, branch, other) if path.startswith(".github/")] if other != branch else []
-        if changed:
-            found.append(f"{repo}: branch {other} changes {', '.join(changed)}, which a run from it would use; delete the branch if you do not "
-                         "know it, or merge its change through a reviewed pull request.")
+        if other == branch:
+            continue
+        theirs = {path: github.file(repo, path, other)[1] for path in github.folder(repo, ".github", other)}
+        differ = sorted(path for path in set(tree) | set(theirs) if tree.get(path) != theirs.get(path)
+                        and not (path == WORKFLOW and path in theirs and calls_role_alone(github.file(repo, path, other)[0]) is None))
+        if differ:
+            found.append(f"{repo}: branch {other} has another {', '.join(differ)} than {branch}, which a run from it would use; delete the "
+                         "branch if you do not know it, or bring its change through a reviewed pull request.")
     return found
 
 
