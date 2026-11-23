@@ -13,6 +13,11 @@
           "description": "The customer's GitHub organization.",
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
+        "app": {
+          "type": "string",
+          "description": "The slug of the customer's MLZ App, the last part of its page's address (https://github.com/apps/<slug>). With the bypass team, it alone may change _generated/ in the three repos: their push ruleset generated-files refuses it from anyone else.",
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
         "repositories": {
           "description": "The three repos, by role, and the organization's copy of mlz-core.",
           "type": "object",

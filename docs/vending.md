@@ -88,7 +88,8 @@ Any layer can be a folder of chunks.
   to date with `main` (a merge commit from the same App), so the plan it commits next never conflicts with
   `main`'s. The commit is made only if the branch has not moved in the meantime; a newer push has a run of
   its own. You can still run `./mlz allocate --repo .` yourself, for example to see the
-  addresses before pushing.
+  addresses before pushing; only the bypass team may push what it writes, since only the MLZ App and that team may
+  change `_generated/` ([pipelines](pipelines.md#changes-to-_generated)).
 
   `./mlz allocate --repo . --check` writes nothing and fails when the plan or the names in the repo are not what
   the allocator would write. On `main` it stops two pull requests that each took the same free block, if both

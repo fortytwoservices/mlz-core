@@ -3,12 +3,14 @@
 The one-time setup a customer's pipelines run on. A person at Fortytwo runs it once per customer, before
 the first pipeline run; running it again changes only what differs. It is `bootstrap/terraform`, and it
 reads two files from the customer's governance repo: `customer.yaml` (root ID, display name, primary
-region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, platform team, bypass team, reviewers, state operators).
+region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, MLZ App, platform team, bypass team, reviewers, state
+operators).
 
 ```yaml
 # bootstrap.yaml
 github:
   organization: demo-org
+  app: demo-org-mlz                # the MLZ App (github.com/apps/<this>); with bypass_team, the only writer of _generated/
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
     platform: mlz-platform
@@ -183,19 +185,24 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - Each gets the push ruleset `pipeline-files`, after its first commit: changes under `.github/` are refused on every
      branch, but from `bypass_team` ([pipelines](pipelines.md#changes-to-github)). The team must exist first, be
      visible, and not be the platform team. Whoever runs `mlz install repos` again, or `mlz upgrade`, must be in it.
+   - Each gets the push ruleset `generated-files`: changes under `_generated/` are refused on every branch, but from the
+     MLZ App and `bypass_team` ([pipelines](pipelines.md#changes-to-_generated)). `app` is the App's slug, the last part
+     of its page's address; the step reads the App's ID from GitHub, and stops unless the organization owns it.
    - Each gets `.github/CODEOWNERS`, with `platform_team` owning every file but `_generated/`, and that team gets
      write access, which a code owner needs; a team with more keeps it. The team must exist first, and be visible:
      `CODEOWNERS` skips a secret team. It can take its members from an Entra ID group
      ([pipelines](pipelines.md#code-owners)).
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
-     request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main` or `pipeline-files` is left
-     as it is.
+     request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main`, `main-checks`,
+     `pipeline-files` or `generated-files` is left as it is.
 2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
    and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
    GitHub Actions on a branch up to date with it. It also confirms that an active push ruleset refuses changes under
-   `.github/` with the bypass team as its bypass. Making the App needs a browser, so that step stays manual.
+   `.github/` with the bypass team as its bypass, and one under `_generated/` with the MLZ App and the bypass team as
+   its only bypass, and that each repo's `MLZ_RELEASE_APP_CLIENT_ID` is the client ID of the App `app` names. Making the
+   App needs a browser, so that step stays manual.
    Install it on **all the organization's repos**, not selected ones: the check cannot see its installations
    (GitHub shows them only to the App and the organization's owners). A repo without it, the copy of mlz-core
    included, stops its run at the App's token step with Not Found; and an App on selected repos cannot reach a
@@ -213,7 +220,8 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - It ends by checking that every identity trusts a subject GitHub actually issues to its repo.
 4. **`handover`** moves the platform subscriptions into `<root>`, after asking. A subscription already anywhere
    in the tree stays where it is, so a run after governance never pulls one back out.
-5. **`publish`** offers `_generated/bootstrap.yaml` to the governance repo as a pull request. Governance's run
+5. **`publish`**, run by a member of the bypass team, offers `_generated/bootstrap.yaml` to the governance repo as a
+   pull request; it stops before making a branch if you may not change `_generated/`. Governance's run
    merges it once it has checked and planned it, and the run on `main` that starts is governance's first
    deployment, which waits for its reviewer; the first run's order is in `docs/pipelines.md`.
 
