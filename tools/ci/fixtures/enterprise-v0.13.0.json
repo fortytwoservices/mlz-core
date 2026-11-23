@@ -1,0 +1,494 @@
+{
+  "role.yml": {
+    "jobs": {
+      "apply": {
+        "environment": "${{ inputs.role }}",
+        "permissions": {
+          "contents": "read",
+          "id-token": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            "inputs.role == 'vending'"
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "github-writer",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "inputs.role == 'vending'"
+          ],
+          [
+            "Apply",
+            "",
+            ""
+          ]
+        ]
+      },
+      "changed": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "pull-requests": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "changed",
+            "",
+            ""
+          ]
+        ]
+      },
+      "check": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "pull-requests": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "core",
+            "",
+            ""
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(steps.core.outputs.repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "plan-writer",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "inputs.role == 'vending' && github.event_name == 'pull_request'"
+          ],
+          [
+            "Bring the IP plan and the names up to date",
+            "",
+            "inputs.role == 'vending' && github.event_name == 'pull_request'"
+          ],
+          [
+            "meta",
+            "",
+            "inputs.role == 'platform'"
+          ],
+          [
+            "check",
+            "",
+            ""
+          ],
+          [
+            "Mark the plan comments of stacks this commit does not plan",
+            "",
+            "github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository"
+          ],
+          [
+            "",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            ""
+          ]
+        ]
+      },
+      "decommission": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "id-token": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "",
+            "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
+            ""
+          ],
+          [
+            "writer",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            ""
+          ],
+          [
+            "Offer the pull requests that delete decommissioned landing zones' files",
+            "",
+            ""
+          ]
+        ]
+      },
+      "drift": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "issues": "write"
+        },
+        "steps": [
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "Open, comment on or close the drift issue",
+            "",
+            ""
+          ]
+        ]
+      },
+      "merge": {
+        "environment": null,
+        "permissions": {},
+        "steps": [
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "merger",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            ""
+          ],
+          [
+            "Merge the contract",
+            "",
+            ""
+          ]
+        ]
+      },
+      "plan": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "id-token": "write",
+          "pull-requests": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "",
+            "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
+            ""
+          ],
+          [
+            "github-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "inputs.role == 'vending'"
+          ],
+          [
+            "Plan",
+            "",
+            ""
+          ],
+          [
+            "",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "always()"
+          ],
+          [
+            "Record the plans' statuses",
+            "",
+            "always() && github.event_name == 'schedule'"
+          ],
+          [
+            "",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "always() && github.event_name == 'schedule'"
+          ]
+        ]
+      },
+      "publish": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "id-token": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "",
+            "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
+            "inputs.role != 'vending'"
+          ],
+          [
+            "writer",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            ""
+          ],
+          [
+            "Offer the contract to the repos that read it",
+            "",
+            ""
+          ]
+        ]
+      },
+      "workload-repos": {
+        "environment": null,
+        "permissions": {
+          "contents": "read"
+        },
+        "steps": [
+          [
+            "core-reader",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            "startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))"
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "writer",
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+            ""
+          ],
+          [
+            "Give the workload repos their files",
+            "",
+            ""
+          ]
+        ]
+      }
+    },
+    "permissions": {}
+  },
+  "workload.yml": {
+    "jobs": {
+      "apply": {
+        "environment": "apply",
+        "permissions": {
+          "contents": "read",
+          "id-token": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "Apply",
+            "",
+            ""
+          ]
+        ]
+      },
+      "plan": {
+        "environment": null,
+        "permissions": {
+          "contents": "read",
+          "id-token": "write",
+          "pull-requests": "write"
+        },
+        "steps": [
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "core",
+            "",
+            ""
+          ],
+          [
+            "",
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            ""
+          ],
+          [
+            "",
+            "hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e",
+            ""
+          ],
+          [
+            "",
+            "azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906",
+            ""
+          ],
+          [
+            "plan",
+            "",
+            ""
+          ],
+          [
+            "Show the plan on the run page",
+            "",
+            "steps.plan.outputs.status != '1'"
+          ],
+          [
+            "",
+            "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+            "steps.plan.outputs.status != '1'"
+          ],
+          [
+            "Put the plan on the pull request",
+            "",
+            "github.event_name == 'pull_request'"
+          ],
+          [
+            "Result",
+            "",
+            ""
+          ]
+        ]
+      }
+    },
+    "permissions": {}
+  }
+}

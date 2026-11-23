@@ -4,12 +4,26 @@
 # zone's own account; on main, the apply then runs in the apply environment, as the deploy identity, once the
 # owning team approves, and only if its plan makes exactly the changes the reviewed one showed. The scripts are
 # role.yml's, with the role "workload" (tools/mlz/stacks.py: its root is the repo's top).
+#
+# approval, as in role.yml: environment (the default, GitHub Enterprise), the owning team approves the apply
+# environment; pull-request (GitHub Team), the gate job lets the apply through only with the plan the merged pull
+# request's run showed (docs/pipelines.md, "Approval on GitHub Team").
+#
+# No top-level permissions, unlike role.yml, for the gate alone: a job with no permissions key gets what the caller
+# grants, and only a caller on GitHub Team grants actions: read, which the gate needs to read the pull request's run.
+# A job that asks for a permission its caller does not grant stops the whole run before it starts, even when its if
+# skips it (tested 23 November 2026), so asking for it here would break every caller on Enterprise. Every other job
+# declares its own permissions, and the gate signs in nowhere (tools/ci/test_workflows.py holds both).
 name: mlz workload
 
 on:
   workflow_call:
-
-permissions: {}
+    inputs:
+      approval:
+        description: "who approves an apply: environment (the owning team, GitHub Enterprise) or pull-request (the pull request's code owner, GitHub Team)"
+        type: string
+        required: false
+        default: environment
 
 env:
   ARM_USE_OIDC: "true"
@@ -49,7 +63,13 @@ jobs:
           WORKFLOW_REF: ${{ job.workflow_ref }}
           WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           WORKFLOW_SHA: ${{ job.workflow_sha }}
+          APPROVAL: ${{ inputs.approval }}
         run: |
+          # Anything else would run as neither: on GitHub Team, an apply nobody gates.
+          if [[ $APPROVAL != environment && $APPROVAL != pull-request ]]; then
+            echo "::error::approval is '$APPROVAL' in .github/workflows/mlz.yml: it is environment (GitHub Enterprise, the default) or pull-request (GitHub Team)."
+            exit 1
+          fi
           if [[ ! $WORKFLOW_SHA =~ ^[0-9a-f]{40}$ || -z $WORKFLOW_REPOSITORY || $WORKFLOW_REPOSITORY == "$GITHUB_REPOSITORY" ]]; then
             echo "::error::GitHub did not say which mlz-core commit this workflow comes from (job.workflow_repository '$WORKFLOW_REPOSITORY', job.workflow_sha '$WORKFLOW_SHA')."
             exit 1
@@ -87,6 +107,13 @@ jobs:
         if: steps.plan.outputs.status != '1'
         run: cat .mlz/summary-workload.md >> "$GITHUB_STEP_SUMMARY"
 
+      # GitHub Team: the pull request's number with its plan, as role.yml's plan jobs do.
+      - name: Mark the plan as the pull request's
+        if: inputs.approval == 'pull-request' && steps.plan.outputs.status != '1' && github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: mkdir -p .mlz && echo "$PR_NUMBER" > .mlz/pull-request.txt
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.plan.outputs.status != '1'
         with:
@@ -96,6 +123,7 @@ jobs:
             .mlz/summary-workload.md
             .mlz/changes-workload.txt
             .mlz/version-workload.txt
+            .mlz/pull-request.txt
           include-hidden-files: true
           retention-days: 30
 
@@ -114,12 +142,40 @@ jobs:
           if [[ $STATUS == 1 ]]; then echo "::error::The plan failed."; exit 1; fi
           if [[ $STATUS == 3 ]]; then echo "::error::The plan is refused; the plan above says why."; exit 1; fi
 
-  apply:
-    # main only, and only when the plan changes something. The apply environment waits for the owning team.
+  # GitHub Team only: the apply goes on only with the plan the merged pull request's run showed. No permissions key, so
+  # its token holds what the caller grants, actions: read included on Team (above); it signs in nowhere, and runs only
+  # mlz-core's own code at the release the caller pins.
+  gate:
     if: >-
-      github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      inputs.approval == 'pull-request'
+      && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
       && needs.plan.outputs.status == '2'
     needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.core-repository }}
+          ref: ${{ needs.plan.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # Refuses until mlz-core's gate is in place, so that nothing applies on Team without it.
+      - name: Match the plan with its pull request's
+        run: |
+          echo "::error::This mlz-core release has no gate for GitHub Team yet, so nothing is applied. Move to the release that has it."
+          exit 1
+
+  apply:
+    # main only, and only when the plan changes something. The apply environment waits for the owning team (on GitHub
+    # Team it has no reviewer, and the gate above has let it through). Not after a cancelled run.
+    if: >-
+      !cancelled() && needs.plan.result == 'success'
+      && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.plan.outputs.status == '2'
+      && (inputs.approval == 'pull-request' && needs.gate.result == 'success' || inputs.approval != 'pull-request' && needs.gate.result == 'skipped')
+    needs: [plan, gate]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: apply
