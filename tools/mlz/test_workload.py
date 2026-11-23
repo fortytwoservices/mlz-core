@@ -55,11 +55,23 @@ class FakeGitHub:
         self.writers.setdefault(repo, set()).add(slug)
 
     def rulesets(self, repo):
-        return [{**ruleset, "source_type": "Repository", "source": repo} for ruleset in self.made_rulesets.get(repo, [])]
+        # Each with its ID, as GitHub lists them: its place in the repo's list.
+        return [{**ruleset, "source_type": "Repository", "source": repo, "id": n} for n, ruleset in enumerate(self.made_rulesets.get(repo, []), 1)]
 
     def add_ruleset(self, repo, ruleset):
         self.made_rulesets.setdefault(repo, []).append(ruleset)
         return True
+
+    def update_ruleset(self, repo, ruleset_id, ruleset):
+        self.made_rulesets[repo][ruleset_id - 1] = ruleset
+
+    def close_pulls(self, repo, branch, comment):
+        closed = []
+        for pull in self.pulls.get(repo, []):
+            if pull["branch"] == branch and pull["state"] == "open":
+                pull["state"], pull["closed_comment"] = "closed", comment
+                closed.append(pull["html_url"])
+        return closed
 
     def releases(self, core):
         if isinstance(self._releases, Exception):
@@ -526,7 +538,9 @@ class TeamTest(SyncTest):
         config = json.loads(path.read_text())
         config["github"]["approval"] = "pull-request"
         path.write_text(json.dumps(config))
-        return FakeGitHub({self.REPO: {"README.md": f"# payments-prod\n{DESCRIPTION}\n", **files}})
+        # mlz-core's workload.yml at the release the starter pins: this checkout's, which takes the approval input.
+        return FakeGitHub({self.REPO: {"README.md": f"# payments-prod\n{DESCRIPTION}\n", **files}},
+                          core={(".github/workflows/workload.yml", TARGET): (workload.CORE / ".github/workflows/workload.yml").read_text()})
 
     def test_a_new_repo_gets_team_s_pipeline_and_the_push_rule_on_github(self):
         github = self.made()
@@ -568,6 +582,52 @@ class TeamTest(SyncTest):
         github = FakeGitHub({self.REPO: {workload.WORKFLOW: team_pipeline}})
         workload.offer_plan(github, self.REPO, "enterprise", lambda _: None)
         self.assertEqual(github.branches[-1][2], {workload.WORKFLOW: workload.starter()[workload.WORKFLOW]})
+
+    def test_an_enterprise_main_checks_moves_to_team_s_and_a_repo_s_own_stays(self):
+        github = self.made(**{workload.WORKFLOW: workload.starter()[workload.WORKFLOW], "mlz.auto.tfvars.json": "{}"})
+        enterprise = install.checks_ruleset("workload", 99, workload.CHECK)
+        github.made_rulesets[self.REPO] = [install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True), enterprise]
+        out = self.sync(github)
+        checks = next(r for r in github.made_rulesets[self.REPO] if r["name"] == "main-checks")
+        self.assertEqual([c["context"] for c in checks["rules"][0]["parameters"]["required_status_checks"]], ["workload / plan", "workload / planned"])
+        self.assertIn(f"{self.REPO}: ruleset main-checks now requires workload / plan and workload / planned, GitHub Team's checks", out)
+        # A main-checks of the repo's own (another check) is left as it is, and said.
+        github = self.made(**{workload.WORKFLOW: workload.starter()[workload.WORKFLOW], "mlz.auto.tfvars.json": "{}"})
+        own = install.checks_ruleset("workload", 99, "lint / test")
+        github.made_rulesets[self.REPO] = [install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True), own]
+        out = self.sync(github)
+        self.assertEqual(next(r for r in github.made_rulesets[self.REPO] if r["name"] == "main-checks")["rules"], own["rules"])
+        self.assertIn(f"{self.REPO}: has a ruleset named main-checks that is not the one vending makes; left as it is", "\n".join(out))
+
+    def test_the_switch_waits_for_a_pin_that_takes_the_approval_and_a_stale_one_is_replaced(self):
+        # Pinned to a release whose workload.yml takes no approval input: nothing offered yet, and said.
+        github = self.made(**{workload.WORKFLOW: workload.starter()[workload.WORKFLOW], "mlz.auto.tfvars.json": "{}"})
+        github.core[(".github/workflows/workload.yml", TARGET)] = "on:\n  workflow_call: {}\njobs: {}\n"
+        out = self.sync(github)
+        self.assertNotIn(self.REPO, github.pulls)
+        self.assertIn("which takes no approval input, so GitHub Team's way waits until its team merges the upgrade", "\n".join(out))
+        # An open proposal holding another pipeline than this plan's is closed, and the right one offered.
+        github = self.made(**{workload.WORKFLOW: workload.starter()[workload.WORKFLOW], "mlz.auto.tfvars.json": "{}"})
+        github.refs[(self.REPO, workload.PLAN_BRANCH)] = "old"
+        github.at[(self.REPO, "old")] = {workload.WORKFLOW: "# another plan's pipeline\n"}
+        github.pulls[self.REPO] = [{"branch": workload.PLAN_BRANCH, "number": 1, "state": "open", "html_url": "https://github.com/x/pull/1",
+                                    "head": {"sha": "old"}, "merged_at": None, "created_at": "2026-11-20T06:00:00Z", "title": "", "body": ""}]
+        self.sync(github)
+        self.assertEqual(github.pulls[self.REPO][0]["state"], "closed")
+        self.assertIn("no longer holds that plan's pipeline", github.pulls[self.REPO][0]["closed_comment"])
+        self.assertEqual(github.pulls[self.REPO][-1]["state"], "open")
+        self.assertEqual(workload.caller(github.at[(self.REPO, github.pulls[self.REPO][-1]["head"]["sha"])][workload.WORKFLOW], "team"),
+                         github.at[(self.REPO, github.pulls[self.REPO][-1]["head"]["sha"])][workload.WORKFLOW])
+
+    def test_any_approval_or_actions_permission_is_normalised_when_switching(self):
+        starter = workload.starter()[workload.WORKFLOW]
+        team = workload.caller(starter, "team")
+        plain = team.replace(workload.TEAM_APPROVAL, "      approval: pull-request\n").replace(workload.TEAM_PERMISSION, "  actions: read\n")
+        self.assertEqual(workload.caller(plain, "enterprise"), starter)  # Enterprise's, byte for byte
+        explicit = team.replace(workload.TEAM_APPROVAL, "      'approval': environment\n")
+        self.assertEqual(workload.caller(explicit, "team").count("approval:"), 1)  # one approval key, never two
+        crlf = starter.replace("\n", "\r\n")
+        self.assertEqual(workload.caller(workload.caller(crlf, "team"), "enterprise"), crlf)
 
     def test_an_upgrade_keeps_the_repo_s_plan(self):
         team_pipeline = workload.caller(at(old_starter()[workload.WORKFLOW], OLD), "team")

@@ -221,6 +221,10 @@ class GitHub:
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True
 
+    def update_ruleset(self, repo: str, ruleset_id: int, ruleset: dict) -> None:
+        """Replaces the repo's own ruleset with this body."""
+        self._api(f"repos/{repo}/rulesets/{ruleset_id}", "PUT", ruleset)
+
     def rulesets(self, repo: str) -> list[dict]:
         """Every ruleset that applies to the repo, the organization's too, each in full (rules, bypass actors), with
         current_user_can_bypass as GitHub answers it for whoever is signed in: always, never or exempt."""
