@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/fortytwoservices/mlz-core/compare/v0.15.0...v0.16.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **governance:** the governance repo's settings file is governance.yaml, not customer.yaml. An existing deployment renames it in its governance repo on the pull request that upgrades it to this release (git mv customer.yaml governance.yaml), since this release refuses customer.yaml and the one before reads only that name, and in the folder mlz install reads (--settings) before running the installer from this release. mlz governance takes --file instead of --customer. Nothing in Azure changes.
+
+### Features
+
+* **governance:** governance.yaml, not customer.yaml, for governance's settings ([#148](https://github.com/fortytwoservices/mlz-core/issues/148)) ([944f237](https://github.com/fortytwoservices/mlz-core/commit/944f2372fed7057ac929091011b050300b8f793e))
+
 ## [0.15.0](https://github.com/fortytwoservices/mlz-core/compare/v0.14.0...v0.15.0) (2026-11-23)
 
 
