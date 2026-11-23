@@ -126,6 +126,11 @@ class GitHub:
         """A GitHub App's ID, which a ruleset's bypass names it by, from its slug."""
         return self._api(f"apps/{slug}")["id"]
 
+    def app(self, slug: str) -> dict | None:
+        """A GitHub App (its id, client_id and owner), or None when there is none the person can see: a private App
+        is shown only to its organization's members (tested 23 November 2026)."""
+        return self._api(f"apps/{slug}", missing_ok=True)
+
     def delete_branch(self, repo: str, branch: str) -> None:
         self._api(f"repos/{repo}/git/refs/heads/{branch}", "DELETE", missing_ok=True)
 

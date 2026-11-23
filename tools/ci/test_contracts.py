@@ -340,6 +340,10 @@ class IpPlanTest(Case):
         self.github.last_message = ip_plan.MESSAGE
         self.assertEqual(self.update(), 1)
         self.assertTrue(self.said[0].startswith("::error::The IP plan or the names changed again after they were committed"))
+        # Only the bypass team may push the allocator's result by hand (the ruleset generated-files).
+        self.assertTrue(self.said[0].endswith("Only the MLZ App and the bypass team (bootstrap.yaml's github.bypass_team) may change files under "
+                                              "_generated/. A member of that team runs ./mlz allocate --repo . on the branch and pushes the result; "
+                                              "anyone else asks one."), self.said[0])
 
     def test_a_base_that_changed_them_brings_the_branch_up_to_date_first(self):
         self.github.base_changed = ["README.md", "_generated/ip-plan.yaml"]
@@ -349,6 +353,10 @@ class IpPlanTest(Case):
         self.github.fail["update_branch"] = "HTTP 422"
         self.assertEqual(self.update(), 1)
         self.assertTrue(self.said[-1].startswith("::error::The base changed the IP plan or the names since this branch was made, and the branch could not"))
+        # A person's merge keeps the base's files there: a merge commit that changes one itself is refused.
+        self.assertTrue(self.said[-1].endswith("Merge the base into the branch, keeping the base's version of any file under _generated/ that "
+                                               "conflicts; the next run writes this pull request's into them. Only the MLZ App and the bypass team "
+                                               "(bootstrap.yaml's github.bypass_team) may change files under _generated/."), self.said[-1])
 
     def test_a_base_that_changed_other_files_does_not(self):
         self.github.base_changed = ["README.md"]

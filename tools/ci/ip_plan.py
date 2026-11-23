@@ -26,6 +26,10 @@ from ci.run_mlz import mlz  # noqa: E402
 
 PATHS = ("_generated/ip-plan.yaml", "_generated/names.yaml")
 MESSAGE = "chore: IP plan and names for this pull request"
+# The ruleset generated-files (tools/mlz/install.py) refuses any other push that changes a file there, a merge commit's
+# own change included. A merge that takes the base's file as it is goes through: tested on GitHub on 23 November with
+# a merge without conflicts; a conflict resolved by taking the base's file leaves the same kind of commit (not tested).
+ONLY_THEM = "Only the MLZ App and the bypass team (bootstrap.yaml's github.bypass_team) may change files under _generated/."
 
 
 def allocate(base_names: Path) -> None:
@@ -83,8 +87,9 @@ def update(github: Pipeline, allocate: Callable[[Path], None] = allocate, change
     # What this step committed must come out the same on the next run. If it does not, stop rather than commit again
     # and again.
     if github.commit_message(repo, head) == MESSAGE:
-        say("::error::The IP plan or the names changed again after they were committed to this pull request. "
-            "Run ./mlz allocate --repo . on the branch and commit the result.")
+        say("::error::The IP plan or the names changed again after they were committed to this pull request, so this run stops "
+            f"rather than commit them again. {ONLY_THEM} A member of that team runs ./mlz allocate --repo . on the branch and "
+            "pushes the result; anyone else asks one.")
         return 1
 
     # The plan written here includes what the base gave out since the branch was made. If the base changed the plan or
@@ -96,7 +101,8 @@ def update(github: Pipeline, allocate: Callable[[Path], None] = allocate, change
             github.update_branch(repo, number, head)
         except ConfigError:
             say("::error::The base changed the IP plan or the names since this branch was made, and the branch could not be "
-                "brought up to date with it. Merge the base into the branch; the next run writes them.")
+                "brought up to date with it. Merge the base into the branch, keeping the base's version of any file under _generated/ "
+                f"that conflicts; the next run writes this pull request's into them. {ONLY_THEM}")
             return 1
         say("::notice::The base changed the IP plan or the names since this branch was made, so the branch is now up to "
             "date with it. The run of that merge commits this pull request's.")

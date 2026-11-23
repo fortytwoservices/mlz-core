@@ -2,7 +2,8 @@
 
     python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters,
                                                                       the platform team as code owner
-    python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo
+    python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo, the
+                                                                      code owners and the rulesets
     python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked;
                                                                       again after the platform's first apply, for the
                                                                       state account's private endpoint and the
@@ -45,7 +46,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, mirror, names, naming, owners, platform, vending
+from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -92,9 +93,31 @@ CHECKS_RULESET = "main-checks"
 
 
 def app_bypass(app_id: int | None) -> list[dict]:
-    """The MLZ App as a bypass actor, in a workload repo only: its own commits of the landing zone's values go
-    straight to main (tools/mlz/workload.py, decision D14)."""
+    """The MLZ App as a bypass actor: in a workload repo, its own commits of the landing zone's values go straight to
+    main (tools/mlz/workload.py, decision D14); in a role repo, it alone writes _generated/ (generated_ruleset)."""
     return [{"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"}] if app_id else []
+
+
+# The contracts, the IP plan and the names are trusted inputs: each role plans from the contracts in its repo, and
+# vending gives the team governance's contract names write access to every workload repo after a run with no apply.
+# _generated/ has no code owner, so that its pull requests merge themselves; without this ruleset anyone who may push
+# could change a file there and merge it alone (review S1, 20 November). It refuses a change under _generated/ on
+# every branch from anyone but the MLZ App, which makes every such change in a pipeline, and the bypass team, which
+# runs mlz install publish and, when the pipeline cannot, ./mlz allocate. Not part of pipeline-files: the App must not
+# change .github/. A branch can still be brought up to date with main past it, by "Update branch" or a pushed merge,
+# while a merge commit that changes a file there itself is refused (tested on GitHub on 23 November).
+GENERATED_RULESET = "generated-files"
+GENERATED_FILES = "_generated/**/*"
+
+
+def generated_ruleset(team_id: int, app_id: int) -> dict:
+    return {
+        "name": GENERATED_RULESET,
+        "target": "push",
+        "enforcement": "active",
+        "bypass_actors": app_bypass(app_id) + [{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}],
+        "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [GENERATED_FILES]}}],
+    }
 
 
 def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = None, approvals: int = 0,
@@ -144,7 +167,7 @@ def checks_ruleset(role: str, app_id: int | None = None, check: str | None = Non
     }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+GITHUB_SETTINGS = ("organization", "app", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
 # bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
 # a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
 RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
@@ -275,6 +298,27 @@ def found_bypass_team(github, bootstrap: dict) -> dict:
     return found
 
 
+def found_app(github, bootstrap: dict) -> dict:
+    """The MLZ App as GitHub has it, from bootstrap.yaml's github.app: its slug, the last part of its page's address. A
+    ruleset's bypass names it by its ID, which only GitHub knows. The customer's own: an App of anyone else let past
+    the rule on _generated/ could write the contracts. A private App is shown to its organization's members."""
+    github_settings = bootstrap.get("github") or {}
+    org, slug = github_settings.get("organization"), github_settings.get("app")
+    if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+        raise ConfigError(f"bootstrap.yaml needs github.app: the slug of the customer's MLZ App, the last part of its page's address "
+                          f"(https://github.com/apps/<slug>){'' if slug is None else f', not {slug!r}'}. With the bypass team, it alone may "
+                          "change _generated/ in the three repos (docs/bootstrap.md).")
+    found = github.app(slug)
+    if found is None:
+        raise ConfigError(f"no GitHub App {slug} that you can see (bootstrap.yaml's github.app). Its slug is the last part of its page's "
+                          f"address, https://github.com/apps/<slug>; an App {org} owns is shown to its members.")
+    owner = (found.get("owner") or {}).get("login")
+    if not isinstance(owner, str) or owner.lower() != str(org).lower():
+        raise ConfigError(f"the GitHub App {slug} (bootstrap.yaml's github.app) belongs to {owner}, not {org}. Name the customer's own "
+                          "MLZ App: it may change _generated/ in the three repos.")
+    return found
+
+
 def release() -> str:
     return "v" + json.loads((CORE / ".release-please-manifest.json").read_text())["."]
 
@@ -356,6 +400,7 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         raise ConfigError(f"{org}/{team} is a secret team, and CODEOWNERS can only name a visible one. An organization owner "
                           "makes it visible (the team's Settings, Team visibility), then run this step again.")
     admins = found_bypass_team(github, bootstrap)
+    mlz_app = found_app(github, bootstrap)
     # First the organization's copy of mlz-core, at this release: a new repo's first commit starts its pipeline,
     # which calls it.
     mirror.ensure(github, core_repository(bootstrap), release(), out)
@@ -437,6 +482,14 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: has a ruleset named {PUSH_RULESET} already, left as it is; mlz install check says whether it refuses changes "
                 "under .github/")
+        if github.add_ruleset(repo, generated_ruleset(admins["id"], mlz_app["id"])):
+            out(f"{repo}: ruleset {GENERATED_RULESET} (changes under _generated/ refused on every branch, but from the MLZ App "
+                f"{mlz_app['slug']} and {org}/{admins['slug']})")
+            if not created:
+                out(f"{repo}: its branches pushed before the ruleset keep any change under _generated/ they have; delete those you do not know")
+        else:
+            out(f"{repo}: has a ruleset named {GENERATED_RULESET} already, left as it is; mlz install check says whether it refuses "
+                "changes under _generated/")
         # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
         # A push after an approval needs a new one, as in the workload repos (the user's decision, 19 November).
         if github.add_ruleset(repo, main_ruleset(role, admins["id"], dismiss_stale=True)):
@@ -467,6 +520,11 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
                         "allows on an environment in a private repo only on Enterprise.")
     else:
         out(f"{org}: on GitHub Enterprise")
+    try:
+        mlz_app = found_app(github, bootstrap)
+    except ConfigError as error:
+        mlz_app = None
+        problems.append(str(error))
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -479,10 +537,16 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         if missing:
             problems.append(f"{repo}: no {' and no '.join(missing)}. Install the customer's MLZ App on all the organization's repos, then: "
                             f"gh variable set {APP_VARIABLE} --repo {repo} --body <client ID>; gh secret set {APP_SECRET} --repo {repo} < <private key file>")
+        elif mlz_app and github.variable(repo, APP_VARIABLE) != mlz_app.get("client_id"):
+            # The rule on _generated/ lets through the App bootstrap.yaml names; the pipelines write as the one the variable names.
+            problems.append(f"{repo}: its {APP_VARIABLE} is not the client ID of {mlz_app['slug']}, the MLZ App bootstrap.yaml's github.app "
+                            f"names ({mlz_app.get('client_id')}), so the App its pipeline writes as may not change _generated/. Name the same "
+                            "App in both.")
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
         problems += code_owner_problems(github, bootstrap, repo, out)
         problems += push_ruleset_problems(github, bootstrap, repo, out)
+        problems += generated_ruleset_problems(github, bootstrap, repo, mlz_app, out)
         problems += required_check_problems(github, role, repo, out)
     # GitHub shows an App's installations only to the App itself and the organization's owners.
     out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
@@ -575,6 +639,59 @@ def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str
             f"without bypass actors, requires the check on an up-to-date branch, and take the check out of {ruleset['name']}; then add "
             f"the team to {ruleset['name']} as a bypass actor, pull requests only (Settings, Rules, Rulesets). A bypass covers its whole "
             "ruleset, so with the check still in it the team could merge without the check too.")
+    return found
+
+
+# Paths under _generated/ a guard must refuse: every file written there, so that a rule on one of them alone counts as a
+# guard whose bypass must let the App through; and names nobody would list one by one, with each suffix the loaders read
+# (files.read_setting takes <name>.yml, or a folder of chunks, as well as <name>.yaml) and none.
+GENERATED_PROBES = (*(f"_generated/{name}" for name in stacks.WRITERS),
+                    *(f"_generated/zz-mlz-probe{suffix}" for suffix in (".yaml", ".yml", "", "/x.yaml", "/x.yml")))
+
+
+def lets_through(actors: list[dict], kind: str, actor_id) -> bool:
+    """Whether a ruleset's bypass actors let this actor past every push, as a push ruleset's bypass must."""
+    return any(a.get("actor_type") == kind and a.get("actor_id") == actor_id and a.get("bypass_mode") in ("always", "exempt", None) for a in actors)
+
+
+def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict | None, out: Callable[[str], None]) -> list[str]:
+    """Whether the active push rulesets refuse every change under _generated/ (review S1), and let the MLZ App and the
+    bypass team, and nobody else, through each of them: one the App may not bypass stops the contracts, one the team
+    may not stops mlz install publish. mlz_app None: bootstrap.yaml's github.app is wrong, said once already."""
+    try:
+        org, team = bypass_team(bootstrap)
+        admins = found_bypass_team(github, bootstrap)
+        platform = github.team(*platform_team(bootstrap))
+    except ConfigError as error:
+        return [str(error)]
+    guards = [r for r in github.rulesets(repo) if r.get("target") == "push" and r.get("enforcement") == "active"
+              and any(restricts(r, probe) for probe in GENERATED_PROBES)]
+    open_paths = [probe for probe in GENERATED_PROBES if not any(restricts(r, probe) for r in guards)]
+    if open_paths:
+        which = "changes" if not guards else f"every change (not {', '.join(open_paths)})"
+        return [f"{repo}: no active push ruleset refuses {which} under _generated/, so anyone who may push can change a contract, the IP plan "
+                f"or the names and merge it without a review; mlz install repos makes the ruleset {GENERATED_RULESET}, restricting "
+                f"{GENERATED_FILES} (docs/pipelines.md)."]
+    found = []
+    for ruleset in guards:
+        actors = ruleset.get("bypass_actors") or []
+        if not lets_through(actors, "Team", admins["id"]):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under _generated/, and {org}/{team} (bootstrap.yaml's "
+                         "github.bypass_team) may not bypass it, so nobody can run mlz install publish; add the team as a bypass actor "
+                         "(Settings, Rules, Rulesets).")
+        if mlz_app and not lets_through(actors, "Integration", mlz_app["id"]):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under _generated/, and the MLZ App {mlz_app['slug']} may not "
+                         "bypass it, so no contract, IP plan or names reach this repo; add the App as a bypass actor (Settings, Rules, Rulesets).")
+        others = [describe_actor(a, platform) for a in actors
+                  if not (a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"])
+                  and not (mlz_app and a.get("actor_type") == "Integration" and a.get("actor_id") == mlz_app["id"])]
+        if others:
+            found.append(f"{repo}: its ruleset {ruleset['name']} also lets {', '.join(others)} change _generated/; only the MLZ App and "
+                         f"{org}/{team} should (Settings, Rules, Rulesets).")
+    if not found:
+        app = f"the MLZ App {mlz_app['slug']}" if mlz_app else "the MLZ App"
+        out(f"{repo}: changes under _generated/ are refused on every branch, but from {app} and {org}/{team} "
+            f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
     return found
 
 
@@ -1248,6 +1365,8 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
     if url and github.file(repo, CONTRACT_PATH, CONTRACT_BRANCH)[0] == text:
         out(f"publish: {url} already offers this {CONTRACT_PATH}")
         return url
+    # Only the MLZ App and the bypass team may change _generated/ (generated_ruleset): stop before the branch is made.
+    refuse_if_pushes_refused(github, repo, [CONTRACT_PATH])
     # Onto an open pull request's branch: a branch moved back to main would close its pull request.
     head = github.head(repo, CONTRACT_BRANCH) if url else github.reset_branch(repo, CONTRACT_BRANCH, base)
     github.commit_files(repo, CONTRACT_BRANCH, head, {CONTRACT_PATH: text}, "chore: bootstrap contract")

@@ -209,6 +209,8 @@ def customer() -> dict:
 def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+        "app": text("The slug of the customer's MLZ App, the last part of its page's address (https://github.com/apps/<slug>). With the bypass team, it alone may change _generated/ in the three repos: their push ruleset generated-files refuses it from anyone else.",
+                    pattern="^[a-z0-9][a-z0-9-]*$"),
         "repositories": mapping({**{role: text(f"The {role} repo's name.") for role in install.ROLES},
                                  "core": text("The organization's own copy of mlz-core, which the three repos' pipelines call.", default="mlz-core")},
                                 "The three repos, by role, and the organization's copy of mlz-core."),

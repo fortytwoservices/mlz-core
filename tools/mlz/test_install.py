@@ -29,6 +29,7 @@ subscriptions:
 """
 BOOTSTRAP = """github:
   organization: acme
+  app: acme-mlz
   repositories:
     governance: mlz-governance
     platform: mlz-platform
@@ -43,13 +44,15 @@ CORE_COPY = "acme/mlz-core"  # the organization's copy of mlz-core
 
 WORKFLOW = ".github/workflows/mlz.yml"
 TEAM_IDS = {"platform": 11, "mlz-admins": 12}
+APP = {"id": 77, "slug": "acme-mlz", "client_id": "Iv23liAcme", "owner": {"login": "acme"}}  # the MLZ App, as GET /apps/<slug> answers
 
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, dismiss_stale=True, owned=True,
-                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True):
+                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True,
+                 generated_guard=True, apps=(APP,)):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -84,6 +87,14 @@ class FakeGitHub:
         # The push ruleset that guards .github/ (finding 17), as GitHub would answer for the person signed in.
         self.push_guard, self.can_bypass = push_guard, can_bypass
         self.main_bypass = main_bypass  # whether the ruleset main (ID 7) lets the bypass team merge without the approval
+        # The push ruleset that guards _generated/ (review S1), and the GitHub Apps the person can see.
+        self.generated_guard, self.apps = generated_guard, {app["slug"]: app for app in apps}
+
+    def app(self, slug):
+        return self.apps.get(slug)
+
+    def variable(self, repo, name):
+        return APP["client_id"] if (repo, name) in self.variables else None
 
     def repo(self, repo):
         return self.repos.get(repo)
@@ -146,9 +157,10 @@ class FakeGitHub:
 
     def rulesets(self, repo):
         main = {**install.main_ruleset("platform", TEAM_IDS["mlz-admins"] if self.main_bypass else None), "id": 7}
-        if not self.push_guard:
-            return [main]
-        return [main, {**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}]
+        guards = [{**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}] if self.push_guard else []
+        if self.generated_guard:
+            guards.append({**install.generated_ruleset(TEAM_IDS["mlz-admins"], APP["id"]), "id": 10, "current_user_can_bypass": self.can_bypass})
+        return [main, *guards]
 
     def team_can_write(self, org, slug, repo):
         return (slug, repo) in self.writers
@@ -466,12 +478,19 @@ class InstallTest(unittest.TestCase):
         # main lets the bypass team merge without the approval, pull requests only (decision D8).
         self.assertEqual(github.ruleset_bodies[("acme/mlz-vending", "main")]["bypass_actors"], [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}])
         self.assertNotIn("bypass_actors", github.ruleset_bodies[("acme/mlz-vending", "main-checks")])  # the check binds the team too
-        # The push ruleset first, after the starter's first commit; then main.
-        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "main", "main-checks")])
+        # The push rulesets first, after the starter's first commit; then main.
+        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "generated-files", "main", "main-checks")])
+        # _generated/ from the MLZ App, by the ID GitHub gives its slug, and the bypass team (review S1).
+        self.assertEqual(github.ruleset_bodies[("acme/mlz-vending", "generated-files")]["bypass_actors"],
+                         [{"actor_id": APP["id"], "actor_type": "Integration", "bypass_mode": "always"},
+                          {"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "always"}])
+        self.assertIn("acme/mlz-vending: ruleset generated-files (changes under _generated/ refused on every branch, but from the MLZ App "
+                      "acme-mlz and acme/mlz-admins)", self.printed)
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
-        # Only the repo that existed: its branches may predate the push ruleset.
+        # Only the repo that existed: its branches may predate the push rulesets.
         warned = [line for line in self.printed if "pushed before the ruleset" in line]
-        self.assertEqual(warned, ["acme/mlz-platform: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know"])
+        self.assertEqual(warned, ["acme/mlz-platform: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know",
+                                  "acme/mlz-platform: its branches pushed before the ruleset keep any change under _generated/ they have; delete those you do not know"])
 
     def test_an_existing_public_repo_is_named_not_changed(self):
         github = FakeGitHub(existing=REPOS.values(), private=False)
@@ -610,9 +629,11 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        # Per repo: the MLZ App, its code owners, its push ruleset, and its check; then what is not checked.
-        self.assertEqual(len(self.printed), 15)
+        # Per repo: the MLZ App, its code owners, its two push rulesets, and its check; then what is not checked.
+        self.assertEqual(len(self.printed), 18)
         self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
+        self.assertIn("acme/mlz-vending: changes under _generated/ are refused on every branch, but from the MLZ App acme-mlz and acme/mlz-admins "
+                      "(ruleset generated-files)", self.printed)
         self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
         self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
         self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
@@ -737,6 +758,92 @@ class InstallTest(unittest.TestCase):
         # GitHub applies every ruleset: one more, from the organization, that the team may not bypass refuses its upgrade.
         org_guard = {**install.push_ruleset(99), "name": "org-pipeline", "bypass_actors": []}
         self.assertIn("its ruleset org-pipeline refuses changes under .github/, and acme/mlz-admins", check(guard, org_guard))
+
+    def test_the_generated_ruleset_refuses_changes_but_from_the_app_and_the_bypass_team(self):
+        ruleset = install.generated_ruleset(12, 77)
+        self.assertEqual((ruleset["name"], ruleset["target"], ruleset["enforcement"]), ("generated-files", "push", "active"))
+        self.assertEqual(ruleset["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/**/*"]}}])
+        for path in ("_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/names.yaml", "_generated/x/y.yaml"):
+            self.assertTrue(install.restricts(ruleset, path), path)
+        for path in ("generated/x.yaml", "landing-zones/_generated/x.yaml", ".github/CODEOWNERS", "_generatedx/y.yaml"):
+            self.assertFalse(install.restricts(ruleset, path), path)
+        # Not in pipeline-files, whose bypass is the team's alone: the App must not change .github/.
+        self.assertEqual([a["actor_type"] for a in install.push_ruleset(12)["bypass_actors"]], ["Team"])
+
+    def test_the_mlz_app_is_named_seen_and_the_customer_s_own(self):
+        def refused(github, bootstrap=BOOTSTRAP):
+            (self.folder / "bootstrap.yaml").write_text(bootstrap)
+            with self.assertRaises(ConfigError) as caught:
+                install.step_repos(github, self.folder, self.out)
+            self.assertEqual((github.created, github.made_rulesets), ([], []))  # stopped before any repo or ruleset
+            return str(caught.exception)
+        self.assertIn("bootstrap.yaml needs github.app: the slug of the customer's MLZ App, the last part of its page's address "
+                      "(https://github.com/apps/<slug>). With the bypass team", refused(FakeGitHub(core=False), BOOTSTRAP.replace("  app: acme-mlz\n", "")))
+        self.assertIn("(https://github.com/apps/<slug>), not 'Acme MLZ'", refused(FakeGitHub(core=False), BOOTSTRAP.replace("app: acme-mlz", "app: Acme MLZ")))
+        self.assertIn("no GitHub App acme-mlz that you can see (bootstrap.yaml's github.app)", refused(FakeGitHub(core=False, apps=())))
+        stranger = {**APP, "owner": {"login": "someone-else"}}
+        self.assertIn("the GitHub App acme-mlz (bootstrap.yaml's github.app) belongs to someone-else, not acme", refused(FakeGitHub(core=False, apps=(stranger,))))
+
+    def test_check_finds_a_missing_generated_ruleset_and_its_wrong_bypass(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(FakeGitHub(generated_guard=False, **everywhere), self.folder, self.out)
+        self.assertIn("acme/mlz-vending: no active push ruleset refuses changes under _generated/, so anyone who may push can change a "
+                      "contract, the IP plan or the names and merge it without a review; mlz install repos makes the ruleset generated-files", str(caught.exception))
+
+        def check(*rulesets):
+            class Guarded(FakeGitHub):
+                def rulesets(self, repo):
+                    return [{"id": n, "current_user_can_bypass": "never", **r} for n, r in enumerate((install.push_ruleset(TEAM_IDS["mlz-admins"]), *rulesets))]
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(Guarded(**everywhere), self.folder, self.out)
+            return str(caught.exception)
+
+        guard = install.generated_ruleset(TEAM_IDS["mlz-admins"], APP["id"])
+        # Without the App the contracts stop; without the team mlz install publish does.
+        no_app = {**guard, "bypass_actors": guard["bypass_actors"][1:]}
+        self.assertIn("its ruleset generated-files refuses changes under _generated/, and the MLZ App acme-mlz may not bypass it, so no "
+                      "contract, IP plan or names reach this repo", check(no_app))
+        no_team = {**guard, "bypass_actors": guard["bypass_actors"][:1]}
+        self.assertIn("and acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz install publish", check(no_team))
+        # Anyone else let through could change a contract.
+        more = {**guard, "bypass_actors": guard["bypass_actors"] + [{"actor_id": TEAM_IDS["platform"], "actor_type": "Team", "bypass_mode": "always"},
+                                                                    {"actor_id": 5, "actor_type": "Integration", "bypass_mode": "always"}]}
+        self.assertIn("its ruleset generated-files also lets the platform team, the App with ID 5 change _generated/; only the MLZ App and "
+                      "acme/mlz-admins should", check(more))
+        # One named file only, or every file but some: not the whole folder.
+        one_file = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/governance.yaml"]}}]}
+        self.assertIn("no active push ruleset refuses every change (not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, "
+                      "_generated/ip-plan.yaml, _generated/names.yaml, _generated/zz-mlz-probe.yaml, _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, "
+                      "_generated/zz-mlz-probe/x.yaml, _generated/zz-mlz-probe/x.yml) under _generated/", check(one_file))
+        some = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [
+            "_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe*", "_generated/zz-mlz-probe/**/*"]}}]}
+        self.assertIn("(not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, _generated/names.yaml) under _generated/", check(some))
+        # .yaml files only: the loaders read <name>.yml too (files.read_setting), so a second definition could be added.
+        yaml_only = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/**/*.yaml"]}}]}
+        self.assertIn("(not _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, _generated/zz-mlz-probe/x.yml) under _generated/", check(yaml_only))
+        # A second rule on one file there, beside the right one: it too must let the App through, or the allocator's commits stop.
+        names_only = {**install.push_ruleset(99), "name": "names-file", "bypass_actors": guard["bypass_actors"][1:],
+                      "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/names.yaml"]}}]}
+        self.assertIn("its ruleset names-file refuses changes under _generated/, and the MLZ App acme-mlz may not bypass it", check(guard, names_only))
+        # The App let past pipeline-files too reaches .github/: said there.
+        both = {**install.push_ruleset(TEAM_IDS["mlz-admins"]), "name": "both",
+                "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*", "_generated/**/*"]}}],
+                "bypass_actors": guard["bypass_actors"]}
+        self.assertIn("its ruleset both also lets the App with ID 77 change .github/", check(both))
+
+    def test_check_fails_when_the_repos_write_as_another_app(self):
+        class Other(FakeGitHub):
+            def variable(self, repo, name):
+                return "Iv23liOther" if repo == "acme/mlz-platform" else super().variable(repo, name)
+        github = Other(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                       secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        self.assertIn("acme/mlz-platform: its MLZ_RELEASE_APP_CLIENT_ID is not the client ID of acme-mlz, the MLZ App bootstrap.yaml's "
+                      "github.app names (Iv23liAcme), so the App its pipeline writes as may not change _generated/", str(caught.exception))
+        self.assertNotIn("acme/mlz-vending: its MLZ_RELEASE_APP_CLIENT_ID", str(caught.exception))
 
     def test_an_offer_under_github_stops_before_its_branch_when_the_person_may_not_bypass(self):
         github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"], can_bypass="never")
@@ -1015,6 +1122,15 @@ class InstallTest(unittest.TestCase):
         self.assertEqual((repo, branch, message), ("acme/mlz-governance", "mlz/bootstrap-contract", "chore: bootstrap contract"))
         self.assertIn("stacmestate1234", files["_generated/bootstrap.yaml"])
         self.assertIn("Written by Fortytwo after running the bootstrap", files["_generated/bootstrap.yaml"])
+
+    def test_publish_stops_before_its_branch_when_the_person_may_not_change_generated_files(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text("x")
+        github = FakeGitHub(can_bypass="never")
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-governance: its ruleset generated-files refuses changes to _generated/bootstrap.yaml from "
+                                                 "you. Only its bypass team"):
+            install.step_publish(github, FakeTerraform(self.work), self.folder, self.out)
+        self.assertEqual((github.commits, github.branches, github.pulls), ([], [], []))  # no stray branch
 
     def test_publish_does_nothing_when_main_already_has_it(self):
         (self.work).mkdir(parents=True)

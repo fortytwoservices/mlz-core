@@ -3,6 +3,7 @@
 
 github:
   organization: demo-org
+  app: demo-org-mlz                # the MLZ App (github.com/apps/<this>); with bypass_team, the only writer of _generated/
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
     platform: mlz-platform

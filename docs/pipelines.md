@@ -200,7 +200,8 @@ App that may write to the three repos, and the App merges them.
 ## Code owners
 
 Each repo's `.github/CODEOWNERS` says who must approve a change: the platform team owns every file, and
-`_generated/` has no owner, so the contract pull requests still merge themselves. The ruleset `main` requires a
+`_generated/` has no owner, so the contract pull requests still merge themselves; only the MLZ App and the bypass team
+may change it ([below](#changes-to-_generated)). The ruleset `main` requires a
 code owner's approval, so a change merges only once the platform team has approved it. `mlz install repos` writes
 the file, from `bootstrap.yaml`'s `platform_team`:
 
@@ -256,14 +257,32 @@ identity, from its own pull request (proved on a test customer on 19 November). 
   - whoever changes `.github/CODEOWNERS`.
   - Both `mlz upgrade` and `mlz install repos` check before they push anything, and stop with who may if you may not.
 - **Its members can reach the App's key,** as the repo's admins can. Keep it small; it may not be the platform team.
-- **What the rule leaves alone:** the contracts, the IP plan and the names, which are under `_generated/`. The MLZ
-  App's own pull requests and commits never need the bypass.
+- **What the rule leaves alone:** `_generated/`, which has a rule of its own ([below](#changes-to-_generated)). The
+  MLZ App is never let past this one.
 - **It checks pushes, not merges** (tested 19 November). A pull request whose branch a bypass member pushed merges
   like any other, after its review. A branch pushed before the ruleset existed keeps whatever it changed under
   `.github/`, and a pull request from it would run that. So when the ruleset comes to an existing repo, delete the
   branches you do not know.
 - **Plans and records:** GitHub records every bypass (the repo's Insights, Rules). Push rulesets need GitHub Team or
   Enterprise, and private repos.
+
+## Changes to `_generated/`
+
+The contracts, the IP plan and the names are what the roles plan from, and `_generated/` has no code owner so that
+the contract pull requests merge themselves. Whoever could push a change there could merge it alone: a forged
+`bypass_team` in vending's `_generated/governance.yaml` would give that team write access to every workload repo,
+with no apply to approve. So each role repo's push ruleset `generated-files` refuses a change under `_generated/` on
+every branch, from everyone but the MLZ App (`bootstrap.yaml`'s `app`) and the bypass team:
+
+- **The MLZ App makes every change there** in a pipeline: the contract pull requests, the IP plan and the names it
+  commits to a vending pull request, and the decommission pull requests.
+- **The bypass team** runs `mlz install publish`, and pushes `./mlz allocate`'s result when a run says the pipeline
+  cannot. `mlz install publish` checks before it pushes, and stops with who may if you may not.
+- **Bringing a branch up to date is not refused** (tested on GitHub on 23 November): "Update branch" and a pushed
+  merge of `main` go through, though they bring `main`'s files there in. A merge commit that changes such a file itself
+  is refused, so resolve a conflict there by keeping `main`'s file; the next run writes the pull request's.
+- **A branch pushed before the ruleset** keeps what it changed there, as with `.github/`: when the ruleset comes to an
+  existing repo, delete the branches you do not know.
 
 ## What a repo needs
 
@@ -272,7 +291,7 @@ identity, from its own pull request (proved on a test customer on 19 November). 
 | Variables `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_ID`, `TFSTATE_STORAGE_ACCOUNT`, `TFSTATE_CONTAINER`, `MLZ_REPOSITORIES`; the environment named after the role, with its reviewer and its own `AZURE_CLIENT_ID` | the bootstrap |
 | Variable `MLZ_RELEASE_APP_CLIENT_ID`, secret `MLZ_RELEASE_APP_PRIVATE_KEY` | the app every job reads the organization's copy of mlz-core with, and which opens and merges the contract pull requests, commits the IP plan and the names to vending pull requests, and makes the landing zones' workload repos. Installed on all the organization's repos, with Contents, Pull requests, Administration, Environments, Variables and Workflows read and write, and Actions and Members read (Workflows: writing a workload repo's pipeline; Actions: reading a workload repo's apply environment back, which GitHub lists under Actions, not Environments) |
 | Variable `MLZ_RUNS_ON` (optional) | `mlz install runners`: the runners the Azure jobs run on (`mlz`) |
-| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main`, `main-checks` and `pipeline-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github)) |
+| `.github/CODEOWNERS`, write access for the platform team, the rulesets `main`, `main-checks`, `pipeline-files` and `generated-files` | `mlz install repos` ([code owners](#code-owners), [changes to `.github/`](#changes-to-github), [to `_generated/`](#changes-to-_generated)) |
 
 For customers, creating and installing this app is part of the install: nothing deploys until it is in
 place. If the customer's organisation allows only selected actions and reusable workflows, its Actions
