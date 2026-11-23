@@ -195,8 +195,9 @@ gates hold. Each settings change is the customer's (or Fortytwo's, on the custom
    approves each; merge all three. Each environment still has its reviewer, so both gates hold.
 4. Add `<role> / planned` to each role repo's ruleset `main-checks` (Settings, Rules, Rulesets), from GitHub Actions;
    `mlz install check` says which repo lacks it.
-5. Run `mlz install bootstrap`. It removes the role environments' reviewers and sets `MLZ_APPROVAL: pull-request`, and
-   stops before Terraform if any role repo's pipeline does not pass `approval: pull-request` yet.
+5. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
+   seconds apart, and stops before Terraform if any role repo's pipeline does not pass `approval: pull-request` yet: so in
+   those seconds every pipeline already gates its applies.
 6. Governance's next run publishes the plan in its contract, and vending's next run on `main` does the workload repos:
    - each workload repo is offered a pull request with its pipeline Team's way, which its team merges;
    - each gets the push rule on `.github/` and `workload / planned` in `main-checks`;
@@ -207,9 +208,14 @@ gates hold. Each settings change is the customer's (or Fortytwo's, on the custom
 **Team to Enterprise**, the same in reverse, reviewers first:
 
 1. In `bootstrap.yaml`, set `plan: enterprise` (or remove the line) and put `reviewers` back. Merge it.
-2. Run `mlz install bootstrap`: the reviewers come back and `MLZ_APPROVAL` goes.
-3. Governance's next run, then vending's: each workload `apply` environment gets its reviewer back, and each workload
-   repo is offered its pipeline Enterprise's way, which its team merges.
+2. Run `mlz install bootstrap`. It gives each role environment its reviewer back first, and only then removes its
+   variable `MLZ_APPROVAL`, in that order.
+3. Governance's next run, then vending's: each workload `apply` environment gets its reviewer back first, and only then
+   loses its variable `MLZ_APPROVAL`; each workload repo is offered its pipeline Enterprise's way, which its team merges.
+   Should an environment keep `MLZ_APPROVAL` after its reviewer is back (an apply that stopped half way), the pipeline
+   refuses every apply there until it is gone: give the environment its reviewer back first, and only then remove its
+   variable `MLZ_APPROVAL` by hand (Settings, Environments); remove a repository variable `MLZ_APPROVAL` too, if there
+   is one: it is never the switch.
 4. As a member of the bypass team, run `mlz install repos`, and merge the three pull requests it offers.
 5. Take `<role> / planned` out of `main-checks`, and the push rule `pipeline-files` out of each workload repo, if you
    like: on Enterprise the planned job is skipped, which GitHub counts as passing, and the push rule only stops the
