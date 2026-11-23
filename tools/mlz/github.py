@@ -85,6 +85,14 @@ class GitHub:
             raise
         return None if found is None else found.get("status")
 
+    def branch_names(self, repo: str) -> list[str]:
+        return [branch["name"] for branch in self._pages(f"repos/{repo}/branches")]
+
+    def changed_paths(self, repo: str, base: str, head: str) -> list[str]:
+        """The files head changes since it left base (GitHub's three-dot compare, which lists up to 300 files)."""
+        found = self._api(f"repos/{repo}/compare/{base}...{head}", missing_ok=True) or {}
+        return sorted({path for item in found.get("files") or [] for path in (item.get("filename"), item.get("previous_filename")) if path})
+
     def actions_access(self, repo: str) -> str | None:
         """Which other repos may call this one's reusable workflows: none, organization or enterprise."""
         found = self._api(f"repos/{repo}/actions/permissions/access", missing_ok=True)

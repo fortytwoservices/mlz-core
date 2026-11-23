@@ -208,7 +208,7 @@ def github_plan(bootstrap: dict) -> str:
     """bootstrap.yaml's github.plan, enterprise unless set; ConfigError for another value, and for reviewers on Team."""
     github = bootstrap.get("github") or {}
     plan = github.get("plan", "enterprise")
-    if plan not in GITHUB_PLANS:
+    if not isinstance(plan, str) or plan not in GITHUB_PLANS:
         raise ConfigError(f"bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not {plan!r} (docs/bootstrap.md, GitHub plan).")
     if plan == "team" and github.get("reviewers") is not None:
         raise ConfigError("bootstrap.yaml: github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a private repo "
@@ -557,6 +557,8 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
     except ConfigError as error:
         mlz_app = None
         problems.append(str(error))
+    if mlz_app and wanted == "team":
+        problems += team_app_problems(mlz_app, out)
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -726,6 +728,26 @@ def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict
         out(f"{repo}: changes under _generated/ are refused on every branch, but from {app} and {org}/{team} "
             f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
     return found
+
+
+# What the pipeline's tokens ask of the MLZ App on GitHub Team, beside what it needs on both plans (role.yml): the gate's
+# token, scoped to the repo, reads its runs, the pull request, the rule suites (Administration) and its contents; planned
+# mints one scoped to the repo (runs, pull request, contents) and one with Members alone, for the code owners' team.
+TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
+
+
+def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
+    """Whether the MLZ App asks for at least read of each permission the Team gate's tokens ask for, as GET /apps/<slug>
+    shows it. Whether an owner has accepted them on the installation only the App and the owners see: said."""
+    held = app.get("permissions") or {}
+    missing = [name for name in TEAM_APP_PERMISSIONS if held.get(name) not in ("read", "write", "admin")]
+    if missing:
+        return [f"the MLZ App {app['slug']} does not ask for {', '.join(f'{name} (read)' for name in missing)}, which the pipeline's gate on "
+                "GitHub Team reads with; an owner of the App adds them (its Settings, Permissions), and an owner of the organization "
+                "accepts them on its installation."]
+    out(f"the MLZ App {app['slug']} asks for what the gate on GitHub Team reads with ({', '.join(TEAM_APP_PERMISSIONS)}); whether an owner "
+        "accepted each on its installation only an owner sees")
+    return []
 
 
 def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[str], None]) -> list[str]:
@@ -1305,10 +1327,11 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
         # On Team GitHub may not keep the group's limit to role.yml, and then only each repo's push ruleset keeps another
         # workflow off the runners: seen first, before the group is made or gains a repo.
         guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
+        guards += [problem for repo in repos.values() for problem in other_workflows(github, repo)]
         if guards:
             raise ConfigError("\n  ".join([f"runners: on GitHub Team the runner group {RUNNER} may admit any workflow of the three repos, so "
                                              f"each repo's push ruleset {PUSH_RULESET} must keep every other workflow out of it first, as only "
-                                             "the bypass team may pass it. Nothing was changed:"] + guards))
+                                             "the bypass team may pass it, and none may be there already. Nothing was changed:"] + guards))
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
             f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
@@ -1336,6 +1359,22 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
     workflows_kept(github, org, workflows, bootstrap, out)
     return made
+
+
+def other_workflows(github, repo: str) -> list[str]:
+    """Workflows a repo already has besides its pipeline, which pipeline-files does not take away: on main, any file in
+    .github/workflows/ but mlz.yml; on any other branch, any change under .github/ since it left main (a branch pushed
+    before the ruleset keeps it). On Team, where a runner group may admit every workflow of the repo, each could reach
+    the runners."""
+    branch = github.default_branch(repo)
+    found = [f"{repo}: {path} on {branch} is a workflow besides the pipeline; remove it, or keep the runners off Team's fallback."
+             for path in github.folder(repo, ".github/workflows", branch) if path != WORKFLOW]
+    for other in github.branch_names(repo):
+        changed = [path for path in github.changed_paths(repo, branch, other) if path.startswith(".github/")] if other != branch else []
+        if changed:
+            found.append(f"{repo}: branch {other} changes {', '.join(changed)}, which a run from it would use; delete the branch if you do not "
+                         "know it, or merge its change through a reviewed pull request.")
+    return found
 
 
 def workflows_kept(github, org: str, requested: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
