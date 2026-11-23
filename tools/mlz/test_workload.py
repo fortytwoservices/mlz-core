@@ -56,7 +56,7 @@ class FakeGitHub:
 
     def rulesets(self, repo):
         # Each with its ID, as GitHub lists them: its place in the repo's list.
-        return [{**ruleset, "source_type": "Repository", "source": repo, "id": n} for n, ruleset in enumerate(self.made_rulesets.get(repo, []), 1)]
+        return [{**ruleset, "source_type": "Repository", "source": repo, "id": n} for n, ruleset in enumerate(self.made_rulesets.get(repo, []), 1) if ruleset]
 
     def add_ruleset(self, repo, ruleset):
         self.made_rulesets.setdefault(repo, []).append(ruleset)
@@ -64,6 +64,10 @@ class FakeGitHub:
 
     def update_ruleset(self, repo, ruleset_id, ruleset):
         self.made_rulesets[repo][ruleset_id - 1] = ruleset
+
+    def delete_ruleset(self, repo, ruleset_id):
+        self.made_rulesets[repo][ruleset_id - 1] = None  # kept in place, so the other IDs stay
+        self.deleted = [*getattr(self, "deleted", []), ruleset_id]
 
     def close_pulls(self, repo, branch, comment):
         closed = []
@@ -628,6 +632,28 @@ class TeamTest(SyncTest):
         self.assertEqual(workload.caller(explicit, "team").count("approval:"), 1)  # one approval key, never two
         crlf = starter.replace("\n", "\r\n")
         self.assertEqual(workload.caller(workload.caller(crlf, "team"), "enterprise"), crlf)
+
+    def test_back_on_enterprise_vending_s_push_rule_goes_and_a_repo_s_own_stays(self):
+        github = RuleTest.made(self)  # vending's config without approval: Enterprise's
+        main = install.main_ruleset("workload", 7, 99, approvals=1, dismiss_stale=True)
+        github.made_rulesets[self.REPO] = [main, install.checks_ruleset("workload", 99, workload.CHECK), install.push_ruleset(7, 99)]
+        out = self.sync(github)
+        self.assertEqual(getattr(github, "deleted", []), [3])
+        self.assertIn(f"{self.REPO}: ruleset pipeline-files removed: on GitHub Enterprise the team may change .github/ again", out)
+        own = {**install.push_ruleset(7, 99), "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/CODEOWNERS"]}}]}
+        github = RuleTest.made(self)
+        github.made_rulesets[self.REPO] = [main, install.checks_ruleset("workload", 99, workload.CHECK), own]
+        self.sync(github)
+        self.assertEqual(getattr(github, "deleted", []), [])
+
+    def test_a_permissions_mapping_with_blank_lines_and_a_last_line_without_its_ending(self):
+        starter = workload.starter()[workload.WORKFLOW]
+        spaced = starter.replace("  pull-requests: write\n", "  pull-requests: write\n\n  actions: read\n")
+        team = workload.caller(spaced, "team")
+        self.assertEqual(team.count("actions:"), 1)  # the existing one, below a blank line, taken out first
+        self.assertNotIn("actions:", workload.caller(spaced, "enterprise"))
+        unterminated = starter.rstrip("\n")
+        self.assertEqual(workload.caller(unterminated, "team").count("approval:"), 1)
 
     def test_an_upgrade_keeps_the_repo_s_plan(self):
         team_pipeline = workload.caller(at(old_starter()[workload.WORKFLOW], OLD), "team")

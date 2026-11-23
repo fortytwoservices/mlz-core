@@ -62,9 +62,9 @@ def caller(workflow: str, plan: str) -> str:
     eol = "\r\n" if "\r\n" in workflow else "\n"
     lines = workflow.splitlines(keepends=True)
     permissions = next((n for n, line in enumerate(lines) if re.match(r"^permissions:[ \t]*(#.*)?\r?$", line.rstrip("\n"))), None)
-    if permissions is not None:  # its keys: the indented lines below it
+    if permissions is not None:  # its keys: the indented lines below it, blank lines between them included
         end = permissions + 1
-        while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()) and lines[end].strip():
+        while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
             end += 1
         lines[permissions + 1:end] = [line for line in lines[permissions + 1:end] if not re.match(r"^[ \t]+(['\"]?)actions\1[ \t]*:", line)]
     found = _with([line.rstrip("\r\n") for line in lines])
@@ -88,6 +88,8 @@ def caller(workflow: str, plan: str) -> str:
         at = sum(len(line) for line in text.splitlines(keepends=True)[:found[0] + 1])
         text = text[:at] + TEAM_APPROVAL.replace("\n", eol) + text[at:]
     else:
+        if "\n" not in text[call.end():]:  # the call is the file's last line, without its line ending
+            text += eol
         at = text.index("\n", call.end()) + 1
         text = text[:at] + "    with:" + eol + TEAM_APPROVAL.replace("\n", eol) + text[at:]
     return text[:permissions.end()] + TEAM_PERMISSION.replace("\n", eol) + text[permissions.end():]
@@ -237,6 +239,13 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
         # own workflows there need the bypass team too (docs/vending.md).
         wanted.append(install.push_ruleset(team["id"] if team else None, app_id))
     found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
+    leftover = found.get(install.PUSH_RULESET)
+    if not team_plan and leftover is not None and leftover.get("id") is not None \
+            and same_ruleset(leftover, install.push_ruleset(team["id"] if team else None, app_id)):
+        # Vending's push rule from GitHub Team's way, back on Enterprise: gone, so the team may change .github/ again. One
+        # of the repo's own stays.
+        github.delete_ruleset(repo, leftover["id"])
+        out(f"{repo}: ruleset {install.PUSH_RULESET} removed: on GitHub Enterprise the team may change .github/ again")
     for ruleset in wanted:
         if ruleset["name"] not in found:
             github.add_ruleset(repo, ruleset)

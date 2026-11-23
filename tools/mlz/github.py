@@ -221,6 +221,9 @@ class GitHub:
         self._api(f"repos/{repo}/rulesets", "POST", ruleset)
         return True
 
+    def delete_ruleset(self, repo: str, ruleset_id: int) -> None:
+        self._api(f"repos/{repo}/rulesets/{ruleset_id}", "DELETE")
+
     def update_ruleset(self, repo: str, ruleset_id: int, ruleset: dict) -> None:
         """Replaces the repo's own ruleset with this body."""
         self._api(f"repos/{repo}/rulesets/{ruleset_id}", "PUT", ruleset)
