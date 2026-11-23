@@ -213,8 +213,8 @@ moved since.
 
 ### When the gate refuses: `replan.txt`
 
-To plan every stack in a pull request, change `replan.txt` at the repo's top, with one line saying why. Its run plans
-every stack, and once it is approved and merged, `main` applies exactly that plan.
+To plan every stack in a pull request, change `replan.txt` at the repo's top, or add it if it is not there, with one
+line saying why. Its run plans every stack, and once it is approved and merged, `main` applies exactly that plan.
 
 That is the way to apply drift the daily check found, or the rest of an apply that failed half way. A workload repo needs
 none: it plans its one stack whole on every pull request, so any pull request will do.
