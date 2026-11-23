@@ -444,7 +444,8 @@ def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[
         if not isinstance(bootstrap, dict):
             found += [] if found else ["bootstrap.yaml: github is not a mapping of the organization's settings (docs/bootstrap.md)."]
             bootstrap = {}
-    found += owners.offline_problems(repo, bootstrap.get("organization"), bootstrap.get("platform_team"))
+    found += owners.offline_problems(repo, bootstrap.get("organization"), bootstrap.get("platform_team"),
+                                     bootstrap.get("plan", "enterprise") if bootstrap.get("organization") else None)
     for problem in found:
         print(f"::error::{problem}" if os.environ.get("GITHUB_ACTIONS") == "true" else f"mlz check: {problem}", file=sys.stderr)
     if found:

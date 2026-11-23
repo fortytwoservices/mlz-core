@@ -73,13 +73,35 @@ def role_of(workflow: str) -> str:
 # Who approves an apply, as a caller passes it to role.yml and workload.yml: environment (the default, when the caller
 # passes nothing: a reviewer in the environment, GitHub Enterprise) or pull-request (GitHub Team: the pull request's
 # approval, which then covers the plan applied). The caller is under .github/, which only the bypass team may change.
-APPROVAL = re.compile(r"^\s+approval:\s*['\"]?(?P<approval>[\w-]+)['\"]?\s*(#.*)?$", re.M)
+APPROVAL = re.compile(r"^[ \t]+approval:[ \t]*['\"]?(?P<approval>[\w-]+)['\"]?[ \t]*(#[^\n]*)?$", re.M)
 
 
 def approval_of(workflow: str) -> str:
     """The approval a caller's workflow passes: environment when it passes none."""
     match = APPROVAL.search(workflow)
     return match["approval"] if match else "environment"
+
+
+# The line a role repo's caller gets on GitHub Team, under its with:, after its role.
+TEAM_APPROVAL = "approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/bootstrap.md)"
+
+
+def plan_of(workflow: str) -> str:
+    """The GitHub plan a caller is written for: team when it passes approval: pull-request, else enterprise."""
+    return "team" if approval_of(workflow) == "pull-request" else "enterprise"
+
+
+def caller(workflow: str, plan: str) -> str:
+    """A role repo's caller (.github/workflows/mlz.yml) written for the plan: on Team it passes approval:
+    pull-request, on Enterprise none, so that an Enterprise caller is the starter's byte for byte. The same text from
+    either plan, so the installer, mlz upgrade and a switch of plans all write it alike."""
+    text = re.sub(r"^[ \t]+approval:[^\n]*\n", "", workflow, flags=re.M)
+    if plan == "enterprise":
+        return text
+    match = re.search(r"^([ \t]+)role:[ \t]*(governance|platform|vending)\b[^\n]*\n", text, re.M)
+    if not match:
+        raise ConfigError(f"{WORKFLOW} names no role (governance, platform or vending), so its approval cannot be set.")
+    return f"{text[:match.end()]}{match[1]}{TEAM_APPROVAL}\n{text[match.end():]}"
 
 
 def gitignore_with(current: str | None, starter: str) -> str | None:
@@ -299,6 +321,9 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             continue
         after = None if starter is None else RELEASE_PLEASE_MARKER.sub("", starter).replace(
             f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
+        if after is not None and path == WORKFLOW:
+            # The repo's GitHub plan stays as its caller has it: an upgrade never switches it (mlz install repos does).
+            after = caller(after, plan_of(current_text))
         if after != before[path]:
             changes[path] = after
     # The target's .gitignore lines, appended where missing; going back to a release without them leaves them.

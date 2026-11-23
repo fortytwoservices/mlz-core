@@ -160,6 +160,33 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("### [0.1.7]", body)  # release-please's heading, one level down
         self.assertIn("v0.1.6 -> v0.1.7", printed)
 
+    def test_a_repo_on_github_team_stays_on_it_and_one_on_enterprise_stays_on_enterprise(self):
+        from mlz import upgrade as module
+        team = module.caller(caller("governance", "v0.1.6"), "team")
+        github = FakeGitHub(team, {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        self.run_upgrade(github)
+        written = github.writes[1][4][WORKFLOW]
+        self.assertEqual(pin_of(written), (CORE, "v0.1.7"))
+        self.assertEqual(module.approval_of(written), "pull-request")  # an upgrade never switches the plan
+        self.assertEqual(written, module.caller(written, "team"))
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        self.run_upgrade(github)
+        self.assertEqual(module.approval_of(github.writes[1][4][WORKFLOW]), "environment")
+        self.assertNotIn("approval", github.writes[1][4][WORKFLOW].split("with:")[1].split("secrets:")[0])
+
+    def test_the_caller_for_each_plan_comes_and_goes_byte_for_byte(self):
+        from mlz import upgrade as module
+        for role in ("governance", "platform", "vending"):
+            enterprise = (STARTERS / f"mlz-{role}" / WORKFLOW).read_text()
+            team = module.caller(enterprise, "team")
+            self.assertEqual((module.approval_of(enterprise), module.approval_of(team)), ("environment", "pull-request"), role)
+            self.assertEqual(module.caller(team, "enterprise"), enterprise, role)  # Enterprise's is the starter's, byte for byte
+            self.assertEqual(module.caller(team, "team"), team, role)
+            # Under with:, right after the role, at its indent.
+            self.assertIn(f"      role: {role}\n      approval: pull-request ", team, role)
+        with self.assertRaisesRegex(ConfigError, "names no role"):
+            module.caller("on: push\n", "team")
+
     def test_a_release_with_the_wrapper_writes_it_and_makes_it_executable(self):
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, wrapper_from="v0.1.8")
         self.run_upgrade(github)
