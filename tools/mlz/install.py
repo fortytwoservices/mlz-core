@@ -1387,17 +1387,22 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": pinned}
+    # Made with no repo, and given the repos only once GitHub is seen to keep its limit to role.yml: a repo admitted to
+    # a group without it could start a job there before the limit is read back.
+    empty = {**body, "selected_repository_ids": []}
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
-            f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
+            f"{RUNNER}, for {workflow} only and no repo yet. Then an owner runs this step again, which admits the three repos once GitHub "
+            "keeps that limit.\n")
         out("\n".join([f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
-                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(body))}"]) + "\n")
+                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(empty))}"]) + "\n")
         return None
     made = github.runner_group(org, RUNNER)
     if made is None:
-        made = github.create_runner_group(org, body)
-        out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
+        made = github.create_runner_group(org, empty)
         workflows_kept(github, org, pinned, bootstrap, out)
+        github.set_runner_group_repositories(org, made["id"], repo_ids)
+        out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
         return made
     if made.get("network_configuration_id"):
         raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
@@ -1409,10 +1414,10 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
             or workflows != sorted(made.get("selected_workflows") or [])):
         github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
                                                      "restricted_to_workflows": True, "selected_workflows": workflows})
+    workflows_kept(github, org, workflows, bootstrap, out)
     if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
         github.set_runner_group_repositories(org, made["id"], repo_ids)
     out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
-    workflows_kept(github, org, workflows, bootstrap, out)
     return made
 
 
