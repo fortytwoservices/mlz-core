@@ -187,8 +187,12 @@ nobody approved. The job fails unless every plan of the run finished, and then u
 - the plan is the one that approval saw: that of the pull request's run on the commit it approved, which had finished
   before it. So "Update branch" asks for a new approval only when the plan itself changed.
 
-When it fails, it shows how the plan changed: a code owner approves again, and then re-running the failed job lets the
-pull request merge. A code owner is a member of the team `.github/CODEOWNERS` names (in a role repo, the platform team).
+It also asks for a new approval when the plans that approval saw can no longer be read: the run it approved was run again
+since (a re-run replaces its plans), or was still planning when the approval came.
+
+When it fails, it says why, and how the plan changed where it did: a code owner approves again, and then re-running
+the failed job lets the pull request merge. A code owner is a member of the team `.github/CODEOWNERS` names (in a role
+repo, the platform team).
 
 The job runs whatever happened before it, since GitHub counts a skipped required check as passed. A run cancelled by a
 newer push, or with a failed plan, leaves it failed on that commit.
