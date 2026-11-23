@@ -189,7 +189,7 @@ by the steps below.
 No migration code: steps a person follows, in an order that never leaves an apply without a gate. In between, both
 gates hold. Each settings change is the customer's (or Fortytwo's, on the customer's word).
 
-**While an environment changes** (steps 5 and 6 on the way to Team, 2 and 3 on the way back), hold the repos still:
+**While an environment changes** (steps 5 to 7 on the way to Team, 2 and 3 on the way back), hold the repos still:
 finish any apply under way, cancel any run waiting for a reviewer, and merge nothing, start no manual run and re-run
 nothing in the affected role and workload repos until the change has applied. A run started before a pipeline switched
 keeps its old pipeline, and inside one apply an environment has neither its reviewer nor `MLZ_APPROVAL` for a moment
@@ -202,17 +202,34 @@ keeps its old pipeline, and inside one apply an environment has neither its revi
    vending's upgrade pull request).
 2. In the checkout of the governance repo you run the installer from, set `plan: team` in `bootstrap.yaml` and remove
    `reviewers`, but do not merge it yet: merged, it publishes the plan through governance's contract, and vending would
-   start on the workload repos. Steps 3 to 5 read this checkout (`--settings`).
+   start on the workload repos. Steps 3 to 6 read this checkout (`--settings`).
 3. As a member of the bypass team, run `mlz install repos`. Each role repo is offered one pull request (`mlz/github-plan`)
    that passes `approval: pull-request` in its pipeline and gives `/_generated/` to the platform team. A code owner
    approves each; merge all three. Each environment still has its reviewer, so both gates hold.
 4. Add `<role> / planned` to each role repo's ruleset `main-checks` (Settings, Rules, Rulesets), from GitHub Actions;
    `mlz install check` says which repo lacks it.
-5. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
+5. Hold the role and workload repos still (above), and delete the runs that a re-run would let apply with no person
+   once their environment has no reviewer. GitHub lets anyone with write access re-run a run, or its failed jobs, for 30
+   days, on the commit it had and so with the pipeline it had (GitHub docs, "Re-running workflows and jobs"). Delete:
+   - in each role repo, every run on `main` whose apply was rejected or cancelled after step 3's merge. Its pipeline
+     already counts the pull request's approval as the gate, and that approval covered its plan; "Re-run failed jobs"
+     runs the apply again without the gate, which does not run again. If such a run's commit is still `main`'s head,
+     merge a pull request after it too (one that plans nothing will do): until then a manual run applies the same plan;
+   - in each role and workload repo, every run on `main` made before step 1's upgrade merged. Its release has no
+     `MLZ_APPROVAL` check, so "Re-run all jobs" would plan again and apply where no reviewer waits. Instead of deleting
+     these, you may wait until the newest of them is 30 days old.
+
+   `gh run list -R <owner>/<repo> --workflow mlz.yml --branch main --created ">=<date 30 days ago>" --limit 1000` lists
+   the runs that can still be re-run, with their dates and results. GitHub gives at most 1,000 runs for one such query
+   (REST API, "List workflow runs for a repository"): if it lists 1,000, split the dates (`--created
+   "2026-11-01..2026-11-10"`) until no range reaches it. `gh run delete -R <owner>/<repo> <run-id>` deletes one; keep a
+   log you want first, from the same repo: `gh run view -R <owner>/<repo> <run-id> --log`. Derived from GitHub's
+   documentation and the pipeline's code, not tested.
+6. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
    seconds apart. It stops before Terraform, naming what is missing, unless Team's gate already holds in every role repo:
    its pipeline passes `approval: pull-request`, the platform team owns `/_generated/` and can write, and `main` requires
    a code owner's review and `<role> / planned`. So in those seconds every pipeline already gates its applies.
-6. Hold the workload repos still, and merge the `bootstrap.yaml` change of step 2 in the governance repo. Governance's
+7. Hold the workload repos still, and merge the `bootstrap.yaml` change of step 2 in the governance repo. Governance's
    run publishes the plan in its contract. Vending's contract pull request now waits for a code owner (Team's way since
    step 3): read its plan, approve it, and its run on `main` does the workload repos:
    - each workload repo is offered a pull request with its pipeline Team's way, which its team merges; a repo still on a
@@ -221,7 +238,7 @@ keeps its old pipeline, and inside one apply an environment has neither its revi
      repo's own is left as it is, and each run says so);
    - each `apply` environment loses its reviewer and gets `MLZ_APPROVAL: pull-request`. Until a repo's team has merged
      its switch, its applies refuse (its pipeline still expects a reviewer): merge the switches promptly.
-7. Run `mlz install check`: it passes when every role repo is Team's way.
+8. Run `mlz install check`: it passes when every role repo is Team's way.
 
 **Team to Enterprise**, the same in reverse, reviewers first:
 
