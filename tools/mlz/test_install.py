@@ -1578,9 +1578,10 @@ class InstallTest(unittest.TestCase):
         ])
         apply, waits = self.run_self_hosted(github, azure, key)
         workflow = f"acme/mlz-core/.github/workflows/role.yml@{install.release()}"
-        self.assertEqual(dict(github.calls[:1])["group"], {
-            "name": "mlz", "visibility": "selected", "selected_repository_ids": [101, 102, 103], "allows_public_repositories": False,
-            "restricted_to_workflows": True, "selected_workflows": [workflow]})
+        # Made with no repo; the repos come once GitHub is seen to keep the limit to role.yml.
+        self.assertEqual(github.calls[:2], [("group", {
+            "name": "mlz", "visibility": "selected", "selected_repository_ids": [], "allows_public_repositories": False,
+            "restricted_to_workflows": True, "selected_workflows": [workflow]}), ("group repositories", [101, 102, 103])])
         self.assertEqual(azure.uploads, [("PUT", UPLOAD, {"value": APP_KEY, "contentType": "application/x-pem-file"})])
         steps = [(method, url.rsplit("/", 1)[-1] if "roleAssignments" not in url else "roleAssignment") for method, url, _ in azure.calls]
         self.assertEqual(steps, [("PUT", "roleAssignment"), ("PATCH", "kv-acme-mlz-pd-nwe-01"), ("PATCH", "kv-acme-mlz-pd-nwe-01"),
@@ -1724,10 +1725,10 @@ class InstallTest(unittest.TestCase):
         apply.assert_not_called()
         self.assertEqual(azure.calls, [])
         text = "\n".join(self.printed)
-        self.assertIn("gh api -X POST orgs/acme/actions/runner-groups -f name=mlz -f visibility=selected -F 'selected_repository_ids[]=101' "
-                      "-F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' -F allows_public_repositories=false "
+        self.assertIn("gh api -X POST orgs/acme/actions/runner-groups -f name=mlz -f visibility=selected -F allows_public_repositories=false "
                       f"-F restricted_to_workflows=true -f 'selected_workflows[]=acme/mlz-core/.github/workflows/role.yml@{install.release()}'", text)
-        self.assertIn("Then run this step again.", text)
+        self.assertNotIn("selected_repository_ids", text)  # no repo until the limit is seen
+        self.assertIn("Then an owner runs this step again, which admits the three repos once GitHub keeps that limit.", text)
 
     def test_a_group_made_for_github_hosted_runners_is_not_taken_over(self):
         key = self.self_hosted()
