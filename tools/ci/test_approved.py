@@ -345,8 +345,10 @@ class CoversTest(Case):
 
     def test_plans_an_approval_saw_that_cannot_be_read_need_a_new_approval(self):
         approval = [review(at="2026-11-23T09:50:00Z", commit="head0")]
+        rerun = run(40, 10, status="in_progress", started="2026-11-23T10:30:00Z", attempt=2)
         for options in ({"seen_jobs": "2026-11-23T09:55:00Z"},  # still planning when the approval came
                         {"seen_run": run(40, 10, started="2026-11-23T09:58:00Z", attempt=2)},  # run again since
+                        {"now": {40: rerun}},  # run again while its plans were read
                         {"runs": {}}):  # no run of it at all
             with self.subTest(options=options):
                 github = self.github(approval, **{key: value for key, value in options.items() if key != "runs"})

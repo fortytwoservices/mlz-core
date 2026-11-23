@@ -196,13 +196,15 @@ def code_owner(role: str, github, repo: str, base: str, teams=None) -> Callable[
 def seen_by(github, repo: str, workflow: str, review: dict, number: int, artifacts: str, folder: Path) -> tuple[dict, Path] | None:
     """The plans an approval saw: those of the pull request's last run on the commit it approved, if that run's latest
     attempt started, and its plans finished, before the approval. None when they cannot be known: that run was run again
-    after the approval (a re-run replaces its plans), or was still planning when it came."""
+    after the approval, or while its plans were read (a re-run replaces its plans), or was still planning when it came."""
     at = when(review["submitted_at"])
     found = last_run(github, repo, workflow, review["commit_id"], number, artifacts, folder)
     if found is None:
         return None
-    run, where = found
-    if when(run.get("run_started_at")) > at:
+    listed, where = found
+    # As it is now that its plans are read: a re-run started in between may have replaced them.
+    run = github.workflow_run(repo, listed["id"])
+    if run.get("run_attempt") != listed.get("run_attempt") or run.get("status") != "completed" or when(run.get("run_started_at")) > at:
         return None
     finished = plans_finished(github, repo, run["id"], run.get("run_attempt") or 1, now=lambda: at)
     return (run, where) if finished <= at else None
