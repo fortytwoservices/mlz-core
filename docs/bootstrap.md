@@ -139,7 +139,7 @@ and decides who approves an apply:
   organization on Free: GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers
   protection rule").
 - **`team`**: no environment has a reviewer, and the approval of the pull request covers the plan that is applied
-  (`docs/pipelines.md`). `github.reviewers` is refused, since nobody would wait for them. Each environment carries the
+  ([pipelines](pipelines.md#approval-on-github-team)). `github.reviewers` is refused, since nobody would wait for them. Each environment carries the
   variable `MLZ_APPROVAL: pull-request`, which makes an apply refuse whose pipeline still expects a reviewer: a check
   against a switch done out of order and against mistakes. It does not stop the owning team, which may change an
   environment's variables with maintain rights (tested 23 November 2026).
@@ -154,13 +154,13 @@ with `github.plan`, both ways, and says what to run.
 ### What Team gives up
 
 GitHub Team has no reviewer on an environment in a private repo, so the approval of the pull request is the only
-human gate there. The pipeline makes it cover the plan that is applied (`docs/pipelines.md`). What a Team customer gets
+human gate there. The pipeline makes it cover the plan that is applied ([pipelines](pipelines.md#approval-on-github-team)). What a Team customer gets
 is therefore not Enterprise's, and this is said to them as it is:
 
 - **Nobody approves the plan of the run on `main`.** A code owner approves the pull request after its plans; the run
   on `main` applies only when its plan is the one the pull request's run showed, and refuses otherwise.
 - **A person approves each contract.** On Team the platform team owns `/_generated/` in `CODEOWNERS`, so a contract
-  pull request waits for a code owner, where on Enterprise it merges itself and its apply waits for the reviewer. Each
+  pull request waits for a code owner ([pipelines](pipelines.md#contracts-and-the-bypass-team)), where on Enterprise it merges itself and its apply waits for the reviewer. Each
   new landing zone costs one more approval in the platform repo, each governance change two.
 - **The MLZ App's commits of a landing zone's values** (`mlz.auto.tfvars.json`, which reach a workload repo's `main`
   with no pull request) apply as vending wrote them, with no person. They come from a vending pull request the
@@ -169,7 +169,7 @@ is therefore not Enterprise's, and this is said to them as it is:
   (the repo's Insights, Rules).
 - **A manual run on `main` applies nothing**, since no pull request's approval covers its plan. To apply what `main`
   says, after drift or a half-failed apply: change `replan.txt` at the repo's top, or add it if it is not there, with
-  one line saying why (`docs/pipelines.md`).
+  one line saying why ([pipelines](pipelines.md#when-the-gate-refuses-replantxt)).
 - **Self-hosted runners:** GitHub documents a runner group's limit to selected workflows for Enterprise Cloud only.
   Where it does not keep it, only `pipeline-files` keeps other workflows off the runners ([private runners](#private-runners)).
 - **Team synchronization** of a team with an Entra ID group needs SAML single sign-on; whether a Team organization has

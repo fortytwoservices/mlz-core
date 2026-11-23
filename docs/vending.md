@@ -374,7 +374,7 @@ changes in Azure.
   on Team any workflow on `main` can sign in from the `apply` environment, so one approved by the team could apply
   outside the gate.
 - On GitHub Team `main-checks` also requires `workload / planned`, which passes once the pull request's approval covers
-  its plan (`docs/pipelines.md`).
+  its plan ([pipelines](pipelines.md#workload-repos)).
 - **The MLZ App's commits of the values apply with no person on Team.** They come from a vending pull request the
   platform team approved, and change only this landing zone; on Enterprise they still wait for the team in `apply`.
 - A ruleset named `main`, `main-checks` or `pipeline-files` that the repo has already is left as it is, and each run says so
