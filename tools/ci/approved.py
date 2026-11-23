@@ -33,7 +33,8 @@ gate <role> [<stack> ...]: a run on main, before anything applies (role.yml's ch
     - a stack's plan on main changes something the pull request's run did not plan, or planned otherwise.
     In a role repo it also reads whether the merge used a ruleset's bypass, for changed.py to say so.
 
-Needs GH_TOKEN (Actions, Pull requests, Contents and Metadata read; in a role repo also Members and Administration read),
+Needs GH_TOKEN (Actions, Pull requests, Contents and Metadata read; in a role repo also Administration read for gate, and
+for covers TEAM_TOKEN, a token with Members read, which is an organization permission),
 GITHUB_REPOSITORY, WORKFLOW_REF (github.workflow_ref: the caller's workflow), and: for covers PR_NUMBER, PR_AUTHOR,
 BASE_REF, GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT, and this run's plans in .mlz/planned/; for gate GITHUB_SHA and
 GITHUB_RUN_ATTEMPT, and main's plans in .mlz/reviewed/.
@@ -66,8 +67,8 @@ CODEOWNERS = codeowners.PATH
 VALUES = "mlz.auto.tfvars.json"
 STARTER = Path(__file__).resolve().parents[2] / "starter" / "mlz-workload"
 PLAN_JOB = re.compile(r"(^|/ )plan( \(.*\))?$")  # a plan job's name as the jobs API gives it: "<caller job> / plan (<batch>)"
-REPLAN = ("To apply what main says, open a pull request that changes replan.txt (one line saying why): its run plans every stack, and "
-          "once a code owner approves it and it merges, main applies exactly that plan.")
+REPLAN = ("To apply what main says, open a pull request that changes replan.txt at the repo's top, or adds it if it is not there, with one "
+          "line saying why: its run plans every stack, and once a code owner approves it and it merges, main applies exactly that plan.")
 REPLAN_WORKLOAD = ("To apply what main says, open a pull request (any change will do: this repo plans its one stack whole), and merge it "
                    "once it is approved.")
 
@@ -175,7 +176,7 @@ def plans_finished(github, repo: str, run_id: int, attempt: int, now: Callable[[
     return max(times) if times else now()
 
 
-def code_owner(role: str, github, repo: str, base: str) -> Callable[[str], bool]:
+def code_owner(role: str, github, repo: str, base: str, teams=None) -> Callable[[str], bool]:
     """Whether a login counts as a code owner here. In a role repo: a user or a member of a team that the CODEOWNERS file
     GitHub reads on the base branch names (the first of .github/, the top and docs/, as GitHub looks; its comments, a
     line's own included, are no owners), read as tools/mlz/owners.py reads it. mlz-core's names one team, the platform team.
@@ -187,8 +188,9 @@ def code_owner(role: str, github, repo: str, base: str) -> Callable[[str], bool]
     names = {owner[1:] for rule in codeowners.rules(text) for owner in rule[1:] if owner.startswith("@")}
     if not names:
         raise ConfigError(f"{location} on {base} names no owner, so no approval can be checked; mlz install repos writes it.")
-    users, teams = {name for name in names if "/" not in name}, [name.split("/", 1) for name in names if "/" in name]
-    return lambda login: login in users or any(github.team_member(org, team, login) for org, team in teams)
+    users, found_teams = {name for name in names if "/" not in name}, [name.split("/", 1) for name in names if "/" in name]
+    members = teams
+    return lambda login: login in users or any((members or github).team_member(org, team, login) for org, team in found_teams)
 
 
 def seen_by(github, repo: str, workflow: str, review: dict, number: int, artifacts: str, folder: Path) -> tuple[dict, Path] | None:
@@ -206,15 +208,16 @@ def seen_by(github, repo: str, workflow: str, review: dict, number: int, artifac
     return (run, where) if finished <= at else None
 
 
-def covers(role: str, github=None, say=print, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> bool:
-    """Whether the last code owner's approval covers this run's plans: see the module's docstring."""
+def covers(role: str, github=None, say=print, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc), teams=None) -> bool:
+    """Whether the last code owner's approval covers this run's plans: see the module's docstring. teams reads a team's
+    members (TEAM_TOKEN's), github everything else."""
     github = github or Pipeline()
     repo, number, author = env("GITHUB_REPOSITORY"), int(env("PR_NUMBER")), env("PR_AUTHOR")
     ours = plans(Path.cwd() / ".mlz" / "planned")
     if not changes_anything(ours):
         say("These plans change nothing, so there is nothing for an approval to cover.")
         return True
-    owner = code_owner(role, github, repo, env("BASE_REF"))
+    owner = code_owner(role, github, repo, env("BASE_REF"), teams)
     approvals = sorted((review for review in github.reviews(repo, number)
                         if review.get("state") == "APPROVED" and review.get("submitted_at") and (review.get("user") or {}).get("login") != author
                         and owner((review.get("user") or {}).get("login", ""))), key=lambda review: when(review["submitted_at"]))
@@ -335,7 +338,7 @@ def gate(role: str, stacks: list[str], github=None, sleep: Callable[[float], Non
 def main(argv: list[str]) -> int:
     try:
         if argv[:1] == ["covers"] and len(argv) == 2:
-            return 0 if covers(argv[1]) else 1
+            return 0 if covers(argv[1], Pipeline(), teams=Pipeline(token=os.environ.get("TEAM_TOKEN") or None)) else 1
         if argv[:1] == ["gate"] and len(argv) >= 3:
             return 0 if gate(argv[1], argv[2:]).ok else 1
     except ConfigError as error:

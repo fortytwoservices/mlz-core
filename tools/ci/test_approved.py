@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -374,6 +375,20 @@ class CoversTest(Case):
         self.assertFalse(self.covers(github))
         self.assertIn("changed since @bea approved the pull request", self.said[-1])
 
+    def test_a_team_s_members_are_read_with_the_team_token(self):
+        repo_reader, team_reader = self.github([review("bea", at="2026-11-23T10:05:00Z")], members=()), mock.Mock()
+        team_reader.team_member.return_value = True
+        self.assertTrue(approved.covers("platform", repo_reader, say=self.said.append, now=lambda: self.NOW, teams=team_reader))
+        team_reader.team_member.assert_called_with("acme", "platform", "bea")
+        self.assertIn("@bea approved after these plans", self.said[-1])
+
+    def test_main_reads_the_team_with_team_token(self):
+        made = []
+        with mock.patch.object(approved, "Pipeline", side_effect=lambda token=None: made.append(token) or mock.Mock()), \
+                mock.patch.object(approved, "covers", return_value=True) as covers, mock.patch.dict(os.environ, {"TEAM_TOKEN": "members-token"}):
+            self.assertEqual(approved.main(["covers", "platform"]), 0)
+        self.assertEqual(made, [None, "members-token"])  # the repo's reader as GH_TOKEN, the team's with TEAM_TOKEN
+
     def test_the_codeowners_file_github_reads_first(self):
         # An adopted repo's own file at the top or in docs/, where the installer leaves it, as GitHub looks.
         for files in ({"CODEOWNERS": "* @dan\n"}, {"docs/CODEOWNERS": "* @dan\n"},
@@ -503,6 +518,77 @@ class ReplanTest(unittest.TestCase):
                 os.chdir(cwd)
         self.assertEqual(printed.getvalue(), '["connectivity", "management"]\n')
         self.assertIn("Planning every stack: replan.txt changed.", noted.getvalue())
+
+
+class ReplanInGitTest(unittest.TestCase):
+    """replan.txt with real git: added, changed or deleted, on a pull request's merge ref and on main after a squash or a
+    merge commit, it plans every stack; the installer writes no replan.txt, so its first change adds it."""
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", self.repo, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+    def commit(self, message, **files):
+        for name, text in files.items():
+            path = Path(self.repo, name)
+            if text is None:
+                path.unlink()
+            else:
+                path.write_text(text)
+        self.git("add", "-A")
+        self.git("-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def planned(self, event, before=""):
+        real = subprocess.run
+
+        def run_(args, **kwargs):
+            if args[0] == "git":
+                return real(args, cwd=self.repo, **{key: value for key, value in kwargs.items() if key != "cwd"})
+            return mock.Mock(returncode=0, stdout='["connectivity", "management"]\n')  # mlz check
+        cwd = os.getcwd()
+        os.chdir(self.repo)
+        try:
+            with mock.patch.object(check.subprocess, "run", side_effect=run_), mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "EVENT_BEFORE": before}), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as noted:
+                check.check("platform")
+        finally:
+            os.chdir(cwd)
+        return "Planning every stack: replan.txt changed." in noted.getvalue()
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = self.tmp.name
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "test@example.com")
+        self.git("config", "user.name", "test")
+        self.base = self.commit("base", **{"README.md": "x\n"})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_an_added_replan_txt_plans_every_stack_on_the_pull_request_and_after_either_merge(self):
+        # Squash: one commit on main that adds the file; the pull request's merge ref has the same shape.
+        self.commit("chore: replan, drift on the hub", **{"replan.txt": "drift on the hub\n"})
+        self.assertTrue(self.planned("pull_request"))
+        self.assertTrue(self.planned("push", before=self.base))
+        # A merge commit: its first parent is main before, the file comes from the branch.
+        self.git("checkout", "-q", "-b", "replan", self.base)
+        self.commit("chore: replan again", **{"replan.txt": "again\n"})
+        self.git("checkout", "-q", "main")
+        self.git("reset", "-q", "--hard", self.base)
+        self.git("-c", "commit.gpgsign=false", "merge", "-q", "--no-ff", "--no-edit", "replan")
+        self.assertTrue(self.planned("push", before=self.base))
+
+    def test_a_changed_or_deleted_replan_txt_too_and_nothing_else_does(self):
+        added = self.commit("add", **{"replan.txt": "one\n"})
+        self.commit("change", **{"replan.txt": "one\ntwo\n"})
+        self.assertTrue(self.planned("push", before=added))
+        changed = self.git("rev-parse", "HEAD")
+        self.commit("delete", **{"replan.txt": None})
+        self.assertTrue(self.planned("push", before=changed))
+        deleted = self.git("rev-parse", "HEAD")
+        self.commit("readme", **{"README.md": "y\n"})
+        self.assertFalse(self.planned("push", before=deleted))
 
 
 class PipelineTokenTest(unittest.TestCase):

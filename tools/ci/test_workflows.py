@@ -275,9 +275,13 @@ class TeamJobsTest(unittest.TestCase):
                 self.assertEqual([item["with"]["path"] for item in downloads], [".mlz/planned/"])
         reader = step(workflow("role.yml"), "planned", "reader")
         self.assertEqual({key: value for key, value in reader["with"].items() if key.startswith("permission-")},
-                         {"permission-actions": "read", "permission-pull-requests": "read", "permission-contents": "read",
-                          "permission-members": "read"})
+                         {"permission-actions": "read", "permission-pull-requests": "read", "permission-contents": "read"})
         self.assertEqual(reader["with"]["repositories"], "${{ github.event.repository.name }}")
+        # Members, an organization permission, on a token of its own that reaches no repo's contents.
+        teams = step(workflow("role.yml"), "planned", "team-reader")
+        self.assertEqual({key: value for key, value in teams["with"].items() if key.startswith("permission-")}, {"permission-members": "read"})
+        self.assertNotIn("repositories", teams["with"])
+        self.assertEqual(step(workflow("role.yml"), "planned", "The approval covers this plan")["env"]["TEAM_TOKEN"], "${{ steps.team-reader.outputs.token }}")
 
     def test_a_workload_planned_never_skips_and_fails_on_a_failed_plan(self):
         planned = workflow("workload.yml")["jobs"]["planned"]
