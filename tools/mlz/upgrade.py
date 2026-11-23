@@ -70,6 +70,18 @@ def role_of(workflow: str) -> str:
     return match["role"]
 
 
+# Who approves an apply, as a caller passes it to role.yml and workload.yml: environment (the default, when the caller
+# passes nothing: a reviewer in the environment, GitHub Enterprise) or pull-request (GitHub Team: the pull request's
+# approval, which then covers the plan applied). The caller is under .github/, which only the bypass team may change.
+APPROVAL = re.compile(r"^\s+approval:\s*['\"]?(?P<approval>[\w-]+)['\"]?\s*(#.*)?$", re.M)
+
+
+def approval_of(workflow: str) -> str:
+    """The approval a caller's workflow passes: environment when it passes none."""
+    match = APPROVAL.search(workflow)
+    return match["approval"] if match else "environment"
+
+
 def gitignore_with(current: str | None, starter: str) -> str | None:
     """The repo's .gitignore with the starter's lines it lacks appended, comments included once; None when it has them
     all. Never changes or removes a line the repo has."""

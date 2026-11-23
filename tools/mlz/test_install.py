@@ -44,6 +44,10 @@ CORE_COPY = "acme/mlz-core"  # the organization's copy of mlz-core
 
 WORKFLOW = ".github/workflows/mlz.yml"
 TEAM_IDS = {"platform": 11, "mlz-admins": 12}
+ENTERPRISE_ENVIRONMENT = {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "acme-lead"}}]},
+                                               {"type": "branch_policy"}],
+                          "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+TEAM_ENVIRONMENT = {"protection_rules": [{"type": "branch_policy"}], "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
 APP = {"id": 77, "slug": "acme-mlz", "client_id": "Iv23liAcme", "owner": {"login": "acme"}}  # the MLZ App, as GET /apps/<slug> answers
 
 
@@ -52,7 +56,7 @@ class FakeGitHub:
                  org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
                  teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, dismiss_stale=True, owned=True,
                  required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True,
-                 generated_guard=True, apps=(APP,)):
+                 generated_guard=True, apps=(APP,), environments=None, environment_variables=None):
         self.org_plan = org_plan
         # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
         # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
@@ -89,6 +93,18 @@ class FakeGitHub:
         self.main_bypass = main_bypass  # whether the ruleset main (ID 7) lets the bypass team merge without the approval
         # The push ruleset that guards _generated/ (review S1), and the GitHub Apps the person can see.
         self.generated_guard, self.apps = generated_guard, {app["slug"]: app for app in apps}
+        # Each repo's environment, named after its role, as the bootstrap makes it on Enterprise: a reviewer, main only.
+        self.environments = {repo: ENTERPRISE_ENVIRONMENT for repo in REPOS.values()} if environments is None else environments
+        self.environment_variables = environment_variables or {}  # (repo, environment, name): value
+
+    def environment(self, repo, name):
+        return self.environments.get(repo)
+
+    def environment_variable(self, repo, environment, name):
+        return self.environment_variables.get((repo, environment, name))
+
+    def branch_policies(self, repo, environment):
+        return ["main"] if (self.environments.get(repo) or {}).get("deployment_branch_policy", {}).get("custom_branch_policies") else []
 
     def app(self, slug):
         return self.apps.get(slug)
@@ -351,6 +367,9 @@ class RunnersGitHub(FakeGitHub):
 
     def update_runner_group(self, org, group, body):
         self.calls.append(("update group", body))
+        for found in self.groups:
+            if found["id"] == group:
+                found.update(body)  # as GitHub keeps it
 
     def runner_group_repositories(self, org, group):
         return self.group_repositories.get(group, set())
@@ -629,8 +648,11 @@ class InstallTest(unittest.TestCase):
         install.step_check(github, self.folder, self.out)
         self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
         self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
-        # Per repo: the MLZ App, its code owners, its two push rulesets, and its check; then what is not checked.
-        self.assertEqual(len(self.printed), 18)
+        # Per repo: the MLZ App, its code owners, its two push rulesets, its check, and its pipeline and environment; then
+        # what is not checked.
+        self.assertEqual(len(self.printed), 21)
+        self.assertIn("acme/mlz-vending: its pipeline and its environment vending are GitHub Enterprise's: an apply waits for a reviewer, "
+                      "from main only", self.printed)
         self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
         self.assertIn("acme/mlz-vending: changes under _generated/ are refused on every branch, but from the MLZ App acme-mlz and acme/mlz-admins "
                       "(ruleset generated-files)", self.printed)
@@ -950,14 +972,87 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on a branch up to date"):
             install.step_check(StrictOnlyBypassable(**ready, strict=False), self.folder, self.out)
 
-    def test_check_refuses_an_organization_not_on_enterprise(self):
-        ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+    def team(self):
+        """bootstrap.yaml on GitHub Team: github.plan team, and no reviewers."""
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", "").replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: team\n"))
+
+    def ready(self, plan="enterprise", **more):
+        """A repo set as install repos and the bootstrap leave it, for the plan."""
+        given = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
-        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's team plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer"):
-            install.step_check(FakeGitHub(**ready, org_plan="team"), self.folder, self.out)
-        # Only owners see the plan: said, not refused.
-        install.step_check(FakeGitHub(**ready, org_plan=None), self.folder, self.out)
-        self.assertIn("acme: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.", self.printed)
+        if plan == "team":
+            given.update(files={(r, WORKFLOW): ("    with:\n      role: x\n      approval: pull-request\n", "sha") for r in REPOS.values()},
+                         environments={r: TEAM_ENVIRONMENT for r in REPOS.values()},
+                         environment_variables={(r, role, "MLZ_APPROVAL"): "pull-request" for role, r in REPOS.items()})
+        return {**given, **more}
+
+    def test_the_plan_is_enterprise_or_team_and_team_takes_no_reviewers(self):
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.github_plan(bootstrap), "enterprise")  # the default: an existing bootstrap.yaml is Enterprise's
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: business\n"))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not 'business'"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        # On Team nobody would wait for a reviewer: the setting is refused, by every step, with why.
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: team\n"))
+        with self.assertRaisesRegex(ConfigError, "github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a "
+                                                 "private repo only on Enterprise, so on Team nobody would wait for them"):
+            install.step_check(FakeGitHub(**self.ready()), self.folder, self.out)
+        self.team()
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.github_plan(bootstrap), "team")
+
+    def test_check_compares_the_organization_s_plan_with_the_setting(self):
+        # Enterprise's way on a Team organization leaves every apply without a gate: refused.
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub Team, but bootstrap.yaml's github.plan says enterprise. GitHub allows a reviewer "
+                                                 "on an environment in a private repo only on Enterprise, so no apply would wait for anyone"):
+            install.step_check(FakeGitHub(**self.ready(), org_plan="team"), self.folder, self.out)
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's free plan. MLZ needs GitHub Team or Enterprise"):
+            install.step_check(FakeGitHub(**self.ready(), org_plan="free"), self.folder, self.out)
+        # Not shown to this sign-in: said, not refused.
+        install.step_check(FakeGitHub(**self.ready(), org_plan=None), self.folder, self.out)
+        self.assertIn("acme: GitHub did not show its plan to this sign-in (it shows it to an owner, and to a sign-in with the admin:org scope), "
+                      "so it is not checked here; bootstrap.yaml says enterprise.", self.printed)
+        self.team()
+        self.printed.clear()
+        install.step_check(FakeGitHub(**self.ready("team"), org_plan="team"), self.folder, self.out)
+        self.assertEqual(self.printed[1], "acme: on GitHub Team, so each apply is approved on its pull request")
+        self.assertIn("acme/mlz-platform: its pipeline and its environment platform are GitHub Team's: no reviewer, each apply approved on its "
+                      "pull request, from main only", self.printed)
+        # Team's way on an Enterprise organization works, and is how it is proved: allowed, and said.
+        self.printed.clear()
+        install.step_check(FakeGitHub(**self.ready("team")), self.folder, self.out)
+        self.assertEqual(self.printed[1], "acme: on GitHub Enterprise, with bootstrap.yaml's github.plan: team, so each apply is approved on its "
+                                          "pull request and no environment waits for a reviewer. Set github.plan: enterprise for the reviewer.")
+
+    def test_check_compares_each_pipeline_and_environment_with_the_plan_both_ways(self):
+        def found(plan="enterprise", **change):
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(FakeGitHub(**self.ready(plan, **change)), self.folder, self.out)
+            return str(caught.exception)
+        team_pipeline = {(r, WORKFLOW): ("      approval: pull-request\n", "sha") for r in REPOS.values()}
+        # Enterprise: a pipeline in Team's way, an environment without its reviewer or with Team's variable, or open to any branch.
+        self.assertIn("acme/mlz-governance: its pipeline (.github/workflows/mlz.yml) passes approval: pull-request, but bootstrap.yaml's "
+                      "github.plan is enterprise, whose approval is environment. mlz install repos offers the change", found(files=team_pipeline))
+        self.assertIn("acme/mlz-platform: its environment platform has no reviewer, so an apply there waits for nobody",
+                      found(environments={**{r: ENTERPRISE_ENVIRONMENT for r in REPOS.values()}, "acme/mlz-platform": TEAM_ENVIRONMENT}))
+        self.assertIn("acme/mlz-vending: its environment vending has the variable MLZ_APPROVAL, left from GitHub Team's way, so every apply "
+                      "there refuses", found(environment_variables={("acme/mlz-vending", "vending", "MLZ_APPROVAL"): "pull-request"}))
+        anywhere = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": None}
+        self.assertIn("acme/mlz-vending: its environment vending is not limited to main, so a run on another branch could apply. GitHub has "
+                      "branch policies on an environment in a private repo on Team and Enterprise",
+                      found(environments={r: anywhere for r in REPOS.values()}))
+        # Before the bootstrap there is no environment: said, not refused.
+        install.step_check(FakeGitHub(**self.ready(environments={})), self.folder, self.out)
+        self.assertIn("acme/mlz-governance: no environment governance yet; mlz install bootstrap makes it", self.printed)
+        # Team: a pipeline still in Enterprise's way, a reviewer still there, the variable missing.
+        self.team()
+        self.assertIn("acme/mlz-vending: its pipeline (.github/workflows/mlz.yml) passes approval: environment, but bootstrap.yaml's "
+                      "github.plan is team, whose approval is pull-request", found("team", files={}))
+        self.assertIn("acme/mlz-governance: its environment governance still has a reviewer, so the switch to GitHub Team's way is not "
+                      "finished. mlz install bootstrap removes it, once every repo's pipeline passes approval: pull-request",
+                      found("team", environments={r: ENTERPRISE_ENVIRONMENT for r in REPOS.values()}))
+        self.assertIn("acme/mlz-platform: its environment platform has no variable MLZ_APPROVAL: pull-request, which makes an apply refuse "
+                      "whose pipeline still expects a reviewer", found("team", environment_variables={}))
 
     def test_check_lists_every_missing_piece(self):
         github = FakeGitHub(existing=["acme/mlz-governance", "acme/mlz-platform"],
@@ -1564,6 +1659,32 @@ class InstallTest(unittest.TestCase):
         github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "network_configuration_id": "CONFIG"}])
         with self.assertRaisesRegex(ConfigError, "runner group mlz is for GitHub-hosted runners"):
             self.run_self_hosted(github, SelfHostedAzure(), key)
+
+    def test_a_group_github_did_not_limit_to_role_yml_is_said_on_team_and_refused_on_enterprise(self):
+        class Unlimited(RunnersGitHub):
+            """An organization where GitHub does not keep a runner group's limit to selected workflows."""
+            def create_runner_group(self, org, body):
+                return super().create_runner_group(org, {**body, "restricted_to_workflows": False, "selected_workflows": []})
+
+            def update_runner_group(self, org, group, body):
+                super().update_runner_group(org, group, {**body, "restricted_to_workflows": False, "selected_workflows": []})
+        role = mirror.workflow(CORE_COPY, install.release())
+        # On Team: said, and the step goes on, since pipeline-files keeps any other workflow out of the three repos.
+        made = install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out, "team")
+        self.assertEqual(made["id"], 7)
+        self.assertIn(f"runners: acme's runner group mlz is not limited to {role}: GitHub did not keep its limit to selected workflows. GitHub "
+                      "documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the three repos; the push "
+                      "ruleset pipeline-files, which only the bypass team may pass, is what keeps any other workflow out of them", "\n".join(self.printed))
+        # On Enterprise it holds, so a group without it stops the step, for a group made now and for one that was there.
+        with self.assertRaisesRegex(ConfigError, "GitHub did not keep its limit to selected workflows, which GitHub Enterprise allows"):
+            install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out)
+        widened = Unlimited(groups=[{"name": "mlz", "id": 7, "visibility": "all", "restricted_to_workflows": False}])
+        with self.assertRaisesRegex(ConfigError, "Runner groups, mlz, Workflow access"):
+            install.self_hosted_group(widened, "acme", REPOS, CORE_COPY, self.out)
+        # Where GitHub keeps it, nothing more is said.
+        self.printed.clear()
+        install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, "team")
+        self.assertEqual(self.printed, [f"runners: runner group mlz made, for the three repos and {role} only"])
 
     def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
         self.self_hosted()
