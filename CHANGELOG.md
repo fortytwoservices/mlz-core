@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.1](https://github.com/fortytwoservices/mlz-core/compare/v0.16.0...v0.16.1) (2026-11-23)
+
+
+### Bug Fixes
+
+* **governance:** say that the top group's name and place change only through mlz install bootstrap ([c38653d](https://github.com/fortytwoservices/mlz-core/commit/c38653de77c811120007f963b0f1c9fd4f44bee8))
+
 ## [0.16.0](https://github.com/fortytwoservices/mlz-core/compare/v0.15.0...v0.16.0) (2026-11-23)
 
 
