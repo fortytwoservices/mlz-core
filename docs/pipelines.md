@@ -202,9 +202,11 @@ showed, change for change and value for value (`tools/ci/approved.py`). Nothing 
   plan reads "back to that commit", the same changes as the plan once approved, and would undo what later runs applied.
   A first attempt is always in order, since runs on `main` queue;
 - no pull request made the commit (a push to `main`, or a manual run of a commit no pull request made);
-- the pull request's last run did not finish with success, or was run again after the merge;
-- that run's plans are not marked as the pull request's own: another pull request's run on the same commit, into
-  another branch, has plans of its own;
+- the pull request's last run with plans marked as its own did not finish with success, or was run again after the merge,
+  or there is none. Each plan job of a Team pull request's run marks its plans with the pull request's number. On the
+  same commit, a run without plans (it planned nothing, or stopped before) and a run with another pull request's (into
+  another branch) are passed over, and the one before them counts. Such a newer run of its own leaves the required
+  `planned` failed, so the pull request could not have merged on it;
 - a stack's plan on `main` differs from the one the pull request's run showed: Azure or the state changed since, or an
   apply failed half way.
 
@@ -224,8 +226,10 @@ none: it plans its one stack whole on every pull request, so any pull request wi
 - **Contracts:** a code owner approves each contract pull request, like any other change. `_generated/` has the
   platform team as its code owner on Team, and `merge` does not run there.
 - **The bypass team** may still merge a pull request without a code owner's approval, which on Team skips the only
-  person. Its merge applies what the pull request's run showed. The run's page says who merged it with the bypass, and
-  so does one comment on the pull request. GitHub records each bypass under the repo's Insights, Rules.
+  person. Its merge applies what the pull request's run showed. When GitHub's record of the past day shows the bypass,
+  the run's page names who used it, and so does one comment on the pull request, on the run's first attempt. Both are
+  best effort: a failed read or comment never holds up the apply, so a run without the note proves no approval. GitHub's
+  own record, which is complete, is under the repo's Insights, Rules.
 
 ### Workload repos
 
@@ -308,13 +312,21 @@ the file, from `bootstrap.yaml`'s `platform_team`:
 /_generated/
 ```
 
-On GitHub Team, `_generated/` has the platform team as its code owner too (`/_generated/  @acme/platform`), so a person
+That is GitHub Enterprise's file. On GitHub Team, `_generated/` has the platform team as its code owner too, so a person
 approves each contract pull request, which no longer merges itself ([Approval on GitHub Team](#contracts-and-the-bypass-team);
-[what Team gives up](bootstrap.md#what-team-gives-up), [switching plans](bootstrap.md#switching-plans)).
+[what Team gives up](bootstrap.md#what-team-gives-up), [switching plans](bootstrap.md#switching-plans)). There the
+installer writes:
+
+```
+*             @acme/platform
+/_generated/  @acme/platform
+```
 
 - **Nothing else goes in the file** (decision D8, 19 November).
   - Every run's check reads it offline (`mlz check`, which `./mlz check` runs on a person's checkout too).
   - The check fails on any other rule and names it. Handing a folder to another team is not supported.
+  - `/_generated/` may take either form; in the governance repo, whose `bootstrap.yaml` names the plan, it must be the
+    form that plan writes: no owner on Enterprise, the platform team on Team.
   - In the governance repo, whose `bootstrap.yaml` names the platform team, the owner must be that team.
 - **The owner is a GitHub team** of the customer's organization, visible, with write access to the repo, which
   `mlz install repos` gives it. GitHub skips a line naming a team that does not exist, is secret or cannot write,
