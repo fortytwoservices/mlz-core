@@ -812,10 +812,18 @@ class InstallTest(unittest.TestCase):
                                                                     {"actor_id": 5, "actor_type": "Integration", "bypass_mode": "always"}]}
         self.assertIn("its ruleset generated-files also lets the platform team, the App with ID 5 change _generated/; only the MLZ App and "
                       "acme/mlz-admins should", check(more))
-        # One named file only: not the whole folder.
+        # One named file only, or every file but some: not the whole folder.
         one_file = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/governance.yaml"]}}]}
-        self.assertIn("no active push ruleset refuses every change (not _generated/ip-plan.yaml, _generated/zz-mlz-probe.yaml, "
-                      "_generated/zz-mlz-probe/x.yaml) under _generated/", check(one_file))
+        self.assertIn("no active push ruleset refuses every change (not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, "
+                      "_generated/ip-plan.yaml, _generated/names.yaml, _generated/zz-mlz-probe.yaml, _generated/zz-mlz-probe/x.yaml) under _generated/",
+                      check(one_file))
+        some = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [
+            "_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe.yaml", "_generated/zz-mlz-probe/**/*"]}}]}
+        self.assertIn("(not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, _generated/names.yaml) under _generated/", check(some))
+        # A second rule on one file there, beside the right one: it too must let the App through, or the allocator's commits stop.
+        names_only = {**install.push_ruleset(99), "name": "names-file", "bypass_actors": guard["bypass_actors"][1:],
+                      "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/names.yaml"]}}]}
+        self.assertIn("its ruleset names-file refuses changes under _generated/, and the MLZ App acme-mlz may not bypass it", check(guard, names_only))
         # The App let past pipeline-files too reaches .github/: said there.
         both = {**install.push_ruleset(TEAM_IDS["mlz-admins"]), "name": "both",
                 "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*", "_generated/**/*"]}}],

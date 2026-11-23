@@ -46,7 +46,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, mirror, names, naming, owners, platform, vending
+from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -642,8 +642,9 @@ def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str
     return found
 
 
-# Paths under _generated/ a guard must refuse: two files the pipelines write, and names nobody would list one by one.
-GENERATED_PROBES = ("_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe.yaml", "_generated/zz-mlz-probe/x.yaml")
+# Paths under _generated/ a guard must refuse: every file written there, so that a rule on one of them alone counts as a
+# guard whose bypass must let the App through, and names nobody would list one by one.
+GENERATED_PROBES = (*(f"_generated/{name}" for name in stacks.WRITERS), "_generated/zz-mlz-probe.yaml", "_generated/zz-mlz-probe/x.yaml")
 
 
 def lets_through(actors: list[dict], kind: str, actor_id) -> bool:
