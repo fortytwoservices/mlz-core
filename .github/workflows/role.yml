@@ -453,6 +453,13 @@ jobs:
           token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
+      # GitHub Team: no environment waits for a reviewer, so nothing may apply until mlz-core's gate is in place.
+      - name: Match the plans with their pull request's
+        if: inputs.approval == 'pull-request'
+        run: |
+          echo "::error::This mlz-core release has no gate for GitHub Team yet, so nothing is applied. Move to the release that has it."
+          exit 1
+
       # With something to apply, the run waits for a reviewer, and every later run on main behind it: changed.py says
       # why on the run's page, and on the merged pull request when a person opened it (finding 11).
       - id: changed

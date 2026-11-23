@@ -43,13 +43,30 @@ def top_level(expression: str) -> str:
     return "".join(kept)
 
 
+def conjuncts(expression: str) -> list[str]:
+    """The expression's parts joined by && at its top level: never inside parentheses or a quoted string."""
+    parts, depth, quoted, start, index = [], 0, False, 0, 0
+    while index < len(expression):
+        char = expression[index]
+        if char == "'":
+            quoted = not quoted
+        elif not quoted and char in "()":
+            depth += 1 if char == "(" else -1
+        elif not quoted and depth == 0 and expression.startswith("&&", index):
+            parts.append(expression[start:index].strip())
+            start = index = index + 2
+            continue
+        index += 1
+    return parts + [expression[start:].strip()]
+
+
 def team_only(condition) -> bool:
     """Whether an if holds only in Team mode: TEAM is one of its conjuncts, with no || at its top level."""
     if not isinstance(condition, str):
         return False
     text = condition.strip()
     text = text[3:-2].strip() if text.startswith("${{") and text.endswith("}}") else text
-    return "||" not in top_level(text) and TEAM in [part.strip() for part in text.split("&&")]
+    return "||" not in top_level(text) and TEAM in conjuncts(text)
 
 
 def step_key(step: dict) -> list:
@@ -108,6 +125,13 @@ class TeamOnlyTest(unittest.TestCase):
         self.assertFalse(team_only("inputs.approval != 'pull-request' && always()"))
         self.assertFalse(team_only("inputs.approval == 'pull-request-x'"))
         self.assertFalse(team_only(None))
+        # Inside a group, negated or not, it does not bind the whole.
+        self.assertFalse(team_only("!(github.event_name == 'push' && inputs.approval == 'pull-request' && success())"))
+        self.assertFalse(team_only("(inputs.approval == 'pull-request' && always()) || github.event_name == 'push'"))
+        self.assertFalse(team_only("github.ref == 'a && inputs.approval == 'pull-request''"))
+
+    def test_conjuncts_split_only_at_the_top(self):
+        self.assertEqual(conjuncts("a && (b && c) && !(d && e) && 'x && y'"), ["a", "(b && c)", "!(d && e)", "'x && y'"])
 
 
 class EnterpriseGuardTest(unittest.TestCase):
@@ -217,6 +241,19 @@ class StampTest(unittest.TestCase):
 
 
 class TeamJobsTest(unittest.TestCase):
+    def test_a_role_apply_is_refused_on_team_until_the_gate_is_built(self):
+        steps = workflow("role.yml")["jobs"]["changed"]["steps"]
+        names = [item.get("name") or item.get("id") for item in steps]
+        refusal = steps[names.index("Match the plans with their pull request's")]
+        self.assertLess(names.index("Match the plans with their pull request's"), names.index("changed"))
+        self.assertTrue(team_only(refusal["if"]))
+        done = run_step(refusal["run"], {})
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("::error::This mlz-core release has no gate for GitHub Team yet", done.stdout)
+        # apply and publish follow only a changed job that succeeded.
+        role = workflow("role.yml")["jobs"]
+        self.assertIn("needs.changed.result == 'success'", role["apply"]["if"])
+
     def test_contracts_do_not_merge_themselves_on_team(self):
         merge = workflow("role.yml")["jobs"]["merge"]["if"]
         self.assertIn("inputs.approval != 'pull-request'", [part.strip() for part in merge.split("&&")])
