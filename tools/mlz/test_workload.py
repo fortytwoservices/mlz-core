@@ -654,6 +654,24 @@ class TeamTest(SyncTest):
         self.assertNotIn("actions:", workload.caller(spaced, "enterprise"))
         unterminated = starter.rstrip("\n")
         self.assertEqual(workload.caller(unterminated, "team").count("approval:"), 1)
+        # An unindented comment between the permissions' keys: an actions key below it is still taken out.
+        commented = starter.replace("  pull-requests: write\n", "  pull-requests: write\n# Team needs one more:\n  actions: read\n")
+        self.assertEqual(workload.caller(commented, "team").count("actions:"), 1)
+        self.assertNotIn("actions:", workload.caller(commented, "enterprise"))
+        # Four spaces per level: with: under the job at uses:'s indentation, approval under it, actions at the keys'.
+        wide = re.sub(r"(?m)^(  +)", lambda m: m.group(1) * 2, starter)
+        team = workload.caller(wide, "team")
+        self.assertIn("        uses: ", team)
+        self.assertRegex(team, r"\n        uses: [^\n]+\n        with:\n            approval: pull-request ")
+        self.assertIn("\n    actions: read ", team)
+        self.assertEqual(workload.caller(team, "enterprise"), wide)
+        # permissions: after jobs:, which YAML allows: actions still lands in it, after the lines added above it.
+        block = re.search(r"(?ms)^permissions:\n(?:[ \t]+[^\n]*\n)*", starter).group(0)
+        late = starter.replace(block, "") + "\n" + block
+        team = workload.caller(late, "team")
+        self.assertRegex(team, r"\npermissions:\n(?:  [^\n]+\n)*  actions: read ")
+        self.assertRegex(team, r"\n    uses: [^\n]+\n    with:\n      approval: pull-request ")
+        self.assertEqual(workload.caller(team, "enterprise"), late)
 
     def test_an_upgrade_keeps_the_repo_s_plan(self):
         team_pipeline = workload.caller(at(old_starter()[workload.WORKFLOW], OLD), "team")

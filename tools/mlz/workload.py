@@ -62,9 +62,9 @@ def caller(workflow: str, plan: str) -> str:
     eol = "\r\n" if "\r\n" in workflow else "\n"
     lines = workflow.splitlines(keepends=True)
     permissions = next((n for n, line in enumerate(lines) if re.match(r"^permissions:[ \t]*(#.*)?\r?$", line.rstrip("\n"))), None)
-    if permissions is not None:  # its keys: the indented lines below it, blank lines between them included
+    if permissions is not None:  # its keys: the indented lines below it, blank and comment lines between them included
         end = permissions + 1
-        while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
+        while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip() or lines[end].lstrip().startswith("#")):
             end += 1
         lines[permissions + 1:end] = [line for line in lines[permissions + 1:end] if not re.match(r"^[ \t]+(['\"]?)actions\1[ \t]*:", line)]
     found = _with([line.rstrip("\r\n") for line in lines])
@@ -83,16 +83,27 @@ def caller(workflow: str, plan: str) -> str:
     if not permissions or not call:
         raise ConfigError(f"{WORKFLOW} is not mlz-core's workload pipeline as its starter has it (a permissions: block, the job that calls "
                           "workload.yml), so GitHub Team's lines cannot be written into it.")
-    found = _with([line.rstrip("\r\n") for line in text.splitlines(keepends=True)])
-    if found:  # a with: of the repo's own: the approval goes into it
-        at = sum(len(line) for line in text.splitlines(keepends=True)[:found[0] + 1])
-        text = text[:at] + TEAM_APPROVAL.replace("\n", eol) + text[at:]
+    # Each line at the indentation its mapping has in this file: the uses: line's for with:, the inputs' for approval,
+    # the permissions' keys' for actions (the starter's two and four spaces otherwise).
+    uses_indent = re.match(r"[ \t]*", text[text.rfind("\n", 0, call.start()) + 1:])[0]
+    keys = re.findall(r"^([ \t]+)\S", permissions.group(0), re.M)
+    step = keys[0] if keys else "  "  # the file's own step, as its permissions' keys are indented
+    lines = text.splitlines(keepends=True)
+    found = _with([line.rstrip("\r\n") for line in lines])
+    if found:  # a with: of the repo's own: the approval goes into it, at its inputs' indentation
+        start, end, _ = found
+        inputs = [line for line in lines[start + 1:end] if line.strip() and not line.lstrip().startswith("#")]
+        indent = re.match(r"[ \t]*", inputs[0])[0] if inputs else re.match(r"[ \t]*", lines[start])[0] + step
+        at = sum(len(line) for line in lines[:start + 1])
+        text = text[:at] + indent + TEAM_APPROVAL.strip() + eol + text[at:]
     else:
         if "\n" not in text[call.end():]:  # the call is the file's last line, without its line ending
             text += eol
         at = text.index("\n", call.end()) + 1
-        text = text[:at] + "    with:" + eol + TEAM_APPROVAL.replace("\n", eol) + text[at:]
-    return text[:permissions.end()] + TEAM_PERMISSION.replace("\n", eol) + text[permissions.end():]
+        text = text[:at] + uses_indent + "with:" + eol + uses_indent + step + TEAM_APPROVAL.strip() + eol + text[at:]
+    # Found again in the text as it is now: permissions: may come after jobs:, below the lines just added.
+    permissions = re.search(r"^permissions:[ \t]*(#[^\n]*)?\r?\n(?:[ \t]+[^\n]*\n)*", text, re.M)
+    return text[:permissions.end()] + step + TEAM_PERMISSION.strip() + eol + text[permissions.end():]
 
 
 def plan_wanted(config: dict) -> str:
