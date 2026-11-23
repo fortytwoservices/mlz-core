@@ -375,6 +375,19 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(github.writes, [])
         self.assertIn("already open", printed)
 
+    def test_an_open_upgrade_from_before_a_switch_of_plans_is_made_again(self):
+        from mlz import upgrade as module
+        # The repo moved to Team's way after its upgrade was opened, Enterprise's way: the branch is made again.
+        github = FakeGitHub(module.caller(caller("governance", "v0.1.6"), "team"), {"v0.1.6": "", "v0.1.7": ""},
+                            open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.7")] = ((STARTERS.parent / ".github/workflows/role.yml").read_text(), "sha")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
+        url, printed = self.run_upgrade(github)
+        written = [w for w in github.writes if w[0] == "files"]
+        self.assertTrue(written, github.writes)
+        self.assertEqual(module.approval_of(written[0][4][WORKFLOW]), "pull-request")
+        self.assertNotIn("already open", printed)
+
     def test_an_open_upgrade_with_the_wrapper_gets_its_mode_on_a_rerun(self):
         # A run that stopped after the files and before the mode: the rerun finds the pull request and gives the mode.
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": "", "v0.1.8": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3", wrapper_from="v0.1.8")

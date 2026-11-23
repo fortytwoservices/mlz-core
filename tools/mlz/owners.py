@@ -39,6 +39,12 @@ def render(org: str, team: str, plan: str = "enterprise") -> str:
     )
 
 
+def generated_rule(text: str) -> list[str] | None:
+    """The CODEOWNERS rule for /_generated/ (its pattern and owners), the last one as GitHub reads it; None without one."""
+    found = [rule for rule in rules(text) if rule[0] == "/_generated/"]
+    return found[-1] if found else None
+
+
 def generated_owned(text: str) -> bool | None:
     """Whether a CODEOWNERS file gives _generated/ an owner (GitHub Team's), or none (Enterprise's); None when it has no
     rule for _generated/ at all."""

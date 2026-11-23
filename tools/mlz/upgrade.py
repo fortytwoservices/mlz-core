@@ -130,6 +130,11 @@ def approval_of(workflow: str) -> str:
 TEAM_APPROVAL = "approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/bootstrap.md)"
 
 
+def takes_approval(role_yml: str | None) -> bool:
+    """Whether a release's role.yml declares the approval input (the inputs come before its jobs)."""
+    return bool(re.search(r"^[ \t]+approval:", (role_yml or "").split("\njobs:", 1)[0], re.M))
+
+
 def plan_of(workflow: str) -> str:
     """The GitHub plan a caller is written for: team when it passes approval: pull-request, else enterprise."""
     return "team" if approval_of(workflow) == "pull-request" else "enterprise"
@@ -355,8 +360,7 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     if plan_of(current_text) == "team":
         # A repo on GitHub Team passes approval: pull-request, which a release from before Team's gate does not take: its
         # call would fail at the start of every run, so nothing would be checked or applied.
-        role_yml = github.file(source, ".github/workflows/role.yml", target)[0] or ""
-        if not re.search(r"^[ \t]+approval:", role_yml.split("\njobs:", 1)[0], re.M):
+        if not takes_approval(github.file(source, ".github/workflows/role.yml", target)[0]):
             raise ConfigError(f"{repo} is on GitHub Team's way, and {target}'s role.yml has no approval input, so its pipeline could not run "
                               "there. Choose a release with GitHub Team's gate, or move the repo to Enterprise's way first "
                               "(docs/bootstrap.md, Switching plans).")
@@ -412,10 +416,11 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:
-        # The open one, if it already calls this copy of mlz-core at the target; otherwise, as when --core moves a
-        # repo whose upgrade is open already, its branch is made again with this one's files.
+        # The open one, if it already calls this copy of mlz-core at the target, the repo's GitHub plan's way;
+        # otherwise, as when --core moves a repo whose upgrade is open already, or the repo has switched plans since,
+        # its branch is made again with this one's files.
         pinned = github.file(repo, WORKFLOW, branch)[0]
-        if pinned is not None and pin_of(pinned) == (core, target):
+        if pinned is not None and pin_of(pinned) == (core, target) and plan_of(pinned) == plan_of(current_text):
             # Its files are in; their mode too, which a run that stopped after the files did not give.
             if executable:
                 github.make_executable(repo, branch, executable, f"{title}: {', '.join(executable)} executable")

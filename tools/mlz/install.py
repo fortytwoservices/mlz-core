@@ -50,7 +50,7 @@ from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, caller, gitignore_with, matches, pin_of, push_refused, restricts, version
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, caller, takes_approval, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -401,6 +401,12 @@ def offer_plan(github, repo: str, branch: str, org: str, team: str, plan: str, o
     changes = {}
     workflow = github.file(repo, WORKFLOW, branch)[0]
     if workflow is not None and caller(workflow, plan) != workflow:
+        called, ref = pin_of(workflow)
+        if plan == "team" and not takes_approval(github.file(called, ".github/workflows/role.yml", ref)[0]):
+            # Its pipeline would not start with approval: an upgrade comes first.
+            out(f"{repo}: its pipeline calls {called}'s role.yml at {ref}, which has no approval input, so it cannot take GitHub Team's way "
+                "yet; move it to a release with GitHub Team's gate first (mlz upgrade), then run this step again.")
+            return
         changes[WORKFLOW] = caller(workflow, plan)
     # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/).
     location = next((path for path in owners.LOCATIONS if github.file(repo, path, branch)[0] is not None), None)
@@ -657,11 +663,7 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
         if errors is None:
             found.append(f"{repo}: GitHub has not read {owners.PATH} yet; run this step again in a minute.")
         text = next(github.file(repo, location, branch)[0] for location in owners.LOCATIONS if github.file(repo, location, branch)[0] is not None)
-        plan = github_plan(bootstrap)
-        if owners.generated_owned(text) is not None and owners.generated_owned(text) != (plan == "team"):
-            found.append(f"{repo}: its CODEOWNERS gives _generated/ {'an owner' if plan == 'enterprise' else 'no owner'}, but bootstrap.yaml's "
-                         f"github.plan is {plan}, where {'a contract merges itself and its apply waits for the reviewer' if plan == 'enterprise' else 'the platform team owns it, so a person approves each contract'}. "
-                         "mlz install repos offers the change (docs/bootstrap.md, Switching plans).")
+        found += generated_rule_problems(repo, text, org, team, github_plan(bootstrap))
         found += [f"{repo}: {problem}" for problem in owners.problems(errors or [], repo)]
     # The rules GitHub applies to the branch, from every active ruleset, the organization's too: a ruleset that is
     # disabled, only evaluated, or aimed at other branches has none here.
@@ -788,6 +790,38 @@ def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict
 # token, scoped to the repo, reads its runs, the pull request, the rule suites (Administration) and its contents; planned
 # mints one scoped to the repo (runs, pull request, contents) and one with Members alone, for the code owners' team.
 TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
+
+
+def team_gate_problems(github, bootstrap: dict, role: str, repo: str) -> list[str]:
+    """What a role repo lacks of GitHub Team's gate: its pipeline passing approval: pull-request, the platform team owning
+    _generated/, a code owner's review and <role> / planned required on main. Each is what makes the pull request's
+    approval stand in for the environment's reviewer."""
+    org, team = platform_team(bootstrap)
+    branch = github.default_branch(repo)
+    found = []
+    if approval_of(github.file(repo, WORKFLOW, branch)[0] or "") != "pull-request":
+        found.append(f"{repo}: its pipeline does not pass approval: pull-request yet; merge the pull request mlz install repos offers.")
+    codeowners = next((github.file(repo, location, branch)[0] for location in owners.LOCATIONS if github.file(repo, location, branch)[0] is not None), None)
+    found += generated_rule_problems(repo, codeowners or "", org, team, "team")
+    if not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")
+               for rule in github.branch_rules(repo, branch)):
+        found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}; turn it on in its ruleset main.")
+    for check in team_checks(role):
+        found += required_check_problems(github, role, repo, lambda _: None, check)
+    return found
+
+
+def generated_rule_problems(repo: str, codeowners: str, org: str, team: str, plan: str) -> list[str]:
+    """Whether CODEOWNERS' rule for /_generated/ is the plan's: no owner on Enterprise, so a contract merges itself and
+    its apply waits for the reviewer; the platform team on Team, so a person approves each contract."""
+    wanted = ["/_generated/"] if plan == "enterprise" else ["/_generated/", f"@{org}/{team}"]
+    rule = owners.generated_rule(codeowners)
+    if rule is not None and [rule[0], *(owner.lower() for owner in rule[1:])] == [wanted[0], *(owner.lower() for owner in wanted[1:])]:
+        return []
+    meaning = ("no owner, so a contract merges itself and its apply waits for the reviewer" if plan == "enterprise" else
+               f"@{org}/{team} as owner, so a person approves each contract")
+    return [f"{repo}: its CODEOWNERS has {'`' + ' '.join(rule) + '`' if rule else 'no rule for /_generated/'}, but on GitHub {plan.capitalize()} "
+            f"/_generated/ has {meaning}. mlz install repos offers the change (docs/bootstrap.md, Switching plans)."]
 
 
 def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
@@ -965,12 +999,12 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
     if github_plan(bootstrap) == "team":
         # On Team the apply takes the role environments' reviewers away: only once every role repo's pipeline passes
         # approval: pull-request, so that no apply is ever left without a gate (docs/bootstrap.md, Switching plans).
-        behind = [repo for repo in repositories(bootstrap).values() if github.repo(repo) is not None
-                  and approval_of(github.file(repo, WORKFLOW, github.default_branch(repo))[0] or "") != "pull-request"]
+        behind = [problem for role, repo in repositories(bootstrap).items() if github.repo(repo) is not None
+                  for problem in team_gate_problems(github, bootstrap, role, repo)]
         if behind:
-            raise ConfigError(f"bootstrap.yaml's github.plan is team, but the pipeline of {', '.join(behind)} does not pass approval: pull-request "
-                              "yet, and this apply would take its environment's reviewer away: an apply there would then wait for nobody. Merge the "
-                              "pull request mlz install repos offers each of them first (docs/bootstrap.md, Switching plans).")
+            raise ConfigError("\n  ".join(["bootstrap.yaml's github.plan is team, and this apply would take each role environment's reviewer "
+                                             "away; Team's gate must hold first in every role repo, or an apply there would wait for nobody. "
+                                             "Nothing was applied (docs/bootstrap.md, Switching plans):"] + behind))
     # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
     # bootstrap.yaml's runner settings, checked, with their defaults.
     names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"
