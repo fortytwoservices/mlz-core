@@ -173,10 +173,10 @@ def customer() -> dict:
     descriptions = {
         "name": text("The customer's name, for people reading this file."),
         "root_id": text("The prefix of every management group ID and many resource names: 2 to 16 lower-case letters, digits and hyphens.", pattern=pattern(rules.ROOT_ID)),
-        "root_display_name": text("The top management group's display name."),
+        "root_display_name": text("The top management group's display name. mlz install bootstrap applies it, not the pipeline: after a change, run the bootstrap again (docs/bootstrap.md, Running it again); the pipeline's plan shows only the ALZ module's time_sleep."),
         "primary_region": text("Where the platform's own resources go; one of allowed_regions.", pattern=pattern(rules.REGION)),
         "security_contact": text("Defender for Cloud's security alerts go to this email address.", pattern=pattern(rules.EMAIL)),
-        "parent_management_group_id": text("An existing management group to build the tree below, instead of the tenant root."),
+        "parent_management_group_id": text("An existing management group to build the tree below, instead of the tenant root. mlz install bootstrap applies it, not the pipeline: after a change, run the bootstrap again (docs/bootstrap.md, Running it again); the pipeline's plan shows only the ALZ module's time_sleep."),
         "subscriptions": or_empty(mapping({role: guid for role in rules.PLATFORM_ROLES}, "The platform subscriptions, each moved into the management group of the same name. management and connectivity are required.")),
         "allowed_regions": {"description": "Regions resources and resource groups may be created in.", "type": "array", "items": {"type": "string", "pattern": pattern(rules.REGION)}, "minItems": 1},
         "management_groups": or_empty(mapping({group: {"type": ["boolean", "null"]} for group in rules.OPTIONAL_GROUPS}, "The optional management groups: security under Platform, local under Landing Zones.")),
