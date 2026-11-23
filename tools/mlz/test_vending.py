@@ -714,6 +714,10 @@ class VendingTest(unittest.TestCase):
         # Governance's bypass team (bootstrap.yaml's), for the rules of a repo vending makes only.
         configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins"}}, PLATFORM)
         self.assertEqual(configs["payments-dev"]["github"]["bypass_team"], "acme-admins")
+        self.assertNotIn("approval", configs["payments-dev"]["github"])  # Enterprise: as before
+        # On GitHub Team, governance's contract says so, and a repo vending makes is written Team's way.
+        configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins", "plan": "team"}}, PLATFORM)
+        self.assertEqual(configs["payments-dev"]["github"]["approval"], "pull-request")
         self.assertNotIn("bypass_team", configs["payments-prod"]["github"])
         self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
         self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])

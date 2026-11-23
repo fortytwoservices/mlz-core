@@ -221,6 +221,20 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(config["tags"]["required"], ["Owner"])
         self.assertEqual(config["tags"]["inherited"], ["Owner", "CostCenter", "Environment", "Workload"])
 
+    def test_the_contract_carries_the_plan_only_on_team(self):
+        _, out = self.render(self.BASE)
+        bootstrap = self.dir / "bootstrap.yaml"
+        bootstrap.write_text("github:\n  organization: demo-org\n  plan: team\n  bypass_team: demo-admins\n")
+        config = rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
+        self.assertEqual(config["github"], {"bypass_team": "demo-admins", "plan": "team"})
+        # On Enterprise, said or not, the contract is as before: no plan in it.
+        for text in ("github:\n  plan: enterprise\n  bypass_team: demo-admins\n", "github:\n  bypass_team: demo-admins\n"):
+            bootstrap.write_text(text)
+            self.assertEqual(rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)["github"], {"bypass_team": "demo-admins"})
+        bootstrap.write_text("github:\n  plan: business\n")
+        with self.assertRaisesRegex(rl.ConfigError, "github.plan is the organization's GitHub plan, enterprise or team, not 'business'"):
+            rl.render(self.customer(self.BASE), DEFAULTS, out, bootstrap)
+
     def test_the_contract_carries_bootstrap_yaml_s_bypass_team(self):
         # For the workload repos' rules, which vending makes (docs/vending.md); none until bootstrap.yaml names it.
         config, out = self.render(self.BASE)

@@ -19,6 +19,10 @@ locals {
   # The workload repo (docs/vending.md): made here, or an existing one the landing zone names (github.repo), which
   # vending only trusts. A made one is archived, never deleted, when the landing zone is decommissioned.
   repo_made = local.github != null && try(local.github.create, false) && !local.decommission
+  # Who approves the repo's applies: its team, in the apply environment, on GitHub Enterprise; on GitHub Team, which has
+  # no reviewer on an environment in a private repo, its pull requests' approval. From bootstrap.yaml's github.plan,
+  # through governance's contract (tools/mlz/vending.py).
+  team_plan = try(local.github.approval, null) == "pull-request"
   repo_id   = local.github == null ? null : (try(local.github.create, false) ? try(github_repository.workload["made"].repo_id, null) : one([for repo in data.github_rest_api.existing : jsondecode(repo.body).id]))
   # GitHub's immutable subjects, which the customer's organization issues (docs/bootstrap.md): a renamed or
   # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
@@ -98,8 +102,11 @@ resource "github_repository_environment" "apply" {
   # GitHub takes a reviewer that has access already: the team's, above.
   depends_on = [github_team_repository.owner]
 
-  reviewers {
-    teams = [tonumber(data.github_team.owner[0].id)]
+  dynamic "reviewers" {
+    for_each = local.team_plan ? [] : [true]
+    content {
+      teams = [tonumber(data.github_team.owner[0].id)]
+    }
   }
 
   deployment_branch_policy {
@@ -134,6 +141,25 @@ resource "github_actions_variable" "workload" {
   repository    = github_repository.workload["made"].name
   variable_name = each.key
   value         = each.value
+}
+
+# On GitHub Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one
+# refuses (workload.yml): a check against a switch done out of order and against mistakes, not the switch, which is the
+# pipeline's approval input (tools/mlz/workload.py). It names its environment, so it is made after the environment
+# (GitHub refuses a variable on a new repo's environment that does not exist yet, 404) and, on the way to Team, after
+# the reviewer goes, by the time between two calls. Back on Enterprise, create_before_destroy has the reviewer come back
+# before the variable goes (tested with terraform_data, 23 November).
+resource "github_actions_environment_variable" "approval" {
+  count = local.repo_made && local.team_plan ? 1 : 0
+
+  repository    = github_repository.workload["made"].name
+  environment   = github_repository_environment.apply[0].environment
+  variable_name = "MLZ_APPROVAL"
+  value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "github_actions_environment_variable" "deploy_identity" {
