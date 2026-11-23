@@ -209,6 +209,8 @@ def customer() -> dict:
 def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+        "plan": text("The organization's GitHub plan, which decides who approves an apply. enterprise (the default): github.reviewers, in each apply's environment, which GitHub allows in a private repo only on Enterprise. team: the pull request's approval, which then covers the plan that is applied; github.reviewers is refused.",
+                     enum=list(install.GITHUB_PLANS), default="enterprise"),
         "app": text("The slug of the customer's MLZ App, the last part of its page's address (https://github.com/apps/<slug>). With the bypass team, it alone may change _generated/ in the three repos: their push ruleset generated-files refuses it from anyone else.",
                     pattern="^[a-z0-9][a-z0-9-]*$"),
         "repositories": mapping({**{role: text(f"The {role} repo's name.") for role in install.ROLES},
@@ -216,7 +218,7 @@ def bootstrap() -> dict:
                                 "The three repos, by role, and the organization's copy of mlz-core."),
         "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
         "bypass_team": text("The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. It may also merge a pull request without a code owner's approval (pull requests only). Its members can therefore reach the MLZ App's key. Visible, and not the platform team.", pattern="^[a-z0-9][a-z0-9-]*$"),
-        "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
+        "reviewers": {"description": "GitHub users who approve every apply, on GitHub Enterprise (github.plan); refused on Team, where nobody would wait for them.", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "runners": or_empty(mapping({
             "kind": text("self-hosted: Fortytwo's runner image on a scale set in management's network (the default). github-hosted: GitHub's own runners, joined to that network.",
                          enum=list(install.RUNNER_KINDS), default="self-hosted"),
@@ -230,7 +232,7 @@ def bootstrap() -> dict:
         }, "Where the pipelines' Azure jobs run, for mlz install runners (docs/bootstrap.md, private runners).")),
     }
     properties = {
-        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos, platform team, reviewers and runners."),
+        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization and plan, repos, platform team, reviewers and runners."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
         "names": or_empty({"description": "The bootstrap's own name for its resource group, state account or runners' vault, instead of the customer's template's (docs/naming.md): for a storage account or vault name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
     }

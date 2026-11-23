@@ -5,13 +5,22 @@
   "type": "object",
   "properties": {
     "github": {
-      "description": "The customer's GitHub organization, repos, platform team, reviewers and runners.",
+      "description": "The customer's GitHub organization and plan, repos, platform team, reviewers and runners.",
       "type": "object",
       "properties": {
         "organization": {
           "type": "string",
           "description": "The customer's GitHub organization.",
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+        },
+        "plan": {
+          "type": "string",
+          "description": "The organization's GitHub plan, which decides who approves an apply. enterprise (the default): github.reviewers, in each apply's environment, which GitHub allows in a private repo only on Enterprise. team: the pull request's approval, which then covers the plan that is applied; github.reviewers is refused.",
+          "enum": [
+            "enterprise",
+            "team"
+          ],
+          "default": "enterprise"
         },
         "app": {
           "type": "string",
@@ -53,7 +62,7 @@
           "pattern": "^[a-z0-9][a-z0-9-]*$"
         },
         "reviewers": {
-          "description": "GitHub users who approve every apply.",
+          "description": "GitHub users who approve every apply, on GitHub Enterprise (github.plan); refused on Team, where nobody would wait for them.",
           "type": "array",
           "items": {
             "type": "string"

@@ -307,6 +307,20 @@ class GitHub:
         found = self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True)
         return None if found is None else found["value"]
 
+    # Environments (the bootstrap makes one per role repo, named after the role)
+
+    def environment(self, repo: str, name: str) -> dict | None:
+        """The environment with its protection_rules and deployment_branch_policy, or None when there is none."""
+        return self._api(f"repos/{repo}/environments/{name}", missing_ok=True)
+
+    def environment_variable(self, repo: str, environment: str, name: str) -> str | None:
+        found = self._api(f"repos/{repo}/environments/{environment}/variables/{name}", missing_ok=True)
+        return None if found is None else found["value"]
+
+    def branch_policies(self, repo: str, environment: str) -> list[str]:
+        """The branch names or patterns an environment with custom branch policies accepts."""
+        return [p["name"] for p in self._pages(f"repos/{repo}/environments/{environment}/deployment-branch-policies", "branch_policies")]
+
     def set_variable(self, repo: str, name: str, value: str) -> None:
         if self.has_variable(repo, name):
             self._api(f"repos/{repo}/actions/variables/{name}", "PATCH", {"name": name, "value": value})
