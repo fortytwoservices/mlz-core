@@ -2,6 +2,10 @@ locals {
   customer = yamldecode(file(var.customer_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
+  # Who approves an apply (docs/bootstrap.md, GitHub plan): on Enterprise, github.reviewers in each role's environment;
+  # on Team, which allows a reviewer on an environment in a private repo only on Enterprise, the pull request's approval,
+  # which then covers the plan applied. mlz install checks the setting; enterprise unless set.
+  team = try(local.github.plan, "enterprise") == "team"
   # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
   # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
   names = jsondecode(file(var.names_file))
@@ -382,7 +386,7 @@ resource "azapi_resource" "state_operator" {
   }
 }
 
-# GitHub: the repos, the people who approve applies, and the settings the workflows read.
+# GitHub: the repos, the people who approve applies (on Enterprise), and the settings the workflows read.
 
 data "github_organization" "customer" {
   name         = local.github.organization
@@ -395,19 +399,22 @@ data "github_repository" "role" {
 }
 
 data "github_user" "reviewer" {
-  for_each = toset(local.github.reviewers)
+  for_each = local.team ? toset([]) : toset(try(local.github.reviewers, []))
   username = each.key
 }
 
-# The environment each apply runs in: a reviewer approves it, and only main may use it.
+# The environment each apply runs in: only main may use it, and on Enterprise a reviewer approves it.
 resource "github_repository_environment" "apply" {
   for_each = local.roles
 
   repository  = local.github.repositories[each.key]
   environment = each.key
 
-  reviewers {
-    users = [for user in data.github_user.reviewer : tonumber(user.id)]
+  dynamic "reviewers" {
+    for_each = local.team ? [] : [true]
+    content {
+      users = [for user in data.github_user.reviewer : tonumber(user.id)]
+    }
   }
 
   deployment_branch_policy {
@@ -417,8 +424,8 @@ resource "github_repository_environment" "apply" {
 
   lifecycle {
     precondition {
-      condition     = length(local.github.reviewers) > 0
-      error_message = "github.reviewers in bootstrap.yaml is empty: every apply needs someone to approve it."
+      condition     = local.team || length(try(local.github.reviewers, [])) > 0
+      error_message = "github.reviewers in bootstrap.yaml is empty: on GitHub Enterprise every apply needs someone to approve it."
     }
   }
 }
@@ -449,6 +456,25 @@ resource "github_actions_variable" "role" {
   repository    = local.github.repositories[each.value.role]
   variable_name = each.value.name
   value         = each.value.value
+}
+
+# On Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one refuses
+# (role.yml): a check against a switch done out of order and against mistakes, not the switch, which is the caller's
+# approval input. It names its environment, so it is made after the environment (GitHub refuses a variable on an
+# environment that does not exist yet, 404) and, on the way to Team, after the reviewer goes, by the time between two
+# calls; mlz install bootstrap applies that only once every pipeline passes approval: pull-request. Back on Enterprise,
+# create_before_destroy has the reviewer come back before the variable goes (tested with terraform_data, 23 November).
+resource "github_actions_environment_variable" "approval" {
+  for_each = local.team ? local.roles : toset([])
+
+  repository    = local.github.repositories[each.key]
+  environment   = github_repository_environment.apply[each.key].environment
+  variable_name = "MLZ_APPROVAL"
+  value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "github_actions_environment_variable" "apply_identity" {

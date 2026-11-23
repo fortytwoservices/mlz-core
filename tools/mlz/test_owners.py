@@ -51,11 +51,22 @@ class OwnersTest(unittest.TestCase):
         self.assertIn("is not what mlz install repos writes: exactly `* @<org>/<platform team>` and `/_generated/`", found[0])
         self.assertIn("handing a path to another team is gone (decision D8). Remove `/firewall-rules/ @acme/network`.", found[0])
 
-    def test_a_person_two_owners_or_an_owner_for_the_contracts_fails(self):
+    def test_a_person_two_owners_or_another_owner_for_the_contracts_fails(self):
         for text in ("* @someone\n/_generated/\n", "* @acme/platform @acme/other\n/_generated/\n",
-                     "* @acme/platform\n/_generated/ @acme/platform\n", "* @acme/platform\n", "/_generated/\n* @acme/platform\n"):
+                     "* @acme/platform\n/_generated/ @acme/other\n", "* @acme/platform\n", "/_generated/\n* @acme/platform\n"):
             self.owned(text)
             self.assertEqual(len(owners.offline_problems(self.repo)), 1, text)
+
+    def test_the_contracts_have_no_owner_on_enterprise_and_the_platform_team_on_team(self):
+        enterprise, team = owners.render("acme", "platform"), owners.render("acme", "platform", "team")
+        self.assertIn("\n/_generated/\n", enterprise)
+        self.assertIn("\n/_generated/  @acme/platform\n", team)
+        self.assertEqual((owners.generated_owned(enterprise), owners.generated_owned(team), owners.generated_owned("* @acme/platform\n")), (False, True, None))
+        # Either form passes offline, so a switch can change bootstrap.yaml and this file in pull requests of their own;
+        # mlz install check enforces the plan's.
+        for text in (enterprise, team):
+            self.owned(text)
+            self.assertEqual(owners.offline_problems(self.repo, "acme", "platform"), [], text)
 
     def test_in_the_governance_repo_it_must_be_bootstrap_yaml_s_platform_team(self):
         self.owned(owners.render("acme", "platform"))

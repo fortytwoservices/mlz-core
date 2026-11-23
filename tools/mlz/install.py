@@ -50,7 +50,7 @@ from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, caller, takes_approval, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -71,6 +71,12 @@ def required_check(role: str) -> str:
     """The check GitHub knows the role's check job by: the starter workflow's job, named after the role, then
     role.yml's own (as the canary's runs showed, 2026-11-14)."""
     return f"{role} / check"
+
+
+def team_checks(role: str) -> list[str]:
+    """The checks main-checks requires on GitHub Team beside the role's check: role.yml's planned job, which passes once
+    every plan of the pull request finished, so its approval can cover the plan applied (docs/pipelines.md)."""
+    return [f"{role} / planned"]
 
 
 # A branch's run uses the workflow the branch has, with the repo's secrets (the MLZ App's key) and the plan identity's
@@ -149,9 +155,10 @@ def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = Non
     }
 
 
-def checks_ruleset(role: str, app_id: int | None = None, check: str | None = None) -> dict:
-    """The ruleset main-checks: the role's check (or check) passed, on a branch up to date with main, before any merge
-    into main, the bypass team's included. No bypass actor but, in a workload repo, the MLZ App (app_id)."""
+def checks_ruleset(role: str, app_id: int | None = None, check: str | None = None, more: list[str] | None = None) -> dict:
+    """The ruleset main-checks: the role's check (or check) passed, and on GitHub Team the more checks too (team_checks),
+    on a branch up to date with main, before any merge into main, the bypass team's included. No bypass actor but, in a
+    workload repo, the MLZ App (app_id)."""
     return {
         "name": CHECKS_RULESET,
         "target": "branch",
@@ -161,7 +168,8 @@ def checks_ruleset(role: str, app_id: int | None = None, check: str | None = Non
         "rules": [
             {"type": "required_status_checks", "parameters": {
                 "strict_required_status_checks_policy": True,
-                "required_status_checks": [{"context": check or required_check(role), "integration_id": GITHUB_ACTIONS_APP}],
+                "required_status_checks": [{"context": context, "integration_id": GITHUB_ACTIONS_APP}
+                                           for context in [check or required_check(role), *(more or [])]],
             }},
         ],
     }
@@ -351,7 +359,9 @@ def starter_files(role: str, folder: Path) -> dict[str, str]:
     _, bootstrap = settings(folder)
     base = CORE / "starter" / f"mlz-{role}"
     files = {str(p.relative_to(base)): starter_text(p.read_text(), core_repository(bootstrap)) for p in sorted(base.rglob("*")) if p.is_file()}
-    files[owners.PATH] = owners.render(*platform_team(bootstrap))
+    plan = github_plan(bootstrap)
+    files[WORKFLOW] = caller(files[WORKFLOW], plan)
+    files[owners.PATH] = owners.render(*platform_team(bootstrap), plan)
     if role == "governance":
         files.update({name: (folder / name).read_text() for name in ("customer.yaml", "bootstrap.yaml")})
     return files
@@ -378,6 +388,50 @@ def offer_executable(github, repo: str, branch: str, out: Callable[[str], None])
         url = github.create_pull(repo, EXECUTABLE_BRANCH, branch, f"chore: {names} executable",
                                  f"`{names}` came without its mode from an earlier `mlz install repos` that stopped; this makes it executable.\n")
     out(f"{repo}: {names} is not executable; the fix is offered in {url}")
+
+
+PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo to its GitHub plan's way (docs/bootstrap.md, Switching plans)
+
+
+def offer_plan(github, repo: str, branch: str, org: str, team: str, plan: str, out: Callable[[str], None]) -> None:
+    """A repo whose pipeline or code owners are another GitHub plan's than bootstrap.yaml's github.plan is offered the
+    change, as a pull request a code owner approves: on Team its caller passes approval: pull-request and the platform
+    team owns _generated/; on Enterprise neither. Both are under .github/, so whoever runs this must be in the bypass
+    team. Its environment's reviewer is the bootstrap's, which waits for this to be merged (docs/bootstrap.md)."""
+    changes = {}
+    workflow = github.file(repo, WORKFLOW, branch)[0]
+    if workflow is not None and caller(workflow, plan) != workflow:
+        called, ref = pin_of(workflow)
+        if plan == "team" and not takes_approval(github.file(called, ".github/workflows/role.yml", ref)[0]):
+            # Its pipeline would not start with approval: an upgrade comes first.
+            out(f"{repo}: its pipeline calls {called}'s role.yml at {ref}, which has no approval input, so it cannot take GitHub Team's way "
+                "yet; move it to a release with GitHub Team's gate first (mlz upgrade), then run this step again.")
+            return
+        changes[WORKFLOW] = caller(workflow, plan)
+    # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/): the installer's, with the
+    # plan's rule for /_generated/, whenever that rule is not it (another owner, or none, included).
+    location = next((path for path in owners.LOCATIONS if github.file(repo, path, branch)[0] is not None), None)
+    if location and generated_rule_problems(repo, github.file(repo, location, branch)[0], org, team, plan):
+        changes[location] = owners.render(org, team, plan)
+    title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
+    url = github.open_pull(repo, PLAN_BRANCH)
+    # An open switch from an earlier run counts only if its branch holds exactly this plan's files: one for the other plan,
+    # or with a file this plan leaves as main has it, is closed, and offered again when there is anything to offer.
+    if url and any(github.file(repo, path, PLAN_BRANCH)[0] != changes.get(path, github.file(repo, path, branch)[0])
+                   for path in {WORKFLOW, *([location] if location else []), *changes}):
+        github.close_pulls(repo, PLAN_BRANCH, f"Closed by mlz install repos: bootstrap.yaml's github.plan is {plan} now, and this pull request "
+                                              "no longer holds that plan's files.")
+        url = None
+    if not changes:
+        return
+    if not url:
+        refuse_if_pushes_refused(github, repo, changes)
+        github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, branch), changes, title)
+        url = github.create_pull(repo, PLAN_BRANCH, branch, title,
+                                 f"From `mlz install repos`: bootstrap.yaml's `github.plan` is `{plan}`. This moves "
+                                 + " and ".join(f"`{path}`" for path in sorted(changes)) + " to its way. Merge it in the order "
+                                 "docs/bootstrap.md in mlz-core gives (Switching plans), so that an apply never runs without a gate.\n")
+    out(f"{repo}: GitHub {plan.capitalize()}'s way is offered in {url}")
 
 
 def refuse_if_pushes_refused(github, repo: str, paths) -> None:
@@ -478,16 +532,19 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: exists, files left as they are")
             offer_executable(github, repo, branch, out)
+            offer_plan(github, repo, branch, org, team, github_plan(bootstrap), out)
             if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
                 # A repo set up before code owners: the file comes as a pull request, which a person merges.
                 url = github.open_pull(repo, CODE_OWNERS_BRANCH)
                 if not url:
                     refuse_if_pushes_refused(github, repo, [owners.PATH])
+                    plan = github_plan(bootstrap)
                     github.commit_files(repo, CODE_OWNERS_BRANCH, github.reset_branch(repo, CODE_OWNERS_BRANCH, branch),
-                                        {owners.PATH: owners.render(org, team)}, "chore: the platform team as code owner")
+                                        {owners.PATH: owners.render(org, team, plan)}, "chore: the platform team as code owner")
                     url = github.create_pull(repo, CODE_OWNERS_BRANCH, branch, "chore: the platform team as code owner",
-                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` none "
-                                             "(docs/pipelines.md in mlz-core, Code owners).\n")
+                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` "
+                                             + ("none" if plan == "enterprise" else "too, on GitHub Team, so a person approves each contract")
+                                             + " (docs/pipelines.md in mlz-core, Code owners).\n")
                 out(f"{repo}: {owners.PATH} is offered in {url}")
         # A code owner needs write access; one with more (maintain, admin) keeps it.
         if github.team_can_write(org, team, repo):
@@ -520,11 +577,13 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         else:
             out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
                 "and requires a code owner's review (mlz install check says)")
-        if github.add_ruleset(repo, checks_ruleset(role)):
-            out(f"{repo}: ruleset {CHECKS_RULESET} ({required_check(role)} passed on a branch up to date with main, before any merge; nobody bypasses it)")
+        more = team_checks(role) if github_plan(bootstrap) == "team" else []
+        checks = " and ".join([required_check(role), *more])
+        if github.add_ruleset(repo, checks_ruleset(role, more=more)):
+            out(f"{repo}: ruleset {CHECKS_RULESET} ({checks} passed on a branch up to date with main, before any merge; nobody bypasses it)")
         else:
-            out(f"{repo}: has a ruleset named {CHECKS_RULESET} already, left as it is; mlz install check says whether {required_check(role)} "
-                "is required on main")
+            out(f"{repo}: has a ruleset named {CHECKS_RULESET} already, left as it is; mlz install check says whether {checks} "
+                f"{'is' if not more else 'are'} required on main")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
@@ -582,6 +641,8 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         problems += push_ruleset_problems(github, bootstrap, repo, out)
         problems += generated_ruleset_problems(github, bootstrap, repo, mlz_app, out)
         problems += required_check_problems(github, role, repo, out)
+        for check in team_checks(role) if wanted == "team" else []:
+            problems += required_check_problems(github, role, repo, out, check)
         problems += approval_problems(github, role, repo, wanted, out)
     # GitHub shows an App's installations only to the App itself and the organization's owners.
     out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
@@ -608,6 +669,8 @@ def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str],
         errors = github.codeowners_errors(repo, branch)
         if errors is None:
             found.append(f"{repo}: GitHub has not read {owners.PATH} yet; run this step again in a minute.")
+        text = next(github.file(repo, location, branch)[0] for location in owners.LOCATIONS if github.file(repo, location, branch)[0] is not None)
+        found += generated_rule_problems(repo, text, org, team, github_plan(bootstrap))
         found += [f"{repo}: {problem}" for problem in owners.problems(errors or [], repo)]
     # The rules GitHub applies to the branch, from every active ruleset, the organization's too: a ruleset that is
     # disabled, only evaluated, or aimed at other branches has none here.
@@ -736,6 +799,36 @@ def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict
 TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
 
 
+def team_gate_problems(github, bootstrap: dict, role: str, repo: str) -> list[str]:
+    """What a role repo lacks of GitHub Team's gate on main, the branch it deploys from: its pipeline passing approval:
+    pull-request; code owners who decide (the platform team able to write, CODEOWNERS as GitHub reads it, with the
+    platform team owning _generated/, and a code owner's review required); and <role> / planned required. Each is what
+    makes the pull request's approval stand in for the environment's reviewer."""
+    branch = github.default_branch(repo)
+    if branch != "main":
+        return [f"{repo}: its default branch is {branch}, but MLZ deploys from main; rename it to main first."]
+    found = []
+    if approval_of(github.file(repo, WORKFLOW, branch)[0] or "") != "pull-request":
+        found.append(f"{repo}: its pipeline does not pass approval: pull-request yet; merge the pull request mlz install repos offers.")
+    found += code_owner_problems(github, bootstrap, repo, lambda _: None)
+    for check in team_checks(role):
+        found += required_check_problems(github, role, repo, lambda _: None, check)
+    return found
+
+
+def generated_rule_problems(repo: str, codeowners: str, org: str, team: str, plan: str) -> list[str]:
+    """Whether CODEOWNERS' rule for /_generated/ is the plan's: no owner on Enterprise, so a contract merges itself and
+    its apply waits for the reviewer; the platform team on Team, so a person approves each contract."""
+    wanted = ["/_generated/"] if plan == "enterprise" else ["/_generated/", f"@{org}/{team}"]
+    rule = owners.generated_rule(codeowners)
+    if rule is not None and [rule[0], *(owner.lower() for owner in rule[1:])] == [wanted[0], *(owner.lower() for owner in wanted[1:])]:
+        return []
+    meaning = ("no owner, so a contract merges itself and its apply waits for the reviewer" if plan == "enterprise" else
+               f"@{org}/{team} as owner, so a person approves each contract")
+    return [f"{repo}: its CODEOWNERS has {'`' + ' '.join(rule) + '`' if rule else 'no rule for /_generated/'}, but on GitHub {plan.capitalize()} "
+            f"/_generated/ has {meaning}. mlz install repos offers the change (docs/bootstrap.md, Switching plans)."]
+
+
 def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
     """Whether the MLZ App asks for at least read of each permission the Team gate's tokens ask for, as GET /apps/<slug>
     shows it. Whether an owner has accepted them on the installation only the App and the owners see: said."""
@@ -809,11 +902,11 @@ def describe_actor(actor: dict, platform_team: dict | None) -> str:
             "User": f"the user with ID {actor_id}"}.get(kind, f"{kind} {actor_id}")
 
 
-def required_check_problems(github, role: str, repo: str, out: Callable[[str], None]) -> list[str]:
-    """Whether GitHub refuses a merge into the default branch until the pipeline's check has passed, by the rules it
-    enforces there from every active ruleset. Only from GitHub Actions: a check expected from another app never
-    passes, and one from any source can be passed by any token that may write statuses."""
-    branch, check = github.default_branch(repo), required_check(role)
+def required_check_problems(github, role: str, repo: str, out: Callable[[str], None], check: str | None = None) -> list[str]:
+    """Whether GitHub refuses a merge into the default branch until the pipeline's check (or check, one of team_checks)
+    has passed, by the rules it enforces there from every active ruleset. Only from GitHub Actions: a check expected
+    from another app never passes, and one from any source can be passed by any token that may write statuses."""
+    branch, check = github.default_branch(repo), check or required_check(role)
     wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
     # Each rule apart: GitHub applies the strictest of them, so one that is strict about another check keeps every
     # branch up to date too. A ruleset someone may bypass does not bind them (a bypass covers its whole ruleset), so the
@@ -842,6 +935,10 @@ def required_check_problems(github, role: str, repo: str, out: Callable[[str], N
         return [f"{repo}: {check} must pass before a merge into {branch}, but not on a branch up to date with it, so a change checked "
                 f"against an older {branch} can merge; turn on 'Require branches to be up to date before merging' in the ruleset that "
                 f"requires it, {CHECKS_RULESET} (Settings, Rules, Rulesets)."]
+    if check in team_checks(role):
+        return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so on GitHub Team a pull request could merge, approved, "
+                f"before its plans finished, and its approval would cover no plan. Add {check} to its ruleset {CHECKS_RULESET}, from GitHub "
+                "Actions (Settings, Rules, Rulesets); mlz install repos makes a new repo's so (docs/bootstrap.md, Switching plans)."]
     return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so a change the check refuses can still be merged; "
             f"mlz install repos makes the ruleset {CHECKS_RULESET}, without bypass actors, which requires it from GitHub Actions on a "
             f"branch up to date with {branch}."]
@@ -904,6 +1001,15 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
                     ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
     """The bootstrap's plan and apply, for the bootstrap step and the runners step."""
     customer, bootstrap = settings(folder)
+    if github_plan(bootstrap) == "team":
+        # On Team the apply takes the role environments' reviewers away: only once every role repo's pipeline passes
+        # approval: pull-request, so that no apply is ever left without a gate (docs/bootstrap.md, Switching plans).
+        behind = [problem for role, repo in repositories(bootstrap).items() if github.repo(repo) is not None
+                  for problem in team_gate_problems(github, bootstrap, role, repo)]
+        if behind:
+            raise ConfigError("\n  ".join(["bootstrap.yaml's github.plan is team, and this apply would take each role environment's reviewer "
+                                             "away; Team's gate must hold first in every role repo, or an apply there would wait for nobody. "
+                                             "Nothing was applied (docs/bootstrap.md, Switching plans):"] + behind))
     # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
     # bootstrap.yaml's runner settings, checked, with their defaults.
     names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"

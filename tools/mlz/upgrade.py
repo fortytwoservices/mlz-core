@@ -126,6 +126,42 @@ def approval_of(workflow: str) -> str:
     return "environment"
 
 
+# The line a role repo's caller gets on GitHub Team, under its with:, after its role.
+TEAM_APPROVAL = "approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/bootstrap.md)"
+
+
+def takes_approval(role_yml: str | None) -> bool:
+    """Whether a release's role.yml declares the approval input (the inputs come before its jobs)."""
+    return bool(re.search(r"^[ \t]+approval:", (role_yml or "").split("\njobs:", 1)[0], re.M))
+
+
+def plan_of(workflow: str) -> str:
+    """The GitHub plan a caller is written for: team when it passes approval: pull-request, else enterprise."""
+    return "team" if approval_of(workflow) == "pull-request" else "enterprise"
+
+
+def caller(workflow: str, plan: str) -> str:
+    """A role repo's caller (.github/workflows/mlz.yml) written for the plan: on Team it passes approval:
+    pull-request, on Enterprise none, so that an Enterprise caller is the starter's byte for byte. The same text from
+    either plan, so the installer, mlz upgrade and a switch of plans all write it alike. Only the with: of the job that
+    calls role.yml changes; a with: written inline is refused, since that one line would be rewritten whole."""
+    lines = workflow.splitlines(keepends=True)
+    found = _with([line.rstrip("\r\n") for line in lines])  # CRLF too
+    if (found is None or found[2]) and plan == "enterprise" and approval_of(workflow) == "environment":
+        return workflow  # nothing to take out
+    if found is None or found[2]:
+        raise ConfigError(f"{WORKFLOW} has no with: block in the job that calls mlz-core's role.yml, so its approval cannot be set; "
+                          "write it as the starter has it (with: on its own line, role: under it).")
+    start, end, _ = found
+    block = [line for line in lines[start + 1:end] if not re.match(r"^[ \t]+(['\"]?)approval\1[ \t]*:", line)]
+    if plan == "team":
+        at = next((n + 1 for n, line in enumerate(block) if re.match(r"^[ \t]+role:", line)), len(block))
+        indent = re.match(r"^[ \t]*", block[at - 1] if at else lines[start])[0] if at else re.match(r"^[ \t]*", lines[start])[0] + "  "
+        eol = "\r\n" if "\r\n" in workflow else "\n"  # the file's own line ending
+        block[at:at] = [f"{indent}{TEAM_APPROVAL}{eol}"]
+    return "".join(lines[:start + 1] + block + lines[end:])
+
+
 def gitignore_with(current: str | None, starter: str) -> str | None:
     """The repo's .gitignore with the starter's lines it lacks appended, comments included once; None when it has them
     all. Never changes or removes a line the repo has."""
@@ -322,6 +358,13 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         raise ConfigError(f"{target} cannot run from {core}: releases before {mirror.FIRST_RELEASE} read mlz-core's code without a token, "
                           f"so not from a private copy. Choose {mirror.FIRST_RELEASE} or later, or move the repo back onto mlz-core "
                           f"itself with --core {mirror.UPSTREAM}.")
+    if plan_of(current_text) == "team":
+        # A repo on GitHub Team passes approval: pull-request, which a release from before Team's gate does not take: its
+        # call would fail at the start of every run, so nothing would be checked or applied.
+        if not takes_approval(github.file(source, ".github/workflows/role.yml", target)[0]):
+            raise ConfigError(f"{repo} is on GitHub Team's way, and {target}'s role.yml has no approval input, so its pipeline could not run "
+                              "there. Choose a release with GitHub Team's gate, or move the repo to Enterprise's way first "
+                              "(docs/bootstrap.md, Switching plans).")
     if current == target and called == core:
         # A repo on its release already: the copy is still made to hold it, which a tag that never arrived would
         # keep the runner group from admitting.
@@ -343,6 +386,9 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
             continue
         after = None if starter is None else RELEASE_PLEASE_MARKER.sub("", starter).replace(
             f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
+        if after is not None and path == WORKFLOW:
+            # The repo's GitHub plan stays as its caller has it: an upgrade never switches it (mlz install repos does).
+            after = caller(after, plan_of(current_text))
         if after != before[path]:
             changes[path] = after
     # The target's .gitignore lines, appended where missing; going back to a release without them leaves them.
@@ -371,10 +417,11 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
     branch = f"mlz/upgrade-{target}"
     existing = github.open_pull(repo, branch)
     if existing:
-        # The open one, if it already calls this copy of mlz-core at the target; otherwise, as when --core moves a
-        # repo whose upgrade is open already, its branch is made again with this one's files.
+        # The open one, if it already calls this copy of mlz-core at the target, the repo's GitHub plan's way;
+        # otherwise, as when --core moves a repo whose upgrade is open already, or the repo has switched plans since,
+        # its branch is made again with this one's files.
         pinned = github.file(repo, WORKFLOW, branch)[0]
-        if pinned is not None and pin_of(pinned) == (core, target):
+        if pinned is not None and pin_of(pinned) == (core, target) and plan_of(pinned) == plan_of(current_text):
             # Its files are in; their mode too, which a run that stopped after the files did not give.
             if executable:
                 github.make_executable(repo, branch, executable, f"{title}: {', '.join(executable)} executable")
