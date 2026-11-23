@@ -17,6 +17,7 @@ from mlz.files import read_yaml
 from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, main, own_folder
 from mlz import files, naming, vending
+from mlz.workload import mlz_keys, starter as workload_starter
 from mlz.contract import render
 from mlz.firewall import vending_contract
 from mlz.vending import IP_PLAN, NAMES, agreement, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
@@ -40,7 +41,7 @@ PLATFORM = {
     },
 }
 
-DEFAULTS = "location: norwayeast\nbudget:\n  monthly: 500\n  contacts: [platform@demo.example]\n"
+DEFAULTS = "region: norwayeast\nbudget:\n  monthly: 500\n  contacts: [platform@demo.example]\n"
 WORKLOAD = "short_name: pay\nowner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
 PROD = "subscription: 33333333-3333-3333-3333-333333333333\nbudget:\n  monthly: 2000\n"
 DEV = "subscription: 44444444-4444-4444-4444-444444444444\n"
@@ -647,14 +648,31 @@ class VendingTest(unittest.TestCase):
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("landing-zones/payments/api-prod and landing-zones/payments-api/prod are both the landing zone payments-api-prod", message)
 
+    def test_location_is_refused_with_the_key_it_became(self):
+        # Before v0.15.0 a landing zone said location:; now region:, as every other region setting does. Refused where it is
+        # written, in any layer, with the new key named, and not listed again as an unknown setting.
+        self.allocate()
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS.replace("region: norwayeast", "location: norwayeast"))
+        message = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("defaults/landing-zone-defaults: location is called region now: write region: norwayeast (docs/vending.md).", message)
+        self.assertIn("region is required", message)
+        self.assertNotIn("'location' is not a landing zone setting", message)
+        # The IP allocator, which mlz check runs first, says the same, not that the landing zone has no region.
+        allocated = self.problems(allocate, PLATFORM)
+        self.assertIn("defaults/landing-zone-defaults: location is called region now: write region: norwayeast", allocated)
+        self.assertNotIn("has no hub", allocated)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/prod.yaml", PROD + "location: swedencentral\n")
+        self.assertIn("landing-zones/payments/prod: location is called region now: write region: swedencentral", self.problems(build, GOVERNANCE, PLATFORM))
+
     def test_every_problem_is_listed(self):
         self.allocate()
-        self.write("landing-zones/payments/prod.yaml", "subscription: 11111111-1111-1111-1111-111111111111\nlocation: westeurope\narchetyp: corp\nnetwork:\n  address_space: 10.0.0.0/24\n")
+        self.write("landing-zones/payments/prod.yaml", "subscription: 11111111-1111-1111-1111-111111111111\nregion: westeurope\narchetyp: corp\nnetwork:\n  address_space: 10.0.0.0/24\n")
         self.write("landing-zones/payments/dev.yaml", "subscription: not-a-sub\nbudget:\n  montly: 500\n")
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("'archetyp' is not a landing zone setting", message)
         self.assertIn("subscription 11111111-1111-1111-1111-111111111111 is a platform subscription", message)
-        self.assertIn("location westeurope is not one of the allowed regions", message)
+        self.assertIn("region westeurope is not one of the allowed regions", message)
         self.assertIn("network.address_space is written by the IP allocator", message)
         self.assertIn("payments/dev: subscription must be a subscription ID", message)
         self.assertIn("payments/dev: budget.montly is not a setting; use contacts, monthly", message)
@@ -690,14 +708,14 @@ class VendingTest(unittest.TestCase):
 
     def test_settings_of_the_wrong_kind_are_reported_not_crashed_on(self):
         self.allocate()
-        self.write("landing-zones/payments/prod.yaml", PROD.split("budget")[0] + "budget: 500\nnetwork: big\ntags: [a]\ngithub: payments\nlocation: [norwayeast]\n")
+        self.write("landing-zones/payments/prod.yaml", PROD.split("budget")[0] + "budget: 500\nnetwork: big\ntags: [a]\ngithub: payments\nregion: [norwayeast]\n")
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("budget is a group of settings (contacts, monthly), not 500", message)
         self.assertIn("network is a group of settings (size, subnets), not 'big'", message)
         self.assertIn("tags maps each extra tag to its value", message)
         self.assertIn("github is a group of settings (create, organization, repo, team), not 'payments'", message)
-        self.assertIn("location is one value", message)
-        self.assertIn("location ['norwayeast'] has no hub", self.problems(allocate, PLATFORM))
+        self.assertIn("region is one value", message)
+        self.assertIn("region ['norwayeast'] has no hub", self.problems(allocate, PLATFORM))
 
     def test_a_repo_needs_an_organization(self):
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n")
@@ -732,9 +750,12 @@ class VendingTest(unittest.TestCase):
         # the landing zone's network by names, its tags and the groups vending owns (docs/vending.md).
         prod, names = configs["payments-prod"], configs["payments-prod"]["names"]
         workload = prod["workload"]
-        self.assertEqual({k: workload[k] for k in ("landing_zone", "location", "org", "app", "env", "region", "template", "templates")}, {
-            "landing_zone": "payments-prod", "location": "norwayeast",
-            "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
+        # The keys the workload starter's variable "mlz" declares, no more and no fewer: Terraform requires each one.
+        self.assertEqual(set(workload), mlz_keys(workload_starter()["variables.tf"]))
+        self.assertEqual(prod["location"], "norwayeast")  # Azure's word, in the config vending/terraform reads
+        self.assertEqual({k: workload[k] for k in ("landing_zone", "region", "org", "app", "env", "region_code", "template", "templates")}, {
+            "landing_zone": "payments-prod", "region": "norwayeast",
+            "org": "dmo", "app": "pay", "env": "pd", "region_code": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
             "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
         })
         self.assertEqual(workload["network"], {
@@ -825,7 +846,7 @@ class VendingTest(unittest.TestCase):
         build(self.repo, GOVERNANCE, PLATFORM)
 
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
-        self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
+        self.write("defaults/landing-zone-defaults.yaml", "region: norwayeast\nbudget:\n  monthly: 500\n")
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["budget"]["contacts"], ["payments@demo.example"])
 

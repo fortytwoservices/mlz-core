@@ -5,4 +5,4 @@ short_name: pay                       # in every name: 2 to 5, unique among work
 owner: payments-team@demo.example     # the owning team; becomes the Owner tag
 cost_center: "4711"                   # becomes the CostCenter tag
 archetype: corp                       # corp, online or sandbox
-location: norwayeast                  # a region with a hub
+region: norwayeast                    # a region with a hub

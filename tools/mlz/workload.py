@@ -426,16 +426,23 @@ def upgrade_body(current: str, target: str, releases: dict[str, str], changes: d
     if kept or naming:
         lines += ["", "**Left as they are**, since they are this repo's own now:"]
     for name, text in sorted(kept.items()):
-        gained = sorted(mlz_keys(starter()[name]) - mlz_keys(text)) if name == "variables.tf" else []
-        if gained:
+        ours, theirs = (mlz_keys(starter()[name]), mlz_keys(text)) if name == "variables.tf" else (set(), set())
+        gained, lost = sorted(ours - theirs), sorted(theirs - ours)
+        if lost:
+            # Terraform requires each attribute a type declares (checked with Terraform 1.17.0): such a key stops the plan.
+            lines += [f"- `{name}`: its `variable \"mlz\"` declares {', '.join(f'`{key}`' for key in lost)}, which the values vending writes "
+                      f"at `{target}` do not carry, so this repo's plan fails on it until you take the block from mlz-core's "
+                      f"`starter/mlz-workload/variables.tf` at `{target}` (and change what reads it: see the breaking changes below)."]
+        elif gained:
             lines += [f"- `{name}`: `{target}`'s `variable \"mlz\"` also declares {', '.join(f'`{key}`' for key in gained)}. Terraform "
                       f"drops the values a type does not declare, so nothing breaks; take the block from mlz-core's "
                       f"`starter/mlz-workload/variables.tf` at `{target}` when you want them."]
         else:
             lines += [f"- `{name}`: `{target}`'s starter has another version (mlz-core's `starter/mlz-workload/{name}`)."]
     if naming:
-        lines += [f"- mlz-core's naming module at another release: {', '.join(naming)}. Moving it to `{target}` may "
-                  "rename resources, which the plan of that change shows, so it is left to you."]
+        lines += [f"- mlz-core's naming module at another release: {', '.join(naming)}. One before `v0.15.0` reads the region's code "
+                  "from `region`, which is the region's name in the values vending writes now, so it stops at its check until it moves. "
+                  f"Moving it to `{target}` may also rename resources, which the plan of that change shows, so it is left to you."]
     lines += ["", "## Before you merge", ""]
     if breaking:
         lines += ["- **Breaking changes in these releases:**"]

@@ -27,7 +27,7 @@ Settings from a landing zone's file or a layer above it.
 
 | Input | Type | Class | Source, value or reason |
 |---|---|---|---|
-| `location` | string | setting | `location` in a landing zone's file or a layer above it |
+| `location` | string | setting | `region` in a landing zone's file or a layer above it |
 | `name` | string | derived | the naming template, kept in _generated/names.yaml; set it with `names.route_table` in the landing zone's own file, `landing-zones/<workload>/<env>.yaml` |
 | `parent_id` | string | derived | the landing zone's network resource group |
 | `azure_managed_routes_enabled` | bool | open | the module's default: `false` |
@@ -51,7 +51,7 @@ Settings from a landing zone's file or a layer above it.
 
 | Input | Type | Class | Source, value or reason |
 |---|---|---|---|
-| `location` | string | setting | `location` in a landing zone's file or a layer above it |
+| `location` | string | setting | `region` in a landing zone's file or a layer above it |
 | `enable_telemetry` | bool | fixed | `false`: no module mlz-core calls sends telemetry |
 | `budget_enabled` | bool | derived | on when budget.monthly is set, until decommission is true |
 | `budgets` | map(object) | | one, monthly, when budget.monthly is set |
@@ -74,7 +74,7 @@ Settings from a landing zone's file or a layer above it.
 | `network_security_group_enabled` | bool | derived | on, until decommission is true |
 | `network_security_groups` | map(object) | | one per subnet, by the subnet's name |
 | `network_security_groups.name` | string | derived | the naming template, kept in _generated/names.yaml; set it with `names.network_security_groups` in the landing zone's own file, `landing-zones/<workload>/<env>.yaml` |
-| `network_security_groups.location` | string | setting | `location` in a landing zone's file or a layer above it |
+| `network_security_groups.location` | string | setting | `region` in a landing zone's file or a layer above it |
 | `network_security_groups.resource_group_key` | string | fixed | the module's default (`null`): vending makes the landing zone's resource groups itself |
 | `network_security_groups.resource_group_name_existing` | string | derived | the landing zone's network resource group |
 | `network_security_groups.tags` | map(string) | setting | `tags` in a landing zone's file or a layer above it: with Owner, CostCenter, Environment, Workload and ManagedBy |
@@ -104,7 +104,7 @@ Settings from a landing zone's file or a layer above it.
 | `user_managed_identities.name` | string | derived | the naming template, kept in _generated/names.yaml; set it with `names.plan_identity` or `names.deploy_identity` in the landing zone's own file, `landing-zones/<workload>/<env>.yaml` |
 | `user_managed_identities.resource_group_key` | string | fixed | the module's default (`null`): vending makes the landing zone's resource groups itself |
 | `user_managed_identities.resource_group_name_existing` | string | derived | the landing zone's identity resource group |
-| `user_managed_identities.location` | string | setting | `location` in a landing zone's file or a layer above it |
+| `user_managed_identities.location` | string | setting | `region` in a landing zone's file or a layer above it |
 | `user_managed_identities.tags` | map(string) | setting | `tags` in a landing zone's file or a layer above it: with Owner, CostCenter, Environment, Workload and ManagedBy |
 | `user_managed_identities.role_assignments` | map(object) | fixed | `{}`: vending gives the identities their roles itself (identity_role: plan Reader, deploy Contributor, on the landing zone's subscription, decision D2), named from each identity's resource ID: sub-vending names its from the principal ID, which a tag change leaves unknown until the apply, and would replace them |
 | `user_managed_identities.federated_credentials_github` | map(object) | closed | the identities trust GitHub's immutable subjects, through federated_credentials_advanced |
@@ -117,7 +117,7 @@ Settings from a landing zone's file or a layer above it.
 | `virtual_networks.resource_group_key` | string | fixed | the module's default (`null`): vending makes the landing zone's resource groups itself |
 | `virtual_networks.resource_group_name_existing` | string | derived | the landing zone's network resource group |
 | `virtual_networks.ipam_pools` | list(object) | closed | addresses come from the IP allocator |
-| `virtual_networks.location` | string | setting | `location` in a landing zone's file or a layer above it |
+| `virtual_networks.location` | string | setting | `region` in a landing zone's file or a layer above it |
 | `virtual_networks.dns_servers` | list(string) | derived | the region's DNS servers, from the platform contract |
 | `virtual_networks.flow_timeout_in_minutes` | number | open | the module's default: `null`; set it with `advanced.virtual_networks.spoke.flow_timeout_in_minutes` in a landing zone's file or a layer above it |
 | `virtual_networks.ddos_protection_enabled` | bool | open | the module's default: `false`; set it with `advanced.virtual_networks.spoke.ddos_protection_enabled` in a landing zone's file or a layer above it |

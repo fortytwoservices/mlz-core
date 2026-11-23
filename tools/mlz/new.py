@@ -1,7 +1,7 @@
 """Starts a new landing zone's files, from what the layers above it already set.
 
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>]
-        [--owner <email>] [--cost-center <id>] [--archetype corp|online|sandbox] [--location <region>]
+        [--owner <email>] [--cost-center <id>] [--archetype corp|online|sandbox] [--region <region>]
         [--short-name <2 to 5>]
 
 It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/workload-defaults.yaml, with
@@ -29,11 +29,11 @@ COMMENTS = {
     "owner": "the owning team's email address; becomes the Owner tag",
     "cost_center": "becomes the CostCenter tag",
     "archetype": "corp, online or sandbox",
-    "location": "a region with a hub",
+    "region": "a region with a hub",
     "subscription": "handed over to vending before this file is merged",
     "short_name": "2 to 5, in every name of the workload's landing zones",
 }
-PLACEHOLDERS = {"owner": "team@example.com", "cost_center": "\"0000\"", "archetype": "corp", "location": "norwayeast",
+PLACEHOLDERS = {"owner": "team@example.com", "cost_center": "\"0000\"", "archetype": "corp", "region": "norwayeast",
                 "subscription": "00000000-0000-0000-0000-000000000000", "short_name": "abc"}
 
 
@@ -104,9 +104,9 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         body += needed(WORKLOAD_SETTINGS)
         if body:
             create(folder / f"{vending.WORKLOAD_DEFAULTS}.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
-        rest = ("location",)
+        rest = ("region",)
     else:
-        rest = (*WORKLOAD_SETTINGS, "location")
+        rest = (*WORKLOAD_SETTINGS, "region")
     # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in,
     # unless vending makes it where a layer above's billing_scope says.
     made = given.get("subscription") is None and above.get("billing_scope") not in (None, "")

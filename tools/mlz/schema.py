@@ -72,7 +72,7 @@ def landing_zone() -> dict:
         "owner": text("The owning team's email address. Becomes the Owner tag, and gets the budget alerts unless budget.contacts names others.", pattern=pattern(vending.EMAIL), maxLength=vending.TAG_VALUE_LENGTH),
         "cost_center": {"description": "The cost center. Becomes the CostCenter tag.", "type": ["string", "integer"], "maxLength": vending.TAG_VALUE_LENGTH},
         "archetype": text("The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).", enum=list(ARCHETYPES)),
-        "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
+        "region": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
         "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged. Without it, vending makes one where billing_scope says.", pattern=pattern(vending.GUID, ignore_case=True)),
         "billing_scope": text("Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in defaults/landing-zone-defaults.yaml; a landing zone with subscription: uses that one instead.", pattern=r"^/providers/Microsoft\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"),
         "budget": or_empty(mapping({

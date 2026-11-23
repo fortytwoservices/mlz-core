@@ -25,8 +25,8 @@ from . import advanced, governance, inputs, naming, platform, schema, vending
 from .files import SUFFIXES, read_setting, setting_names
 from .merge import ConfigError
 
-ORDER = ("owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags")
-REQUIRED = ("owner", "cost_center", "archetype", "subscription", "location")
+ORDER = ("owner", "cost_center", "archetype", "region", "subscription", "billing_scope", "budget", "network", "github", "tags")
+REQUIRED = ("owner", "cost_center", "archetype", "subscription", "region")
 WIDTH = 44  # a value longer than this puts its source on the next line
 
 
@@ -110,7 +110,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         filled.append(("github", "no repo", "github.create is false" if github.get("create") is False else "no github.organization"))
 
     worked = []
-    archetype, location = settings.get("archetype"), settings.get("location")
+    archetype, region_name = settings.get("archetype"), settings.get("region")
     if governance is None:
         worked.append(("management group", "not known yet", "waits for governance's contract (_generated/governance.yaml)"))
     elif vending.decommissioned(lz):
@@ -128,11 +128,11 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         worked.append(("address range", str(entry["range"]), f"the IP plan ({vending.IP_PLAN})"))
         worked += [(f"subnet {name}", str(block), "the IP plan") for name, block in entry["subnets"].items()]
         worked += [(f"subnet {name}", str(block), "the IP plan: removed, held until released") for name, block in entry["removed_subnets"].items()]
-    region = (platform or {}).get("regions", {}).get(location) if isinstance(location, str) else None
+    region = (platform or {}).get("regions", {}).get(region_name) if isinstance(region_name, str) else None
     if platform is None:
         worked.append(("hub", "not known yet", "waits for the platform's contract (_generated/platform.yaml)"))
     elif region:
-        source = f"the platform's contract, for {location}"
+        source = f"the platform's contract, for {region_name}"
         worked.append(("hub network", region["hub_network"], source))
         worked.append(("DNS servers", show(region["dns_servers"]), source))
         worked += [(f"route {r['name']}", f"{r['to']} via {r['via']}", source) for r in region.get("spoke_routes") or []]
@@ -174,9 +174,9 @@ def numbered_alike(value: str, lz: dict, settings: naming.Naming | None) -> bool
     difference a fresh count can show for it."""
     if settings is None or not naming.counts(settings, "network_security_group"):
         return False
-    app, env, region = vending.short_name(lz), lz["environment"], lz["settings"].get("location")
+    app, env, region = vending.short_name(lz), lz["environment"], lz["settings"].get("region")
     if not all(isinstance(part, str) for part in (app, env, region)):
-        return False  # a location that is a list, say: problems() says what it must be
+        return False  # a region that is a list, say: problems() says what it must be
     return any(vending.nsg_name(settings, app, env, region, n).lower() == value.lower() for n in range(1, 100))
 
 

@@ -46,7 +46,7 @@ The landing zone's key is its folder and file name, `payments-prod`; two paths t
 
 | Setting | What it is |
 |---|---|
-| `owner`, `cost_center`, `archetype`, `location`, `subscription` | One value each. `owner` is the owning team's email address. `subscription` is one handed over; without it, vending makes one ([below](#the-subscription)). |
+| `owner`, `cost_center`, `archetype`, `region`, `subscription` | One value each. `owner` is the owning team's email address. `region` is the Azure region, one of governance's allowed regions with a hub: `norwayeast` (called `location` before v0.15.0, which is now refused with the new name). `subscription` is one handed over; without it, vending makes one ([below](#the-subscription)). |
 | `billing_scope` | Where the subscriptions vending makes are billed: an EA enrollment account or an MCA invoice section. Set once, in `defaults/landing-zone-defaults.yaml` ([below](#the-subscription)). |
 | `budget` | `monthly`, a whole amount; `contacts`, email addresses (default: the owner). No `monthly`, no budget. |
 | `network` | `size`, the range's prefix length, 16 to 28 (default 24); `subnets`, each name (up to 20 characters) to its prefix length, up to 29 (default one subnet, `default`, a /26 or the whole of a smaller range). |
@@ -117,7 +117,7 @@ and `workload-defaults.yaml` for a new workload, with only what no layer above s
 ```
 
 - **Given or not:** a required setting given on the command line (`--subscription`, `--owner`,
-  `--cost-center`, `--archetype`, `--location`) is written as given. One not given is written commented
+  `--cost-center`, `--archetype`, `--region`) is written as given. One not given is written commented
   out, and the check names it until someone fills it in. With `billing_scope` set above, no subscription is
   asked for: vending makes it, unless `--subscription` hands one over.
 - **Not repeated:** a setting given at the value a layer above already has is left out.
@@ -299,8 +299,9 @@ way, so its workflows sign in from its `apply` environment and its pull requests
 - `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with examples (commented out):
   a resource group named through mlz-core's naming helper (`modules/naming`, `docs/naming.md`), and a virtual machine
   (`az-tf-mlz-virtual-machine`) in the landing zone's app subnet with its tags; a README.
-- **`mlz.auto.tfvars.json`**: the landing zone's key, region and naming values (the customer's code, the workload's
-  short name, the environment's and region's codes, the templates), and what the team builds on:
+- **`mlz.auto.tfvars.json`**: the landing zone's key and region (`region`: `norwayeast`), its naming values (the
+  customer's code, the workload's short name, the environment's code, the region's code `region_code`: `nwe`, the
+  templates), and what the team builds on:
   - `network`: the network's resource group, name and range, each subnet's name and range by its key in the landing
     zone's file, and the DNS servers (the hub's). By names, not IDs: a subscription vending makes is never read back,
     so the repo builds an ID from the subscription its pipeline signs in to (`AZURE_SUBSCRIPTION_ID`), as `main.tf`'s
@@ -329,8 +330,12 @@ changes in Azure.
   and `mlz.auto.tfvars.json`. For `variables.tf`, it names the keys the release's `variable "mlz"` declares and the
   repo's does not. Terraform drops the values a type does not declare, without an error or a warning (checked with
   Terraform 1.17.0), so nothing breaks, and the team takes the new block from `starter/mlz-workload/variables.tf` of
-  that release when it wants them. It also names each place the repo's own Terraform pins mlz-core's naming module at
-  another release: moving that may rename resources, so it is the team's change.
+  that release when it wants them. A key the repo's block declares and the values no longer carry is another matter:
+  Terraform requires each one (`attribute "location" is required`, checked with Terraform 1.17.0), so the pull request
+  names it as what stops the plan until the team takes the new block. It also names each place the repo's own
+  Terraform pins mlz-core's naming module at another release: moving that may rename resources, so it is the team's
+  change. A pin before v0.15.0 stops at the module's check on the values vending writes from v0.15.0, which carry the
+  region's name in `region` and its code in `region_code`.
 - **Only forward, one at a time:** a repo on vending's release, ahead of it, or pinned to a branch gets nothing. While
   the pull request waits, each of vending's runs says so on its page, and a newer release moves the same pull request
   on. One the team closed without merging is not offered again until the next release. Nothing is forced: a repo

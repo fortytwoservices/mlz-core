@@ -19,7 +19,7 @@ locals {
     app     = var.mlz.app
     purpose = local.purpose
     env     = var.mlz.env
-    region  = var.mlz.region
+    region  = var.mlz.region_code
     nn      = format("%02d", var.nn)
   }
 

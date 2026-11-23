@@ -63,8 +63,8 @@ class ExplainTest(unittest.TestCase):
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
         self.assertIn("the template now gives nsg-demo-pm-pd-nwe-01 (./mlz names --repo . --renew payments-prod)", self.rows(flat)["name NSG of default"][1])
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
-        # A location that is no single region: explain still runs, and problems() says what it must be.
-        self.write("landing-zones/payments/prod.yaml", PROD + "location: [norwayeast]\n")
+        # A region that is no single value: explain still runs, and problems() says what it must be.
+        self.write("landing-zones/payments/prod.yaml", PROD + "region: [norwayeast]\n")
         self.assertEqual(self.rows(flat)["name NSG of default"][0], "nsg-demo-pay-pd-nwe-02")  # the recorded one
         self.write("landing-zones/payments/prod.yaml", PROD)
         # Named under another template, a recorded name keeps its name and has no number to explain: only the change.
@@ -81,7 +81,7 @@ class ExplainTest(unittest.TestCase):
     def test_each_value_names_the_file_that_set_it_and_what_it_replaced(self):
         rows = self.rows()
         self.assertEqual(rows["owner"], ("payments@demo.example", "landing-zones/payments/workload-defaults.yaml"))
-        self.assertEqual(rows["location"], ("norwayeast", "defaults/landing-zone-defaults.yaml"))
+        self.assertEqual(rows["region"], ("norwayeast", "defaults/landing-zone-defaults.yaml"))
         # defaults/landing-zone-defaults.yaml says 500, payments/prod.yaml 2000: the later layer wins, and says what it replaced.
         self.assertEqual(rows["budget.monthly"], ("2000", "landing-zones/payments/prod.yaml, replacing defaults/landing-zone-defaults.yaml: 500"))
         self.assertEqual(rows["budget.contacts"], ("[platform@demo.example]", "defaults/landing-zone-defaults.yaml"))

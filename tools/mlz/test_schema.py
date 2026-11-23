@@ -34,6 +34,8 @@ class SchemaTest(unittest.TestCase):
     def test_each_schema_has_exactly_the_settings_its_loader_takes(self):
         zone = committed("landing-zone.schema.json")["properties"]
         self.assertEqual(set(zone), vending.KEYS)
+        self.assertIn("region", zone)  # region, as every other region setting; location is refused (vending.check)
+        self.assertNotIn("location", zone)
         for section, keys in vending.SECTIONS.items():
             self.assertEqual(set(zone[section]["properties"]), keys, section)
         self.assertEqual(set(committed("connectivity.schema.json")["properties"]), platform.HUB_KEYS)

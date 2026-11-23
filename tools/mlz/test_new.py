@@ -15,7 +15,7 @@ from mlz.__main__ import main
 from mlz.merge import ConfigError
 from mlz.test_vending import DEFAULTS, PROD, WORKLOAD
 
-NOTHING = {k: None for k in ("owner", "cost_center", "archetype", "location", "subscription")}
+NOTHING = {k: None for k in ("owner", "cost_center", "archetype", "region", "subscription")}
 
 
 class NewLandingZoneTest(unittest.TestCase):
@@ -43,7 +43,7 @@ class NewLandingZoneTest(unittest.TestCase):
         workload = self.read("landing-zones/billing/workload-defaults.yaml")
         self.assertIn("# owner: team@example.com", workload)
         self.assertIn("# archetype: corp", workload)
-        self.assertNotIn("location", workload)  # defaults/landing-zone-defaults.yaml sets it
+        self.assertNotIn("region", workload)  # defaults/landing-zone-defaults.yaml sets it
         env = self.read("landing-zones/billing/prod.yaml")
         self.assertIn("# subscription: 00000000-0000-0000-0000-000000000000", env)
         # Commented out, they read as not set: the check names each one until someone fills it in.
@@ -131,13 +131,15 @@ class NewLandingZoneTest(unittest.TestCase):
 
     def test_the_command_writes_the_files_and_runs_the_check(self):
         out, err = io.StringIO(), io.StringIO()
-        argv = ["mlz", "new", "landing-zone", "--repo", str(self.repo), "billing", "prod", "--owner", "billing@demo.example"]
+        argv = ["mlz", "new", "landing-zone", "--repo", str(self.repo), "billing", "prod", "--owner", "billing@demo.example", "--region", "swedencentral"]
         with mock.patch.object(sys, "argv", argv), redirect_stdout(out), redirect_stderr(err):
             self.assertEqual(main(), 0)
         self.assertIn("mlz new: wrote", out.getvalue())
         self.assertIn("cost_center is required", out.getvalue())
         self.assertNotIn("owner is required", out.getvalue())
         self.assertIn("owner: billing@demo.example", self.read("landing-zones/billing/workload-defaults.yaml"))
+        self.assertIn("\nregion: swedencentral", self.read("landing-zones/billing/prod.yaml"))
+        self.assertEqual(vending.landing_zones(self.repo)["billing-prod"]["settings"]["region"], "swedencentral")
 
 
 if __name__ == "__main__":
