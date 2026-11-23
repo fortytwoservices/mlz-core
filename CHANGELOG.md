@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.14.0](https://github.com/fortytwoservices/mlz-core/compare/v0.13.0...v0.14.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **install:** bootstrap.yaml needs github.app, the MLZ App's slug. An existing deployment adds that line and runs mlz install repos again, as a member of the bypass team, to add the ruleset generated-files to the three repos; then mlz install check. From then on only the MLZ App and the bypass team may push under _generated/.
+
+### Features
+
+* **install:** GitHub Team as a setting, checked against the organization ([#139](https://github.com/fortytwoservices/mlz-core/issues/139)) ([84c1832](https://github.com/fortytwoservices/mlz-core/commit/84c1832999486be4fdffb814090de179dde277e9))
+* **install:** only the MLZ App and the bypass team change _generated/ ([#136](https://github.com/fortytwoservices/mlz-core/issues/136)) ([292d5e9](https://github.com/fortytwoservices/mlz-core/commit/292d5e93cb010e17051359b5fb699ea5bf835b1b))
+* **install:** the role repos' pipeline, code owners, checks and environment per GitHub plan ([#142](https://github.com/fortytwoservices/mlz-core/issues/142)) ([3f471d1](https://github.com/fortytwoservices/mlz-core/commit/3f471d11e607576cfb51a0645ce0cf3bf51645b0))
+* **pipeline:** an approval input for GitHub Team, the plans' stamp and the planned check ([#138](https://github.com/fortytwoservices/mlz-core/issues/138)) ([ac7be8b](https://github.com/fortytwoservices/mlz-core/commit/ac7be8b1fdbed9b6e4e59796ce792c0729cacb64))
+* **pipeline:** the gate on GitHub Team: the approval covers the plan, and main applies only that plan ([#140](https://github.com/fortytwoservices/mlz-core/issues/140)) ([a606b26](https://github.com/fortytwoservices/mlz-core/commit/a606b26ed7982a905300f988dae48ef4422fc6a6))
+* **vending:** the workload repos' pipeline, rules and apply environment per GitHub plan ([#143](https://github.com/fortytwoservices/mlz-core/issues/143)) ([68659cd](https://github.com/fortytwoservices/mlz-core/commit/68659cddff55ade0a71984b39334998e890be11d))
+
 ## [0.13.0](https://github.com/fortytwoservices/mlz-core/compare/v0.12.0...v0.13.0) (2026-11-19)
 
 
