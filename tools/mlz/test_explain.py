@@ -449,6 +449,10 @@ class GovernanceExplainTest(unittest.TestCase):
             explain.role_of(self.repo)
         self.assertIn("customer.yaml: this file is called governance.yaml now; rename it", str(refused.exception))
         self.assertIn("git mv customer.yaml governance.yaml (docs/governance.md)", str(refused.exception))
+        # A rename left half done, both files there, is refused too, as mlz check and mlz install refuse it.
+        (self.repo / "governance.yaml").write_text("root_id: demo\n")
+        with self.assertRaisesRegex(explain.ConfigError, "this file is called governance.yaml now"):
+            explain.role_of(self.repo)
 
     def test_a_value_that_replaces_a_default_names_it(self):
         customer = (explain.inputs.CORE / "starter/mlz-governance/governance.yaml").read_text()

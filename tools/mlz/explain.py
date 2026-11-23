@@ -280,10 +280,11 @@ def role_of(repo: Path) -> str:
         return "vending"
     if (repo / platform.CONNECTIVITY).is_dir():
         return "platform"
-    if (repo / governance.FILE).is_file():
-        return "governance"
+    # Before governance.yaml: a rename left half done (both files there) is refused as mlz check refuses it.
     if (refused := governance.renamed(repo)) is not None:
         raise ConfigError(refused)
+    if (repo / governance.FILE).is_file():
+        return "governance"
     raise ConfigError(f"{repo}: neither landing-zones/, {platform.CONNECTIVITY}/ nor governance.yaml; run explain in a vending, platform or governance repo.")
 
 

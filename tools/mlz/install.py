@@ -515,6 +515,11 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             make_executable(github, repo, branch, files, message)
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
+            # A governance repo with its settings under their name before v0.16.0 would get governance.yaml beside them,
+            # and then neither check nor git mv could go on: the rename comes first, by hand (decision D5).
+            if role == "governance" and github.file(repo, governance.OLD_FILE, branch)[0] is not None:
+                raise ConfigError(f"{repo}: {governance.OLD_FILE} is called {governance.FILE} now; rename it there first, in a pull request "
+                                  f"(git mv {governance.OLD_FILE} {governance.FILE}), then run mlz install repos again. Nothing was offered to it.")
             starter = starter_files(role, folder)
             missing = {path: text for path, text in starter.items() if github.file(repo, path, branch)[0] is None}
             # The repo's own .gitignore keeps every line it has; the starter's it lacks are appended.

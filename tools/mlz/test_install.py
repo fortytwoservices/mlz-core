@@ -603,6 +603,15 @@ class InstallTest(unittest.TestCase):
         self.assertNotIn("governance.yaml", added)  # already there: never replaced
         self.assertIn("bootstrap.yaml", added)
 
+    def test_an_adopted_governance_repo_with_customer_yaml_is_offered_nothing_until_it_is_renamed(self):
+        # governance.yaml beside customer.yaml would stop mlz check and git mv alike: the rename comes first, by hand.
+        old = ("acme/mlz-governance", "customer.yaml")
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={old: ("name: Ours\n", "sha")})
+        with self.assertRaisesRegex(ConfigError, r"acme/mlz-governance: customer.yaml is called governance.yaml now; rename it there first, "
+                                                 r"in a pull request \(git mv customer.yaml governance.yaml\), then run mlz install repos again"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.commits, [])
+
     def test_an_adopted_repo_s_own_gitignore_keeps_its_lines_and_gets_the_starter_s(self):
         own = ("acme/mlz-governance", ".gitignore")
         github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={own: (".terraform/\n*.tfstate\n", "sha")})
