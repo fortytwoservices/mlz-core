@@ -27,7 +27,7 @@ from typing import Callable
 
 from . import install, mirror
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER, breaking_changes, demoted, releases_between, version
+from .upgrade import RELEASE_PLEASE_MARKER, _with, breaking_changes, demoted, plan_of, releases_between, version
 
 CORE = Path(__file__).resolve().parents[2]
 STARTER = CORE / "starter" / "mlz-workload"
@@ -41,8 +41,42 @@ PIN = re.compile(r"^[ \t]*uses:[ \t]*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflow
 NAMING = re.compile(r"mlz-core\.git//modules/naming\?ref=(?P<ref>[^\"'\s&]+)")
 CODEOWNERS = ".github/CODEOWNERS"
 CHECK = "workload / plan"  # the caller's job (starter/mlz-workload), then workload.yml's: what main-checks requires
+# What main-checks requires besides CHECK on GitHub Team (workload.yml's gate pull request adds workload / planned here).
+TEAM_CHECKS: list[str] = []
+PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo's pipeline to its GitHub plan's way
+# GitHub Team's lines in a workload repo's pipeline, which belongs to mlz-core: the approval it passes, and actions: read
+# for workload.yml's gate job, which reads the pull request's run with the job's token (a workload repo holds no App
+# key). Enterprise's pipeline has neither, so it is the starter's byte for byte.
+TEAM_PERMISSION = "  actions: read # GitHub Team: workload.yml's gate reads the pull request's run (docs/vending.md)\n"
+TEAM_APPROVAL = "      approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/vending.md)\n"
 KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
 MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
+
+
+def caller(workflow: str, plan: str) -> str:
+    """A workload repo's pipeline written for the plan: on Team it grants actions: read and passes approval:
+    pull-request; on Enterprise neither. The same text from either plan."""
+    text = workflow.replace(f"    with:\n{TEAM_APPROVAL}", "").replace(TEAM_APPROVAL, "").replace(TEAM_PERMISSION, "")
+    if plan == "enterprise":
+        return text
+    permissions = re.search(r"^permissions:[ \t]*(#[^\n]*)?\n(?:[ \t]+[^\n]*\n)*", text, re.M)
+    call = PIN.search(text)
+    found = _with(text.splitlines())
+    if not permissions or not call or (found and found[2]):
+        raise ConfigError(f"{WORKFLOW} is not mlz-core's workload pipeline as its starter has it (a permissions: block, the job that calls "
+                          "workload.yml, with: on its own line), so GitHub Team's lines cannot be written into it.")
+    if found:  # a with: of the repo's own: the approval goes into it
+        at = sum(len(line) + 1 for line in text.splitlines()[:found[0] + 1])
+        text = text[:at] + TEAM_APPROVAL + text[at:]
+    else:
+        at = text.index("\n", call.end()) + 1
+        text = text[:at] + "    with:\n" + TEAM_APPROVAL + text[at:]
+    return text[:permissions.end()] + TEAM_PERMISSION + text[permissions.end():]
+
+
+def plan_wanted(config: dict) -> str:
+    """The GitHub plan vending writes a repo for: team when governance's contract says so (vending.github_config)."""
+    return "team" if config.get("approval") == "pull-request" else "enterprise"
 
 
 def mlz_keys(variables: str) -> set[str]:
@@ -108,7 +142,7 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
             for name, text in starter().items():
                 there, _ = github.file(repo, name, head)
                 if there is None or (name == "README.md" and first_readme(there, github_config["repo"], github_config.get("description", ""))):
-                    files[name] = text
+                    files[name] = caller(text, plan_wanted(github_config)) if name == WORKFLOW else text
             files[VALUES] = want
             message = "chore: mlz-core's workload starter, and the landing zone's values"
         elif values != want:
@@ -139,6 +173,10 @@ def sync(github, configs: Path, out: Callable[[str], None] = print, app_slug: st
             offer_upgrade(github, repo, releases, out)
         except ConfigError as error:
             out(f"::warning::{repo}: no upgrade pull request: {error}")
+        try:
+            offer_plan(github, repo, plan_wanted(github_config), out)
+        except ConfigError as error:
+            out(f"::warning::{repo}: its pipeline is not its GitHub plan's way: {error}")
     if refused:
         raise ConfigError(f"vending's commit to main was refused in {', '.join(refused)}: a ruleset of the repo's own must let the MLZ App "
                           "through, as vending's do (docs/vending.md, Its rule on main).")
@@ -171,16 +209,26 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
         out(f"{repo}: {organization}/{bypass} may write, for its bypass of main's approval")
     # A push after an approval needs a new one: else an approved change could become another, and its author approve
     # its apply alone (the apply environment lets a reviewer approve their own run).
+    team_plan = plan_wanted(config) == "team"
     wanted = [install.main_ruleset("workload", team["id"] if team else None, app_id, approvals=1, dismiss_stale=True),
-              install.checks_ruleset("workload", app_id, CHECK)]
+              install.checks_ruleset("workload", app_id, CHECK, TEAM_CHECKS if team_plan else None)]
+    if team_plan:
+        # On Team the pipeline holds the gate's switch, and a skipped required check counts as passed: so .github/ takes
+        # changes only from the MLZ App, which writes the pipeline, and the bypass team, as in the role repos. A team's
+        # own workflows there need the bypass team too (docs/vending.md).
+        wanted.append(install.push_ruleset(team["id"] if team else None, app_id))
     found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
     for ruleset in wanted:
         if ruleset["name"] not in found:
             github.add_ruleset(repo, ruleset)
             out(f"{repo}: " + ("ruleset main: pull requests only, a code owner's approval (and one besides the author's)" + (f", {organization}/{bypass} may merge without it" if team else "")
                                if ruleset["name"] == "main" else
-                               f"ruleset {install.CHECKS_RULESET}: {CHECK} must pass, on a branch up to date with main, before any merge into main; "
-                               "nobody but the MLZ App may bypass it, for its commits of the landing zone's values"))
+                               f"ruleset {install.PUSH_RULESET}: changes under .github/ refused on every branch, but from the MLZ App"
+                               + (f" and {organization}/{bypass}" if team else "")
+                               if ruleset["name"] == install.PUSH_RULESET else
+                               f"ruleset {install.CHECKS_RULESET}: {' and '.join([CHECK, *(TEAM_CHECKS if team_plan else [])])} must pass, on a branch up "
+                               "to date with main, before any merge into main; nobody but the MLZ App may bypass it, for its commits of the landing "
+                               "zone's values"))
         elif not same_ruleset(found[ruleset["name"]], ruleset):
             out(f"{repo}: has a ruleset named {ruleset['name']} that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)")
 
@@ -241,6 +289,30 @@ def offer_upgrade(github, repo: str, releases: dict[str, str], out: Callable[[st
     return url
 
 
+def offer_plan(github, repo: str, plan: str, out: Callable[[str], None] = print) -> str | None:
+    """A pull request that writes the repo's pipeline its GitHub plan's way, when governance's contract and the pipeline
+    on main disagree; its URL, or None when they agree. The owning team merges it. The MLZ App pushes it, which on Team
+    the push rule on .github/ lets through."""
+    head = github.head(repo, BRANCH)
+    workflow, _ = github.file(repo, WORKFLOW, head)
+    if workflow is None or not PIN.search(workflow) or caller(workflow, plan) == workflow:
+        return None
+    latest = github.latest_pull(repo, PLAN_BRANCH)
+    if latest and latest["state"] == "open":
+        out(f"::notice::{repo}: its pipeline waits for its team to merge GitHub {plan.capitalize()}'s way: {latest['html_url']}")
+        return latest["html_url"]
+    title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
+    github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, BRANCH, at=head), {WORKFLOW: caller(workflow, plan)}, title)
+    url = github.create_pull(repo, PLAN_BRANCH, BRANCH, title,
+                             f"From mlz-core's vending: the organization's GitHub plan is `{plan}` (governance's contract), and this repo's pipeline "
+                             f"is the other plan's. This writes `{WORKFLOW}` {plan}'s way" + (": it passes `approval: pull-request`, so the approval "
+                             "of a pull request covers the plan applied, and grants `actions: read` for that check." if plan == "team" else
+                             ": the `apply` environment's reviewer approves each apply again.") + " Merge it as docs/bootstrap.md in mlz-core says "
+                             "(Switching plans).\n")
+    out(f"{repo}: GitHub {plan.capitalize()}'s way is offered in {url}")
+    return url
+
+
 def upgrade_files(github, repo: str, head: str, called: str, current: str) -> tuple[dict[str, str], dict[str, str]]:
     """The files the upgrade writes, and the starter's files it leaves because the team changed them (name to the
     repo's text). The pipeline is mlz-core's: always the target's, still calling the mlz-core repo it calls. Another
@@ -251,6 +323,7 @@ def upgrade_files(github, repo: str, head: str, called: str, current: str) -> tu
         there, _ = github.file(repo, name, head)
         if name == WORKFLOW:
             text = text.replace(f"uses: {mirror.UPSTREAM}/.github/workflows/workload.yml@", f"uses: {called}/.github/workflows/workload.yml@")
+            text = caller(text, plan_of(there or ""))  # an upgrade keeps the repo's GitHub plan; offer_plan switches it
             if text != there:
                 changes[name] = text
             continue

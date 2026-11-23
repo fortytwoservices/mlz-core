@@ -209,8 +209,8 @@ run "with_a_repo" {
     error_message = "Vending makes the landing zone's repo, private, archived rather than deleted."
   }
   assert {
-    condition     = github_team_repository.owner[0].permission == "maintain" && contains(github_repository_environment.apply[0].reviewers[0].teams, 42)
-    error_message = "The owning team maintains the repo and approves its applies."
+    condition     = github_team_repository.owner[0].permission == "maintain" && contains(github_repository_environment.apply[0].reviewers[0].teams, 42) && length(github_actions_environment_variable.approval) == 0
+    error_message = "The owning team maintains the repo and approves its applies (GitHub Enterprise: no MLZ_APPROVAL)."
   }
   assert {
     condition     = github_repository_environment_deployment_policy.main[0].branch_pattern == "main" && github_branch_default.main[0].branch == "main" && github_branch_default.main[0].rename
@@ -219,6 +219,25 @@ run "with_a_repo" {
   assert {
     condition     = toset(keys(github_actions_variable.workload)) == toset(["AZURE_TENANT_ID", "AZURE_SUBSCRIPTION_ID", "AZURE_CLIENT_ID", "TFSTATE_RESOURCE_GROUP", "TFSTATE_STORAGE_ACCOUNT", "TFSTATE_CONTAINER"]) && github_actions_variable.workload["TFSTATE_STORAGE_ACCOUNT"].value == "stacmepaystatepdnwe01"
     error_message = "The repo's variables name its subscription, its plan identity and its state."
+  }
+}
+
+run "with_a_repo_on_github_team" {
+  command = plan
+  variables {
+    config_file = "tests/with-repo-team.json"
+  }
+  override_resource {
+    target = github_repository.workload["made"]
+    values = { repo_id = 2002 }
+  }
+  assert {
+    condition     = length(github_repository_environment.apply[0].reviewers) == 0 && github_repository_environment_deployment_policy.main[0].branch_pattern == "main"
+    error_message = "On GitHub Team the apply environment has no reviewer (the pull request's approval is the gate), and only main may apply."
+  }
+  assert {
+    condition     = github_actions_environment_variable.approval[0].variable_name == "MLZ_APPROVAL" && github_actions_environment_variable.approval[0].value == "pull-request" && github_actions_environment_variable.approval[0].environment == "apply"
+    error_message = "On GitHub Team the apply environment says it has no reviewer, so an apply whose pipeline expects one refuses."
   }
 }
 

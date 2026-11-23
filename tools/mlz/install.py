@@ -85,12 +85,14 @@ def team_checks(role: str) -> list[str]:
 PUSH_RULESET = "pipeline-files"
 
 
-def push_ruleset(team_id: int) -> dict:
+def push_ruleset(team_id: int | None, app_id: int | None = None) -> dict:
+    """pipeline-files: changes under .github/ refused on every branch, but from the bypass team (team_id) and, in a
+    workload repo on GitHub Team, the MLZ App (app_id), which writes that repo's pipeline (tools/mlz/workload.py)."""
     return {
         "name": PUSH_RULESET,
         "target": "push",
         "enforcement": "active",
-        "bypass_actors": [{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}],
+        "bypass_actors": app_bypass(app_id) + ([{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}] if team_id else []),
         "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [PIPELINE_FILES]}}],
     }
 

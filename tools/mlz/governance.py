@@ -388,16 +388,21 @@ def write_json(out: Path, relative: str, data) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
-def bypass_team(bootstrap_file: Path | None) -> dict:
-    """bootstrap.yaml's github.bypass_team, for the contract: vending gives that team the bypass of each workload repo's
-    rules (docs/vending.md). {} without the file or the setting; mlz install says what the team must be."""
+def github_settings(bootstrap_file: Path | None) -> dict:
+    """bootstrap.yaml's github.bypass_team and github.plan, for the contract: vending gives that team the bypass of each
+    workload repo's rules, and on GitHub Team writes each workload repo's pipeline and apply environment Team's way
+    (docs/vending.md). The plan only when it is team, so an Enterprise customer's contract stays as it was. {} without the
+    file or the settings; mlz install says what each must be."""
     if bootstrap_file is None or not bootstrap_file.is_file():
         return {}
     github = (load_yaml(bootstrap_file) or {}).get("github")
-    team = github.get("bypass_team") if isinstance(github, dict) else None
+    github = github if isinstance(github, dict) else {}
+    team, plan = github.get("bypass_team"), github.get("plan", "enterprise")
     if team is not None and (not isinstance(team, str) or not team.strip()):
         raise ConfigError(f"{bootstrap_file.name}: github.bypass_team is {team!r}: the slug of a GitHub team of the organization.")
-    return {"bypass_team": team} if team else {}
+    if plan not in ("enterprise", "team"):
+        raise ConfigError(f"{bootstrap_file.name}: github.plan is the organization's GitHub plan, enterprise or team, not {plan!r}.")
+    return {**({"bypass_team": team} if team else {}), **({"plan": plan} if plan == "team" else {})}
 
 
 def render(customer_file: Path, defaults_file: Path, out: Path, bootstrap_file: Path | None = None) -> dict:
@@ -405,7 +410,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path, bootstrap_file: 
     validate(config)
     root = config["root_id"]
 
-    config = {**normalize(config), "github": bypass_team(bootstrap_file)}
+    config = {**normalize(config), "github": github_settings(bootstrap_file)}
     tags = tag_assignments(config)
     prepare_output(out, [customer_file, defaults_file, *([bootstrap_file] if bootstrap_file else [])])
 

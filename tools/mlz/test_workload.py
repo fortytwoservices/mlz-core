@@ -515,6 +515,69 @@ class RuleTest(SyncTest):
         self.assertTrue(any("the bypass team acme-org/gone is not there" in line for line in out))
 
 
+class TeamTest(SyncTest):
+    """On GitHub Team (governance's contract says so; vending's config carries approval: pull-request)."""
+
+    REPO = "acme-org/payments-prod"
+
+    def made(self, **files) -> FakeGitHub:
+        self.config("payments-prod")
+        path = self.configs / "payments-prod.json"
+        config = json.loads(path.read_text())
+        config["github"]["approval"] = "pull-request"
+        path.write_text(json.dumps(config))
+        return FakeGitHub({self.REPO: {"README.md": f"# payments-prod\n{DESCRIPTION}\n", **files}})
+
+    def test_a_new_repo_gets_team_s_pipeline_and_the_push_rule_on_github(self):
+        github = self.made()
+        out = self.sync(github)
+        pipeline = github.repos[self.REPO][workload.WORKFLOW]
+        self.assertIn("\n  actions: read # GitHub Team", pipeline)
+        self.assertIn("\n    with:\n      approval: pull-request # GitHub Team", pipeline)
+        self.assertEqual(workload.caller(pipeline, "enterprise"), workload.starter()[workload.WORKFLOW])  # Enterprise's, byte for byte
+        main, checks, guard = github.made_rulesets[self.REPO]
+        self.assertEqual(guard["name"], "pipeline-files")
+        self.assertEqual(guard["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}])
+        self.assertEqual(guard["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"},
+                                                  {"actor_id": 7, "actor_type": "Team", "bypass_mode": "always"}])
+        self.assertEqual([c["context"] for c in checks["rules"][0]["parameters"]["required_status_checks"]], ["workload / plan", *workload.TEAM_CHECKS])
+        self.assertIn(f"{self.REPO}: ruleset pipeline-files: changes under .github/ refused on every branch, but from the MLZ App and "
+                      "acme-org/acme-admins", out)
+        self.assertIsNone(workload.offer_plan(github, self.REPO, "team"))  # on its plan already: nothing offered
+
+    def test_enterprise_s_repo_gets_no_push_rule_and_its_pipeline_as_today(self):
+        github = RuleTest.made(self)  # vending's config without approval: Enterprise's
+        self.sync(github)
+        self.assertEqual([r["name"] for r in github.made_rulesets[self.REPO]], ["main", "main-checks"])
+        self.assertEqual(github.repos[self.REPO][workload.WORKFLOW], workload.starter()[workload.WORKFLOW])
+
+    def test_a_repo_on_the_other_plan_is_offered_the_switch_once(self):
+        github = self.made(**{workload.WORKFLOW: workload.starter()[workload.WORKFLOW], "mlz.auto.tfvars.json": "{}"})
+        out = self.sync(github)
+        [pull] = [pull for pull in github.pulls[self.REPO] if pull["branch"] == workload.PLAN_BRANCH]
+        self.assertEqual(pull["title"], "chore: GitHub Team's way: each apply approved on its pull request")
+        [(_, branch, files, _)] = [c for c in github.branches if c[1] == workload.PLAN_BRANCH]
+        self.assertEqual(files, {workload.WORKFLOW: workload.caller(workload.starter()[workload.WORKFLOW], "team")})
+        self.assertIn(f"{self.REPO}: GitHub Team's way is offered in {pull['html_url']}", out)
+        # While its team has not merged it, it is said, not opened again.
+        out = self.sync(github)
+        self.assertEqual(len([p for p in github.pulls[self.REPO] if p["branch"] == workload.PLAN_BRANCH]), 1)
+        self.assertIn(f"::notice::{self.REPO}: its pipeline waits for its team to merge GitHub Team's way: {pull['html_url']}", out)
+        # And back: a repo on Team's way, with the contract on Enterprise, is offered Enterprise's.
+        team_pipeline = workload.caller(workload.starter()[workload.WORKFLOW], "team")
+        github = FakeGitHub({self.REPO: {workload.WORKFLOW: team_pipeline}})
+        workload.offer_plan(github, self.REPO, "enterprise", lambda _: None)
+        self.assertEqual(github.branches[-1][2], {workload.WORKFLOW: workload.starter()[workload.WORKFLOW]})
+
+    def test_an_upgrade_keeps_the_repo_s_plan(self):
+        team_pipeline = workload.caller(at(old_starter()[workload.WORKFLOW], OLD), "team")
+        github = FakeGitHub({self.REPO: {workload.WORKFLOW: team_pipeline}}, core={(f"starter/mlz-workload/{n}", OLD): t for n, t in old_starter().items()},
+                            releases=NOTES)
+        changes, _ = workload.upgrade_files(github, self.REPO, github.head(self.REPO, "main"), "fortytwoservices/mlz-core", OLD)
+        self.assertEqual(workload.caller(changes[workload.WORKFLOW], "team"), changes[workload.WORKFLOW])
+        self.assertIn(f"workload.yml@{TARGET}", changes[workload.WORKFLOW])
+
+
 class CommandTest(unittest.TestCase):
     def test_only_the_run_of_vending_s_current_main_writes(self):
         import os
