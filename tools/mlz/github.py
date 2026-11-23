@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+from urllib.parse import quote
 
 from .merge import ConfigError
 
@@ -97,14 +98,15 @@ class GitHub:
         self._api(f"repos/{repo}/branches/{branch}/rename", "POST", {"new_name": name})
 
     def file(self, repo: str, path: str, ref: str) -> tuple[str, str] | tuple[None, None]:
-        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        # The ref encoded: a branch named main&x=y would otherwise read main.
+        found = self._api(f"repos/{repo}/contents/{path}?ref={quote(ref, safe='')}", missing_ok=True)
         if not found:
             return None, None
         return base64.b64decode(found["content"]).decode(), found["sha"]
 
     def folder(self, repo: str, path: str, ref: str) -> list[str]:
         """The paths of the files in a folder and below it; [] when there is no such folder."""
-        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        found = self._api(f"repos/{repo}/contents/{path}?ref={quote(ref, safe='')}", missing_ok=True)
         if not isinstance(found, list):
             return []
         return sorted(p for item in found for p in ([item["path"]] if item["type"] == "file" else self.folder(repo, item["path"], ref)))
@@ -306,6 +308,21 @@ class GitHub:
     def variable(self, repo: str, name: str) -> str | None:
         found = self._api(f"repos/{repo}/actions/variables/{name}", missing_ok=True)
         return None if found is None else found["value"]
+
+    # Environments (the bootstrap makes one per role repo, named after the role)
+
+    def environment(self, repo: str, name: str) -> dict | None:
+        """The environment with its protection_rules and deployment_branch_policy, or None when there is none."""
+        return self._api(f"repos/{repo}/environments/{name}", missing_ok=True)
+
+    def environment_variable(self, repo: str, environment: str, name: str) -> str | None:
+        found = self._api(f"repos/{repo}/environments/{environment}/variables/{name}", missing_ok=True)
+        return None if found is None else found["value"]
+
+    def branch_policies(self, repo: str, environment: str) -> list[tuple[str, str]]:
+        """What an environment with custom policies accepts, sorted: (name or pattern, branch or tag)."""
+        return sorted((p["name"], p.get("type") or "branch")
+                      for p in self._pages(f"repos/{repo}/environments/{environment}/deployment-branch-policies", "branch_policies"))
 
     def set_variable(self, repo: str, name: str, value: str) -> None:
         if self.has_variable(repo, name):

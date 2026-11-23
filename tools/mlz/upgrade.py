@@ -70,6 +70,62 @@ def role_of(workflow: str) -> str:
     return match["role"]
 
 
+# Who approves an apply, as a caller passes it to role.yml and workload.yml: environment (the default, when the caller
+# passes nothing: a reviewer in the environment, GitHub Enterprise) or pull-request (GitHub Team: the pull request's
+# approval, which then covers the plan applied). The caller is under .github/, which only the bypass team may change.
+CALL = re.compile(r"^(?P<indent>[ \t]+)uses:\s*[\w.-]+/[\w.-]+/\.github/workflows/(role|workload)\.yml@")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _with(lines: list[str]) -> tuple[int, int, str] | None:
+    """The with: of the job that calls mlz-core's workflow: (its line, the line after its block, its inline value, or
+    "" for a block), or None when that job has no with:. Only that mapping is the input, so an approval: anywhere else
+    in the file, a step's env or a comment, is never taken for it."""
+    call = next((n for n, line in enumerate(lines) if CALL.match(line)), None)
+    if call is None:
+        return None
+    indent = _indent(lines[call])
+
+    def key(n: int) -> bool:  # a line of YAML, not blank and not a comment
+        return bool(lines[n].strip()) and not lines[n].lstrip().startswith("#")
+    first = call
+    while first > 0 and (not key(first - 1) or _indent(lines[first - 1]) >= indent):
+        first -= 1
+    last = call + 1
+    while last < len(lines) and (not key(last) or _indent(lines[last]) >= indent):
+        last += 1
+    for n in range(first, last):
+        match = re.match(rf"^[ \t]{{{indent}}}with:[ \t]*(?P<inline>[^#\n]*?)[ \t]*(#.*)?$", lines[n])
+        if match:
+            end = n + 1
+            while end < last and (not key(end) or _indent(lines[end]) > indent):
+                end += 1
+            return n, end, match["inline"]
+    return None
+
+
+def approval_of(workflow: str) -> str:
+    """The approval a caller's workflow passes to mlz-core's workflow, in the with: of the job that calls it, as a block
+    or inline: environment when it passes none."""
+    lines = workflow.splitlines()
+    found = _with(lines)
+    if found is None:
+        return "environment"
+    start, end, inline = found
+    # Its keys without their comments: a comment that reads like an approval is not one. A flow mapping may go on over
+    # the lines below its opening brace.
+    block = [re.sub(r"(^|\s)#.*$", "", line) for line in lines[start + 1:end]]
+    keys = [" ".join([inline, *block]) if inline.startswith("{") and "}" not in inline else inline] if inline else block
+    for key in keys:
+        match = re.search(r"(^\s*|[{,]\s*)(['\"]?)approval\2[ \t]*:[ \t]*['\"]?(?P<approval>[\w-]+)", key)
+        if match:
+            return match["approval"]
+    return "environment"
+
+
 def gitignore_with(current: str | None, starter: str) -> str | None:
     """The repo's .gitignore with the starter's lines it lacks appended, comments included once; None when it has them
     all. Never changes or removes a line the repo has."""

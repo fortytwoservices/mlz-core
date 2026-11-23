@@ -50,7 +50,7 @@ from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, gitignore_with, matches, pin_of, push_refused, restricts, version
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -167,7 +167,15 @@ def checks_ruleset(role: str, app_id: int | None = None, check: str | None = Non
     }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
 BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
-GITHUB_SETTINGS = ("organization", "app", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+GITHUB_SETTINGS = ("organization", "plan", "app", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+# bootstrap.yaml's github.plan: the organization's GitHub plan, which decides who approves an apply (docs/bootstrap.md,
+# GitHub plan). enterprise, the default: a reviewer in the apply's environment, which GitHub allows in a private repo only
+# on Enterprise. team: the pull request's approval, which then covers the plan that is applied (docs/pipelines.md). Each
+# repo's pipeline passes it to mlz-core's workflow as its approval: environment, or pull-request.
+GITHUB_PLANS = {"enterprise": "environment", "team": "pull-request"}
+# On Team, the environment variable that says an environment has no reviewer, so that an apply whose pipeline still
+# expects one refuses (a check against a switch done out of order, and against mistakes; docs/bootstrap.md).
+APPROVAL_VARIABLE = "MLZ_APPROVAL"
 # bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
 # a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
 RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
@@ -192,7 +200,21 @@ def settings(folder: Path) -> tuple[dict, dict]:
     unknown += [f"github.{k}" for k in github if k not in GITHUB_SETTINGS] if isinstance(github, dict) else []
     if unknown:
         raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}), state_operators and names.")
+    github_plan(bootstrap)
     return customer, bootstrap
+
+
+def github_plan(bootstrap: dict) -> str:
+    """bootstrap.yaml's github.plan, enterprise unless set; ConfigError for another value, and for reviewers on Team."""
+    github = bootstrap.get("github") or {}
+    plan = github.get("plan", "enterprise")
+    if not isinstance(plan, str) or plan not in GITHUB_PLANS:
+        raise ConfigError(f"bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not {plan!r} (docs/bootstrap.md, GitHub plan).")
+    if plan == "team" and github.get("reviewers") is not None:
+        raise ConfigError("bootstrap.yaml: github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a private repo "
+                          "only on Enterprise, so on Team nobody would wait for them: each apply is approved on its pull request instead. Remove "
+                          "github.reviewers (docs/bootstrap.md, GitHub plan).")
+    return plan
 
 
 def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
@@ -509,22 +531,34 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
     customer, bootstrap = settings(folder)
     out(f"names: the state account will be {bootstrap_names(customer, bootstrap)['storage_account']}")
     problems = []
-    # Every apply waits for a reviewer, in the role repos and the workload repos alike, and GitHub allows required
-    # reviewers on an environment in a private repo only on GitHub Enterprise (docs/bootstrap.md).
-    org = (bootstrap.get("github") or {}).get("organization")
+    # On Enterprise an apply waits for a reviewer in its environment, which GitHub allows in a private repo only on
+    # Enterprise; on Team the pull request's approval covers the plan applied. Enterprise's way on a Team organization
+    # would leave every apply without a gate; Team's way on an Enterprise organization works, and is how it is proved
+    # (docs/bootstrap.md, GitHub plan).
+    org, wanted = (bootstrap.get("github") or {}).get("organization"), github_plan(bootstrap)
     plan = github.plan(org) if org else None
     if plan is None and org:
-        out(f"{org}: its GitHub plan is shown to its owners only, so it is not checked here; MLZ needs GitHub Enterprise.")
-    elif plan and plan != "enterprise":
-        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Enterprise: every apply waits for a reviewer, which GitHub "
-                        "allows on an environment in a private repo only on Enterprise.")
+        out(f"{org}: GitHub did not show its plan to this sign-in (it shows it to an owner, and to a sign-in with the admin:org scope), "
+            f"so it is not checked here; bootstrap.yaml says {wanted}.")
+    elif plan == "enterprise" and wanted == "team":
+        out(f"{org}: on GitHub Enterprise, with bootstrap.yaml's github.plan: team, so each apply is approved on its pull request and no "
+            "environment waits for a reviewer. Set github.plan: enterprise for the reviewer.")
+    elif plan == "team" and wanted == "enterprise":
+        problems.append(f"{org}: on GitHub Team, but bootstrap.yaml's github.plan says enterprise. GitHub allows a reviewer on an environment "
+                        "in a private repo only on Enterprise, so no apply would wait for anyone: set github.plan: team, and each apply is "
+                        "approved on its pull request (docs/bootstrap.md, GitHub plan).")
+    elif plan and plan not in GITHUB_PLANS:
+        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Team or Enterprise: on the others GitHub has no environments, "
+                        "rulesets or code owners in a private repo.")
     else:
-        out(f"{org}: on GitHub Enterprise")
+        out(f"{org}: on GitHub {wanted.capitalize()}" + (", so each apply is approved on its pull request" if wanted == "team" else ""))
     try:
         mlz_app = found_app(github, bootstrap)
     except ConfigError as error:
         mlz_app = None
         problems.append(str(error))
+    if mlz_app and wanted == "team":
+        problems += team_app_problems(mlz_app, out)
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -548,6 +582,7 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         problems += push_ruleset_problems(github, bootstrap, repo, out)
         problems += generated_ruleset_problems(github, bootstrap, repo, mlz_app, out)
         problems += required_check_problems(github, role, repo, out)
+        problems += approval_problems(github, role, repo, wanted, out)
     # GitHub shows an App's installations only to the App itself and the organization's owners.
     out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
         "without it stops its run at the App's token step (Not Found), and an App on selected repos cannot reach the workload "
@@ -692,6 +727,73 @@ def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict
         app = f"the MLZ App {mlz_app['slug']}" if mlz_app else "the MLZ App"
         out(f"{repo}: changes under _generated/ are refused on every branch, but from {app} and {org}/{team} "
             f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
+    return found
+
+
+# What the pipeline's tokens ask of the MLZ App on GitHub Team, beside what it needs on both plans (role.yml): the gate's
+# token, scoped to the repo, reads its runs, the pull request, the rule suites (Administration) and its contents; planned
+# mints one scoped to the repo (runs, pull request, contents) and one with Members alone, for the code owners' team.
+TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
+
+
+def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
+    """Whether the MLZ App asks for at least read of each permission the Team gate's tokens ask for, as GET /apps/<slug>
+    shows it. Whether an owner has accepted them on the installation only the App and the owners see: said."""
+    held = app.get("permissions") or {}
+    missing = [name for name in TEAM_APP_PERMISSIONS if held.get(name) not in ("read", "write", "admin")]
+    if missing:
+        return [f"the MLZ App {app['slug']} does not ask for {', '.join(f'{name} (read)' for name in missing)}, which the pipeline's gate on "
+                "GitHub Team reads with; an owner of the App adds them (its Settings, Permissions), and an owner of the organization "
+                "accepts them on its installation."]
+    out(f"the MLZ App {app['slug']} asks for what the gate on GitHub Team reads with ({', '.join(TEAM_APP_PERMISSIONS)}); whether an owner "
+        "accepted each on its installation only an owner sees")
+    return []
+
+
+def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[str], None]) -> list[str]:
+    """Whether the repo's pipeline and its environment agree with github.plan, both ways: on Enterprise the pipeline
+    passes no approval and the environment waits for a reviewer; on Team the pipeline passes approval: pull-request and
+    the environment has no reviewer and the variable MLZ_APPROVAL: pull-request. And that only main may use it, which
+    GitHub allows in a private repo on Team and Enterprise: this is where a Team organization that lacks it shows."""
+    found, wanted = [], GITHUB_PLANS[plan]
+    branch = github.default_branch(repo)
+    workflow = github.file(repo, WORKFLOW, branch)[0]
+    if workflow is None:
+        found.append(f"{repo}: no {WORKFLOW} on {branch}, so nothing deploys and no check runs; mlz install repos offers the starter's files.")
+    elif approval_of(workflow) != wanted:
+        found.append(f"{repo}: its pipeline ({WORKFLOW}) passes approval: {approval_of(workflow)}, but bootstrap.yaml's github.plan is {plan}, "
+                     f"whose approval is {wanted}. mlz install repos offers the change; a member of the bypass team merges it (docs/bootstrap.md, "
+                     "Switching plans).")
+    environment = github.environment(repo, role)
+    if environment is None:
+        out(f"{repo}: no environment {role} yet; mlz install bootstrap makes it")
+        return found
+    rules = environment.get("protection_rules") or []
+    reviewed = any(rule.get("type") == "required_reviewers" and rule.get("reviewers") for rule in rules)
+    variable = github.environment_variable(repo, role, APPROVAL_VARIABLE)
+    if plan == "enterprise" and not reviewed:
+        found.append(f"{repo}: its environment {role} has no reviewer, so an apply there waits for nobody. mlz install bootstrap gives it "
+                     "github.reviewers.")
+    if plan == "enterprise" and variable is not None:
+        found.append(f"{repo}: its environment {role} has the variable {APPROVAL_VARIABLE}, left from GitHub Team's way, so every apply there "
+                     "refuses. mlz install bootstrap removes it.")
+    if plan == "team" and reviewed:
+        found.append(f"{repo}: its environment {role} still has a reviewer, so the switch to GitHub Team's way is not finished. mlz install "
+                     "bootstrap removes it, once every repo's pipeline passes approval: pull-request.")
+    if plan == "team" and variable != "pull-request":
+        found.append(f"{repo}: its environment {role} has no variable {APPROVAL_VARIABLE}: pull-request, which makes an apply refuse whose "
+                     "pipeline still expects a reviewer. mlz install bootstrap sets it.")
+    policy = environment.get("deployment_branch_policy") or {}
+    allowed = github.branch_policies(repo, role) if policy.get("custom_branch_policies") else []
+    if policy.get("protected_branches") or allowed != [("main", "branch")]:
+        accepts = ("any protected branch" if policy.get("protected_branches") else
+                   ", ".join(f"{name}{' (a tag)' if kind == 'tag' else ''}" for name, kind in allowed) if allowed else "any branch")
+        found.append(f"{repo}: its environment {role} is not limited to main (it accepts {accepts}), so a run on another branch could apply. "
+                     "GitHub has branch policies on an environment in a private repo on Team and Enterprise; mlz install bootstrap sets main alone.")
+    if not found:
+        out(f"{repo}: its pipeline and its environment {role} are GitHub {plan.capitalize()}'s: "
+            + ("an apply waits for a reviewer" if plan == "enterprise" else "no reviewer, each apply approved on its pull request")
+            + ", from main only")
     return found
 
 
@@ -1152,7 +1254,7 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         raise ConfigError(f"the runners' vault {named['key_vault']} is not there yet: the bootstrap makes it once management's network and the "
                           "hub's zones exist. Run mlz install bootstrap again, then this step.")
 
-    group = self_hosted_group(github, org, repos, core, out)
+    group = self_hosted_group(github, org, repos, core, out, bootstrap)
     if group is None:
         return
 
@@ -1212,7 +1314,7 @@ def pinned_releases(github, repos: dict[str, str], core: str) -> set[str]:
     return found
 
 
-def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None]) -> dict | None:
+def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None], bootstrap: dict | None = None) -> dict | None:
     """The organization's runner group mlz, for the three repos and role.yml in the organization's copy of mlz-core,
     at the releases they pin, only: a runner group can admit no workflow of another organization's. Only an owner
     may make it: anyone else gets the command to send to one, and None."""
@@ -1221,15 +1323,21 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": pinned}
+    # Made with no repo, and given the repos only once GitHub is seen to keep its limit to role.yml: a repo admitted to
+    # a group without it could start a job there before the limit is read back.
+    empty = {**body, "selected_repository_ids": []}
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
-            f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
+            f"{RUNNER}, for {workflow} only and no repo yet. Then an owner runs this step again, which admits the three repos once GitHub "
+            "keeps that limit.\n")
         out("\n".join([f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
-                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(body))}"]) + "\n")
+                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(empty))}"]) + "\n")
         return None
     made = github.runner_group(org, RUNNER)
     if made is None:
-        made = github.create_runner_group(org, body)
+        made = github.create_runner_group(org, empty)
+        workflows_kept(github, org, pinned, bootstrap, out)
+        github.set_runner_group_repositories(org, made["id"], repo_ids)
         out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
         return made
     if made.get("network_configuration_id"):
@@ -1242,10 +1350,36 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
             or workflows != sorted(made.get("selected_workflows") or [])):
         github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
                                                      "restricted_to_workflows": True, "selected_workflows": workflows})
+    workflows_kept(github, org, workflows, bootstrap, out)
     if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
         github.set_runner_group_repositories(org, made["id"], repo_ids)
     out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
     return made
+
+
+def workflows_kept(github, org: str, requested: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
+    """Whether GitHub kept the group's limit to exactly the workflows requested (role.yml at the releases admitted), read
+    back. Without it any workflow of the three repos could run where the runner App's key is, and nothing in the repos
+    can prove there is none: an old run kept in the Actions history can be re-run with the workflow it had. So a group
+    without the limit is left with no repo in it, and the step stops, on GitHub Team as on Enterprise (the user's
+    decision of 23 November). GitHub documents the limit ("Changing which workflows can access a runner group") for
+    Enterprise Cloud only; on Team, GitHub-hosted runners joined to management's network are the private way."""
+    group = github.runner_group(org, RUNNER) or {}
+    if group.get("restricted_to_workflows") and sorted(group.get("selected_workflows") or []) == sorted(requested):
+        return
+    if group.get("id") is not None:
+        github.set_runner_group_repositories(org, group["id"], [])
+    kept = sorted(group.get("selected_workflows") or []) if group.get("restricted_to_workflows") else []
+    lost = (f"{org}'s runner group {RUNNER} is not limited to {' and '.join(requested)}: GitHub "
+            + (f"keeps it limited to {', '.join(kept)} instead" if kept else "did not keep its limit to selected workflows"))
+    if bootstrap is not None and github_plan(bootstrap) == "team":
+        raise ConfigError(f"{lost}, which GitHub documents for Enterprise Cloud only. Without it any workflow of the three repos could reach "
+                          f"the runners and the runner App's key, so no repo may use the group now, and no self-hosted runner is made. On "
+                          "GitHub Team, set github.runners.kind: github-hosted in bootstrap.yaml: GitHub's runners, joined to management's "
+                          "network (docs/bootstrap.md, private runners).")
+    raise ConfigError(f"{lost}, which GitHub Enterprise allows. Without it any workflow of the three repos could reach the runners and the "
+                      f"runner App's key, so no repo may use the group now: set it in the organization's Settings, Actions, Runner groups, "
+                      f"{RUNNER}, Workflow access (selected workflows: {', '.join(requested)}), then run this step again.")
 
 
 def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callable[[str], None], wait: Callable[[float], None]) -> None:

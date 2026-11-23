@@ -10,6 +10,7 @@ operators).
 # bootstrap.yaml
 github:
   organization: demo-org
+  plan: enterprise                 # the organization's GitHub plan: enterprise, or team (below)
   app: demo-org-mlz                # the MLZ App (github.com/apps/<this>); with bypass_team, the only writer of _generated/
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
@@ -17,7 +18,7 @@ github:
     vending: mlz-vending
   platform_team: platform          # the GitHub team that owns the three repos (their CODEOWNERS)
   bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
-  reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+  reviewers: [demo-platform-lead]  # GitHub users who approve every apply (Enterprise; on Team, leave it out)
   runners:                         # where the pipelines' Azure jobs run (mlz install runners)
     kind: self-hosted              # self-hosted (the default) or github-hosted
     size: Standard_D2ds_v6         # an Azure VM size (the default); for github-hosted, GitHub's: 2-core, 4-core
@@ -125,15 +126,30 @@ who created it normally has.
 Vending does not create subscriptions yet; it adopts existing ones. For EA and MCA customers it could
 create them itself, and then the handover step disappears for them.
 
-## GitHub Enterprise
+## GitHub plan
 
-MLZ needs the customer's GitHub organization on **GitHub Enterprise**. Every apply waits for a reviewer: the role
-repos' environments, and the landing zones' workload repos' `apply` environments. GitHub allows required reviewers
-on an environment in a private repo only on Enterprise; on Free, Pro and Team only in public repos (GitHub Docs,
-"Managing environments for deployment", availability). Tested on 13 November 2026 in a test organization on Free:
-GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers protection rule").
-`mlz install check` reads the organization's plan and refuses another one; GitHub shows the plan only to its
-owners, so for anyone else it says so and goes on.
+MLZ needs the customer's GitHub organization on **GitHub Team or Enterprise**: GitHub has environments with branch
+policies, rulesets, push rulesets and code owners in a private repo only on those (GitHub Docs, "Managing environments
+for deployment", "About rulesets" and "About code owners", availability). `bootstrap.yaml`'s `github.plan` says which,
+and decides who approves an apply:
+
+- **`enterprise`** (the default): `github.reviewers` approve each apply in its environment, after its plan is on the
+  run's page. GitHub allows a reviewer on an environment in a private repo only on Enterprise; on Free, Pro and Team
+  only in public repos ("Deployments and environments", required reviewers). Tested on 13 November 2026 in a test
+  organization on Free: GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers
+  protection rule").
+- **`team`**: no environment has a reviewer, and the approval of the pull request covers the plan that is applied
+  (`docs/pipelines.md`). `github.reviewers` is refused, since nobody would wait for them. Each environment carries the
+  variable `MLZ_APPROVAL: pull-request`, which makes an apply refuse whose pipeline still expects a reviewer: a check
+  against a switch done out of order and against mistakes. It does not stop the owning team, which may change an
+  environment's variables with maintain rights (tested 23 November 2026).
+
+`mlz install check` reads the organization's plan and compares it with `github.plan`. On Team with `plan:
+enterprise` it refuses, since no apply would wait for anyone. On Enterprise with `plan: team` it says so and goes
+on: Team's way works there, which is how it is proved. On any other plan it refuses. GitHub shows the plan to an
+owner and to a sign-in with the `admin:org` scope; for anyone else the check says so and goes on. It also compares each role
+repo's pipeline (the approval its `mlz.yml` passes) and its environment (the reviewer, `MLZ_APPROVAL`, `main` only)
+with `github.plan`, both ways, and says what to run.
 
 ## Running it
 
@@ -195,7 +211,7 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
    - A repo that exists keeps its files. If it has no workflow yet, the starter's missing files come as a pull
      request; if it has no `CODEOWNERS`, that file does. A ruleset of its own named `main`, `main-checks`,
      `pipeline-files` or `generated-files` is left as it is.
-2. **`check`** confirms the organization is on GitHub Enterprise ([above](#github-enterprise)), that the
+2. **`check`** confirms the organization's plan agrees with `github.plan` ([above](#github-plan)), that the
    customer's MLZ App is set in each repo (`MLZ_RELEASE_APP_CLIENT_ID` and `MLZ_RELEASE_APP_PRIVATE_KEY`), and
    that each repo's code owners decide: the platform team may write, GitHub reads every line of `CODEOWNERS`,
    and an active ruleset requires a code owner's review on the default branch, and the pipeline's check from
@@ -279,6 +295,11 @@ App**, and reads the App's private key from the runners' vault with an identity 
      A repo pinned to anything else, `fortytwoservices/mlz-core` included, stops the step: an organization's
      runner group cannot admit another organization's workflow (GitHub's docs, "Changing which workflows can
      access a runner group").
+     GitHub documents that limit to selected workflows for Enterprise Cloud only. The step reads the group back, and
+     where GitHub did not keep the limit it takes every repo out of the group and stops, on Team as on Enterprise:
+     without it any workflow of the three repos could reach the runners and the runner App's key, and nothing in the
+     repos can show there is none (an old run can be re-run with the workflow it had). On Team, use GitHub-hosted runners
+     then (`kind: github-hosted`, below), which GitHub joins to management's network there too.
      A pull request that adds a job of its own to `mlz.yml`, or points it at another `role.yml`, gets no runner
      (decided 2026-11-16; the first customer install is the first test of it). Run by anyone but an owner, the
      step changes nothing and prints the command for one. A group `mlz` made for GitHub-hosted runners is not
