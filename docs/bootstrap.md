@@ -165,11 +165,14 @@ is therefore not Enterprise's, and this is said to them as it is:
 - **The MLZ App's commits of a landing zone's values** (`mlz.auto.tfvars.json`, which reach a workload repo's `main`
   with no pull request) apply as vending wrote them, with no person. They come from a vending pull request the
   platform team approved, and they change only that landing zone (`docs/vending.md`).
-- **The bypass team's merges** apply with nobody else's approval, and the run page says so. GitHub records each bypass
-  (the repo's Insights, Rules).
-- **A manual run on `main` applies nothing**, since no pull request's approval covers its plan. To apply what `main`
-  says, after drift or a half-failed apply: change `replan.txt` at the repo's top, or add it if it is not there, with
-  one line saying why ([pipelines](pipelines.md#when-the-gate-refuses-replantxt)).
+- **The bypass team's merges** apply with nobody else's approval. In a role repo the run's page and a comment on the pull
+  request name a bypass when GitHub's record shows it, as best effort; a workload repo's run cannot read that record. So a
+  run without the note proves no approval: GitHub's own record, which is complete, is under the repo's Insights, Rules
+  ([pipelines](pipelines.md#contracts-and-the-bypass-team)).
+- **A manual run on `main` applies only a plan already approved**: the one the pull request that made `main`'s commit
+  showed (after an apply that stopped before changing anything, say). It cannot apply drift or the rest of a failed
+  apply, which need a new approval: change `replan.txt` at the repo's top, or add it if it is not there, with one line
+  saying why ([pipelines](pipelines.md#when-the-gate-refuses-replantxt)).
 - **Self-hosted runners only where GitHub keeps the runner group limited to `role.yml`,** which GitHub documents for
   Enterprise Cloud only. Where it does not, `mlz install runners` stops and the pipelines run on GitHub-hosted runners
   joined to management's network (`kind: github-hosted`), which GitHub documents for Team ([private runners](#private-runners)).
@@ -185,6 +188,13 @@ by the steps below.
 
 No migration code: steps a person follows, in an order that never leaves an apply without a gate. In between, both
 gates hold. Each settings change is the customer's (or Fortytwo's, on the customer's word).
+
+**While an environment changes** (steps 5 and 6 on the way to Team, 2 and 3 on the way back), hold the repos still:
+finish any apply under way, cancel any run waiting for a reviewer, and merge nothing, start no manual run and re-run
+nothing in the affected role and workload repos until the change has applied. A run started before a pipeline switched
+keeps its old pipeline, and inside one apply an environment has neither its reviewer nor `MLZ_APPROVAL` for a moment
+([pipelines](pipelines.md#what-it-does-not-catch)). If an apply stops between taking a reviewer away and setting
+`MLZ_APPROVAL`, give the environment its reviewer back before any run goes on.
 
 **Enterprise to Team**, while the organization is still on Enterprise:
 
@@ -211,6 +221,9 @@ gates hold. Each settings change is the customer's (or Fortytwo's, on the custom
 
 **Team to Enterprise**, the same in reverse, reviewers first:
 
+0. If the organization is on GitHub Team, it moves to GitHub Enterprise first, while `bootstrap.yaml` still says
+   `plan: team` (`mlz install check` allows that pairing): on Team GitHub refuses a reviewer on an environment in a private
+   repo, so the bootstrap could not give one back.
 1. In `bootstrap.yaml`, set `plan: enterprise` (or remove the line) and put `reviewers` back. Merge it.
 2. Run `mlz install bootstrap`. It gives each role environment its reviewer back first, and only then removes its
    variable `MLZ_APPROVAL`, in that order.
@@ -219,7 +232,8 @@ gates hold. Each settings change is the customer's (or Fortytwo's, on the custom
    and vending takes `workload / planned` out of the `main-checks` it made and removes the push rule it made on
    `.github/`.
    Should an environment keep `MLZ_APPROVAL` after its reviewer is back (an apply that stopped half way), the pipeline
-   refuses every apply there until it is gone: give the environment its reviewer back first, and only then remove its
+   refuses every apply there whose pipeline is back in Enterprise's way (a role repo after step 4, a workload repo once
+   its switch is merged) until it is gone: give the environment its reviewer back first, and only then remove its
    variable `MLZ_APPROVAL` by hand (Settings, Environments); remove a repository variable `MLZ_APPROVAL` too, if there
    is one: it is never the switch.
 4. As a member of the bypass team, run `mlz install repos`, and merge the three pull requests it offers.
