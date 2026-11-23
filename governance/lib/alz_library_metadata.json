@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/library_metadata.json",
   "name": "fortytwo",
   "display_name": "Fortytwo managed landing zones",
-  "description": "Fortytwo's additions to the Azure Landing Zones library. Customer-specific parts (the management group tree, the archetype overrides and the tag policies) are rendered from customer.yaml by mlz-core (python3 -m mlz governance).",
+  "description": "Fortytwo's additions to the Azure Landing Zones library. Customer-specific parts (the management group tree, the archetype overrides and the tag policies) are rendered from governance.yaml by mlz-core (python3 -m mlz governance).",
   "dependencies": [
     {
       "path": "platform/alz",

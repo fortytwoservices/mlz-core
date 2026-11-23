@@ -65,7 +65,7 @@ landing zone's environment (its file name) and its region:
 | The workload repo's plan identity | `plan` | `id-acme-pay-plan-pd-nwe-01` |
 | Its state's resource group | `state` | `rg-acme-pay-state-pd-nwe-01` |
 | Its state's storage account: the landing zone's only one, and Azure allows 24 characters, which a purpose could pass | none | `stacmepaypdnwe01` |
-| The workload repo itself, when vending makes it | `customer.yaml`'s `naming.repository` | `payments-prod` |
+| The workload repo itself, when vending makes it | `governance.yaml`'s `naming.repository` | `payments-prod` |
 | The subscription, when vending makes it: its display name (its alias is `<root>-<key>`, `docs/vending.md`) | none | `sub-acme-pay-pd-nwe-01` |
 
 Subnets (`snet-<name>`) and peerings (`peer-<key>-to-hub`, `peer-hub-to-<key>`) are named inside their network,
@@ -163,7 +163,7 @@ for governance, `mlz platform` for the platform's roots, `mlz install` for the b
 such as the DNS zones' group or management's network, comes from one place, so they always agree.
 
 Unlike a landing zone's, these are **worked out on every run** and not recorded: they change only with a reviewed
-change to `customer.yaml`, whose plans show every renamed resource replaced. Two ways to keep a name:
+change to `governance.yaml`, whose plans show every renamed resource replaced. Two ways to keep a name:
 
 - **A hub component**: under `names:` in its connectivity file (`docs/platform.md`).
 - **The bootstrap's state account or resource group**: under `names:` in `bootstrap.yaml`. The state account
@@ -205,7 +205,7 @@ holds a number only while it is named there, so give it one the template does no
 
 The platform's networks keep no such record, so management's and identity's NSGs cannot be numbered in a way that
 holds when a subnet is added or removed. Their template keeps `{purpose}`, which is the subnet's name: with a general
-template without it, give NSGs one of their own in `customer.yaml`, or the check refuses it:
+template without it, give NSGs one of their own in `governance.yaml`, or the check refuses it:
 
 ```yaml
 naming:
@@ -217,7 +217,7 @@ naming:
 `./mlz explain --repo . <key>` says, for a landing zone's numbered name, which number it is and why. The tables are
 `NUMBERS` in `tools/mlz/names.py` and `tools/mlz/vending.py`, each pinned by a test.
 
-## customer.yaml
+## governance.yaml
 
 ```yaml
 naming:

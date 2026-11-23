@@ -21,7 +21,7 @@
                                                                       there (a billing owner; others get the command
                                                                       and the role to send)
 
-<dir> holds the customer's customer.yaml and bootstrap.yaml: a checkout of the governance repo, or for a new
+<dir> holds the customer's governance.yaml and bootstrap.yaml: a checkout of the governance repo, or for a new
 customer a folder of the two files before the repos exist (repos then commits them to the governance repo).
 Run from an mlz-core checkout (PYTHONPATH=tools), signed in to gh (admin on the customer's repos, workflow
 scope) and, for bootstrap and handover, to the Azure CLI as someone who may create the top group.
@@ -46,7 +46,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract, mirror, names, naming, owners, platform, stacks, vending
+from . import contract, governance, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
@@ -200,10 +200,12 @@ EXECUTABLE_BRANCH = "mlz/executable"  # the pull request that makes ./mlz execut
 
 
 def settings(folder: Path) -> tuple[dict, dict]:
-    files = [folder / "customer.yaml", folder / "bootstrap.yaml"]
+    if (refused := governance.renamed(folder)) is not None:
+        raise ConfigError(refused)
+    files = [folder / governance.FILE, folder / "bootstrap.yaml"]
     missing = [str(f) for f in files if not f.is_file()]
     if missing:
-        raise ConfigError(f"missing {', '.join(missing)}: --settings is the folder with the customer's customer.yaml and bootstrap.yaml.")
+        raise ConfigError(f"missing {', '.join(missing)}: --settings is the folder with the customer's governance.yaml and bootstrap.yaml.")
     customer, bootstrap = read_yaml(files[0]), read_yaml(files[1])
     github = bootstrap.get("github")
     unknown = [str(k) for k in bootstrap if k not in BOOTSTRAP_SETTINGS]
@@ -228,14 +230,14 @@ def github_plan(bootstrap: dict) -> str:
 
 
 def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
-    """The bootstrap's names, and the platform's it points at, from customer.yaml's naming (tools/mlz/names.py), with
+    """The bootstrap's names, and the platform's it points at, from governance.yaml's naming (tools/mlz/names.py), with
     bootstrap.yaml's names: for its resource group or state account."""
     try:
         settings = naming.settings(customer, customer["root_id"])
         return names.bootstrap(settings, customer["primary_region"], names.bootstrap_explicit(bootstrap.get("names")),
                                self_hosted=runner_settings(bootstrap)["kind"] == "self-hosted")
     except KeyError as error:
-        raise ConfigError(f"customer.yaml: {error} is required.") from None
+        raise ConfigError(f"governance.yaml: {error} is required.") from None
     except ConfigError as error:
         raise ConfigError(f"names: {error}") from None
 
@@ -365,7 +367,7 @@ def starter_files(role: str, folder: Path) -> dict[str, str]:
     files[WORKFLOW] = caller(files[WORKFLOW], plan)
     files[owners.PATH] = owners.render(*platform_team(bootstrap), plan)
     if role == "governance":
-        files.update({name: (folder / name).read_text() for name in ("customer.yaml", "bootstrap.yaml")})
+        files.update({name: (folder / name).read_text() for name in ("governance.yaml", "bootstrap.yaml")})
     return files
 
 
@@ -513,6 +515,11 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
             make_executable(github, repo, branch, files, message)
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
+            # A governance repo with its settings under their name before v0.16.0 would get governance.yaml beside them,
+            # and then neither check nor git mv could go on: the rename comes first, by hand (decision D5).
+            if role == "governance" and github.file(repo, governance.OLD_FILE, branch)[0] is not None:
+                raise ConfigError(f"{repo}: {governance.OLD_FILE} is called {governance.FILE} now; rename it there first, in a pull request "
+                                  f"(git mv {governance.OLD_FILE} {governance.FILE}), then run mlz install repos again. Nothing was offered to it.")
             starter = starter_files(role, folder)
             missing = {path: text for path, text in starter.items() if github.file(repo, path, branch)[0] is None}
             # The repo's own .gitignore keeps every line it has; the starter's it lacks are appended.
@@ -1012,7 +1019,7 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
             raise ConfigError("\n  ".join(["bootstrap.yaml's github.plan is team, and this apply would take each role environment's reviewer "
                                              "away; Team's gate must hold first in every role repo, or an apply there would wait for nobody. "
                                              "Nothing was applied (docs/bootstrap.md, Switching plans):"] + behind))
-    # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
+    # Worked out here, on every run, from governance.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
     # bootstrap.yaml's runner settings, checked, with their defaults.
     names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"
     names_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1029,7 +1036,7 @@ def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Cal
     if terraform.run(*init).returncode:
         raise ConfigError("terraform init failed; see above.")
     plan = terraform.work / "bootstrap.tfplan"
-    variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
+    variables = ["-var", f"governance_file={(folder / 'governance.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
                  "-var", f"names_file={names_file}", "-var", f"runners_file={runners_file}"]
     # Whether anything is to apply is the plan's own JSON, read as the pipeline reads it (tools/ci/summary.py), never
     # Terraform's exit code (D12): an import or a move alone changes nothing in Azure, but must be applied for the

@@ -10,10 +10,10 @@ connectivity:
     hub_virtual_networks.bastion: built when the hub file says bastion true
     hub_virtual_networks.dns_resolver: built unless the hub file says dns_resolver false
   inputs:
-    parent_id: {class: derived, by: "the connectivity subscription: customer.yaml's subscriptions.connectivity, through the governance contract"}
+    parent_id: {class: derived, by: "the connectivity subscription: governance.yaml's subscriptions.connectivity, through the governance contract"}
     hub_virtual_networks.location: {class: derived, by: "the region: the file's name", config: "hubs.{region}.location"}
     hub_virtual_networks.address_space: {class: derived, by: "the first /22 of platform_address_space", config: "hubs.{region}.address_space"}
-    hub_virtual_networks.is_primary: {class: derived, by: "customer.yaml's primary_region, through the governance contract", config: "hubs.{region}.is_primary"}
+    hub_virtual_networks.is_primary: {class: derived, by: "governance.yaml's primary_region, through the governance contract", config: "hubs.{region}.is_primary"}
     hub_virtual_networks.name: {class: derived, by: "the naming template", names: virtual_network, config: "hubs.{region}.names.virtual_network"}
     hub_virtual_networks.resource_group_name: {class: derived, by: "the naming template", names: resource_group, config: "hubs.{region}.names.resource_group"}
     hub_virtual_networks.routing_supernet: {class: derived, by: "what the other hubs send to this hub's firewall: platform_address_space (unless a landing zone range holds it) and landing_zone_ranges", config: "hubs.{region}.routing_supernet"}
@@ -66,7 +66,7 @@ connectivity:
     private_dns_zones.excluded_zones: open
     private_dns_zones.additional_zones: open
     naming: {class: fixed, why: "mlz-core names every component itself (tools/mlz/names.py): one left without a name fails the plan rather than take another scheme's"}
-    diagnostic_settings.name: {class: derived, by: "to-<org>-workspace, from customer.yaml's naming", config: names.diagnostic_setting}
+    diagnostic_settings.name: {class: derived, by: "to-<org>-workspace, from governance.yaml's naming", config: names.diagnostic_setting}
     diagnostic_settings.logs: {class: fixed, value: [{category_group: allLogs}], why: "every log goes to the central workspace"}
     diagnostic_settings.metrics: open
     diagnostic_settings.log_analytics_destination_type: {class: fixed, why: "Azure's resource-specific tables: a table per kind of log (rule hits, threat intelligence, DNS proxy)"}

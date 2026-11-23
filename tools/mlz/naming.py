@@ -9,7 +9,7 @@ Azure/avm-utl-naming) then decide the rest: no dashes for a type that takes none
 case where the type needs it, and a length and characters the type allows. A name that does not fit is
 refused, never cut: two long names cut short can come out the same.
 
-customer.yaml's naming section sets the customer's code, the template (and one per type, for the 24-character
+governance.yaml's naming section sets the customer's code, the template (and one per type, for the 24-character
 ones), and adds to or changes the environments' and regions' short names, and the platform's parts' short names. An
 explicit name for one resource wins over all of it, and is checked against the same rules.
 """
@@ -25,12 +25,12 @@ from pathlib import Path
 from .merge import ConfigError
 
 # Every Azure region with Microsoft's code for it (Azure/avm-utl-regions v0.13.0's geo codes). A code is in names, so
-# one never changes once used; customer.yaml's naming.regions replaces any.
+# one never changes once used; governance.yaml's naming.regions replaces any.
 REGION_CODES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "region-codes.json").read_text())
 TEMPLATE = "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}"
 TOKENS = ("type", "org", "app", "purpose", "env", "region", "nn")
 OPTIONAL = {"purpose"}
-# A landing zone's file name to its environment's short name; customer.yaml adds or changes any.
+# A landing zone's file name to its environment's short name; governance.yaml adds or changes any.
 ENVIRONMENTS = {"dev": "dv", "test": "te", "uat": "ut", "sit": "st", "qa": "qa", "preprod": "pp", "sandbox": "sb", "dr": "dr", "prod": "pd"}
 # Lengths of the short codes a customer chooses: short enough that the 24-character types still fit.
 # A purpose may be a subnet's name (an NSG's), so it takes inner hyphens and up to 20; its type's own length is
@@ -46,7 +46,7 @@ REPOSITORY = "{app}-{env}"
 REPOSITORY_TOKENS = ("org", "app", "env")
 GITHUB_REPOSITORY = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 # The platform's parts, each named as an app of its own: vnet-acme-hub-pd-nwe-01, rg-acme-mgt-net-pd-nwe-01. Their
-# environment is prod, so its code follows naming.environments. customer.yaml's naming.platform changes any.
+# environment is prod, so its code follows naming.environments. governance.yaml's naming.platform changes any.
 PLATFORM = {"hub": "hub", "dns": "dns", "management": "mgt", "identity": "idn", "bootstrap": "mlz"}
 PLATFORM_ENVIRONMENT = "prod"
 RULES = json.loads((Path(__file__).resolve().parents[2] / "modules" / "naming" / "name-rules.json").read_text())["types"]
@@ -55,7 +55,7 @@ PART = re.compile(r"\{([a-z]+)\}|(-)|([a-z0-9]+)")
 
 @dataclass
 class Naming:
-    """A customer's naming, from customer.yaml with mlz-core's defaults filled in."""
+    """A customer's naming, from governance.yaml with mlz-core's defaults filled in."""
     org: str
     template: list[tuple[str, str]]
     templates: dict[str, list[tuple[str, str]]] = field(default_factory=dict)
@@ -77,7 +77,7 @@ def mapping(given: dict, key: str, problems: list[str]) -> dict:
     if value is None:
         return {}
     if not isinstance(value, dict):
-        problems.append(f"customer.yaml: naming.{key} maps each name to its value, not {value!r}.")
+        problems.append(f"governance.yaml: naming.{key} maps each name to its value, not {value!r}.")
         return {}
     return value
 
@@ -114,62 +114,62 @@ def parse(template: object, where: str, problems: list[str]) -> list[tuple[str, 
 
 
 def settings(customer: dict, root_id: str) -> Naming:
-    """customer.yaml's naming section, checked, with mlz-core's defaults for what it leaves out."""
+    """governance.yaml's naming section, checked, with mlz-core's defaults for what it leaves out."""
     given = customer.get("naming")
     problems: list[str] = []
     if given is None:  # absent, or written with nothing under it: mlz-core's defaults
         given = {}
     if not isinstance(given, dict):
-        raise ConfigError("customer.yaml: naming is a group of settings (org, template, templates, environments, regions).")
-    problems += [f"customer.yaml: naming.{k} is not a setting; use {', '.join(sorted(SETTINGS))}." for k in sorted(set(given) - SETTINGS, key=str)]
+        raise ConfigError("governance.yaml: naming is a group of settings (org, template, templates, environments, regions).")
+    problems += [f"governance.yaml: naming.{k} is not a setting; use {', '.join(sorted(SETTINGS))}." for k in sorted(set(given) - SETTINGS, key=str)]
     org = given.get("org", root_id)
     if "org" in given:
-        short("customer.yaml: naming.org", "org", org, problems)
+        short("governance.yaml: naming.org", "org", org, problems)
     elif not short("root ID", "org", org, []):
-        problems.append(f"customer.yaml: the root ID {root_id!r} is too long to be the customer's code in names, which is 2 to 4 lower-case "
+        problems.append(f"governance.yaml: the root ID {root_id!r} is too long to be the customer's code in names, which is 2 to 4 lower-case "
                         "letters and digits; set naming.org.")
-    template = parse(given.get("template", TEMPLATE), "customer.yaml: naming.template", problems)
+    template = parse(given.get("template", TEMPLATE), "governance.yaml: naming.template", problems)
     templates = {}
     for kind, text in mapping(given, "templates", problems).items():
         if kind not in RULES:
-            problems.append(f"customer.yaml: naming.templates.{kind} is not a type mlz-core names; use {', '.join(sorted(RULES))}.")
+            problems.append(f"governance.yaml: naming.templates.{kind} is not a type mlz-core names; use {', '.join(sorted(RULES))}.")
             continue
-        templates[kind] = parse(text, f"customer.yaml: naming.templates.{kind}", problems)
+        templates[kind] = parse(text, f"governance.yaml: naming.templates.{kind}", problems)
     environments = dict(ENVIRONMENTS)
     for env, code in mapping(given, "environments", problems).items():
-        if short(f"customer.yaml: naming.environments.{env}", "env", code, problems):
+        if short(f"governance.yaml: naming.environments.{env}", "env", code, problems):
             environments[str(env)] = code
     regions = dict(REGION_CODES)
     for region, code in mapping(given, "regions", problems).items():
         if region not in REGION_CODES:
-            problems.append(f"customer.yaml: naming.regions.{region} is not an Azure region (modules/naming/region-codes.json).")
-        elif short(f"customer.yaml: naming.regions.{region}", "region", code, problems):
+            problems.append(f"governance.yaml: naming.regions.{region} is not an Azure region (modules/naming/region-codes.json).")
+        elif short(f"governance.yaml: naming.regions.{region}", "region", code, problems):
             regions[region] = code
     platform = dict(PLATFORM)
     for part, code in mapping(given, "platform", problems).items():
         if part not in PLATFORM:
-            problems.append(f"customer.yaml: naming.platform.{part} is not a part of the platform; use {', '.join(PLATFORM)}.")
-        elif short(f"customer.yaml: naming.platform.{part}", "app", code, problems):
+            problems.append(f"governance.yaml: naming.platform.{part} is not a part of the platform; use {', '.join(PLATFORM)}.")
+        elif short(f"governance.yaml: naming.platform.{part}", "app", code, problems):
             platform[part] = code
     parts = {}
     for part, code in platform.items():
         if code in parts:
-            problems.append(f"customer.yaml: naming.platform gives {part} the short name {code}, which {parts[code]} has too; every part needs its own.")
+            problems.append(f"governance.yaml: naming.platform gives {part} the short name {code}, which {parts[code]} has too; every part needs its own.")
         parts.setdefault(code, part)
     repository = given.get("repository", REPOSITORY)
     if not isinstance(repository, str) or not re.fullmatch(r"(\{[a-z]+\}|[A-Za-z0-9._-])+", repository):
-        problems.append(f"customer.yaml: naming.repository is {repository!r}; it is tokens in braces ({', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}) "
+        problems.append(f"governance.yaml: naming.repository is {repository!r}; it is tokens in braces ({', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}) "
                         "and letters, digits, '.', '-' and '_'.")
     else:
         used = re.findall(r"\{([a-z]+)\}", repository)
-        problems += [f"customer.yaml: naming.repository has {{{t}}}, which is not a token; use {', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}."
+        problems += [f"governance.yaml: naming.repository has {{{t}}}, which is not a token; use {', '.join('{' + t + '}' for t in REPOSITORY_TOKENS)}."
                      for t in used if t not in REPOSITORY_TOKENS]
         if not {"app", "env"} <= set(used):
-            problems.append(f"customer.yaml: naming.repository {repository!r} needs {{app}} and {{env}}: every landing zone has a repo of its own.")
+            problems.append(f"governance.yaml: naming.repository {repository!r} needs {{app}} and {{env}}: every landing zone has a repo of its own.")
     taken = {}
     for region, code in sorted(regions.items()):
         if code in taken:
-            problems.append(f"customer.yaml: naming.regions gives {region} the code {code}, which {taken[code]} has too; every region needs its own.")
+            problems.append(f"governance.yaml: naming.regions gives {region} the code {code}, which {taken[code]} has too; every region needs its own.")
         taken.setdefault(code, region)
     if problems:
         raise ConfigError("naming settings are not valid:\n  " + "\n  ".join(problems))
@@ -215,7 +215,7 @@ def render(naming: Naming, kind: str, *, app: str, env: str, region: str, purpos
     if purpose:
         short("purpose", "purpose", purpose, problems)
     if env not in naming.environments:
-        problems.append(f"the environment {env!r} has no short name; add it under naming.environments in customer.yaml.")
+        problems.append(f"the environment {env!r} has no short name; add it under naming.environments in governance.yaml.")
     if region not in naming.regions:
         problems.append(f"the region {region!r} has no short name (modules/naming/region-codes.json).")
     if not (isinstance(nn, int) and 1 <= nn <= 99):
@@ -246,7 +246,7 @@ def template_text(parts: list[tuple[str, str]]) -> str:
 def helper_values(naming: Naming, env: str, region: str) -> dict:
     """What modules/naming takes for one landing zone, codes resolved: org, env, region_code, the templates as written."""
     if env not in naming.environments:
-        raise ConfigError(f"the environment {env!r} has no short name; add it under naming.environments in customer.yaml.")
+        raise ConfigError(f"the environment {env!r} has no short name; add it under naming.environments in governance.yaml.")
     if region not in naming.regions:
         raise ConfigError(f"the region {region!r} has no short name (modules/naming/region-codes.json).")
     return {"org": naming.org, "env": naming.environments[env], "region_code": naming.regions[region], "template": template_text(naming.template),
@@ -275,7 +275,7 @@ def check(kind: str, name: str) -> str:
     low, high = rules["min_length"] or 1, rules["max_length"]
     if high is not None and len(name) > high:
         raise ConfigError(f"{kind} name {name} is {len(name)} characters, {len(name) - high} more than Azure allows; "
-                          f"shorten a short name, give the type a template of its own in customer.yaml, or set this name explicitly.")
+                          f"shorten a short name, give the type a template of its own in governance.yaml, or set this name explicitly.")
     if len(name) < low:
         raise ConfigError(f"{kind} name {name} is {len(name)} characters; Azure needs at least {low}.")
     if "allowed" in rules:  # Unicode letters, decimal digits and a few characters (the catalog's \p{L}\p{Nd})

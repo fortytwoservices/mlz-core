@@ -25,7 +25,7 @@ Management's network in the primary region, or identity's in each region with a 
 
 | Input | Type | Class | Source, value or reason |
 |---|---|---|---|
-| `names` | object | derived | a network's names override will go in its own file, management/&lt;region&gt;.yaml or identity/&lt;region&gt;.yaml; not built yet. the naming template (customer.yaml's naming, through the governance contract) |
+| `names` | object | derived | a network's names override will go in its own file, management/&lt;region&gt;.yaml or identity/&lt;region&gt;.yaml; not built yet. the naming template (governance.yaml's naming, through the governance contract) |
 | `location` | string | derived | the region: the primary region for management, the file's name for identity |
 | `parent_id` | string | derived | the network's resource group, which the bootstrap made |
 | `address_space` | string | derived | the fifth /24 of the region's platform_address_space for management, the sixth for identity |

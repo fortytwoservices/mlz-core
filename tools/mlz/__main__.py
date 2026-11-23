@@ -1,7 +1,7 @@
 """mlz-core's loader from the command line.
 
     python3 -m mlz check    [--repo <a customer repo>] [--out <folder>] [--json]   every check before a plan, and the stacks
-    python3 -m mlz governance --customer <customer.yaml> --out <folder> [--defaults <file>]
+    python3 -m mlz governance --file <governance.yaml> --out <folder> [--defaults <file>]
     python3 -m mlz platform --repo <mlz-platform> --out <config.json>
     python3 -m mlz allocate --repo <mlz-vending> [--check]
     python3 -m mlz names    --repo <mlz-vending> --renew <key> [<key> ...]
@@ -56,8 +56,8 @@ def main(argv: list[str] | None = None) -> int:
     ck.add_argument("--out", type=Path, help="where to write the configs the roots read (default: a temporary folder; CI: .mlz)")
     ck.add_argument("--json", action="store_true", help="print only the stacks, as JSON (tools/ci/check.py)")
     ck.add_argument("--github-meta", type=Path, help="platform: a saved copy of api.github.com/meta for the firewall step, read instead of fetching it")
-    gv = roles.add_parser("governance", help="customer.yaml, merged with Fortytwo's defaults and checked, into the governance root's library and config")
-    gv.add_argument("--customer", type=Path, required=True, help="the customer's customer.yaml")
+    gv = roles.add_parser("governance", help="governance.yaml, merged with Fortytwo's defaults and checked, into the governance root's library and config")
+    gv.add_argument("--file", type=Path, required=True, help="the governance repo's governance.yaml")
     gv.add_argument("--defaults", type=Path, default=renderer.DEFAULTS, help="Fortytwo's defaults (default: governance/defaults.yaml in mlz-core)")
     gv.add_argument("--out", type=Path, required=True, help="the folder to write the library and config.json to, replaced on every run")
     gv.add_argument("--bootstrap", type=Path, help="the governance repo's bootstrap.yaml: its github.bypass_team goes into the contract, for the workload repos' rules")
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
     df.add_argument("--repo", type=Path, default=Path("."), help="the repo, after check.py (default: here)")
     i = roles.add_parser("install", help="set a new customer up, one step at a time (see tools/mlz/install.py)")
     i.add_argument("step", choices=["repos", "check", "bootstrap", "handover", "publish", "runners", "subscriptions"])
-    i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's customer.yaml and bootstrap.yaml")
+    i.add_argument("--settings", type=Path, required=True, help="the folder with the customer's governance.yaml and bootstrap.yaml")
     i.add_argument("--tenant", help="the customer's Entra tenant ID (bootstrap, handover, publish, runners, subscriptions)")
     i.add_argument("--billing-scope", help="subscriptions: the billing scope vending makes subscriptions in, as billing_scope says")
     i.add_argument("--work", type=Path, help="where the bootstrap keeps its state and plan (default: ~/.mlz/install/<tenant>/<root_id>)")
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.role == "governance":
         try:
-            config = renderer.render(args.customer, args.defaults, args.out, args.bootstrap)
+            config = renderer.render(args.file, args.defaults, args.out, args.bootstrap)
         except (renderer.RenderError, ConfigError) as error:
             print(f"mlz governance: {error}", file=sys.stderr)
             return 1
@@ -434,7 +434,7 @@ def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[
     role = stacks.role(repo)
     # The code owners first, offline: exactly the installer's two rules (tools/mlz/owners.py, decision D8). The
     # governance repo has bootstrap.yaml, which names the platform team.
-    found, bootstrap = [], {}
+    found, bootstrap = [renamed] if role == "governance" and (renamed := renderer.renamed(repo)) else [], {}
     if (repo / "bootstrap.yaml").is_file():
         try:
             settings = read_yaml(repo / "bootstrap.yaml")
@@ -453,7 +453,7 @@ def every_stack(repo: Path, out: Path, github_meta: Path | None = None) -> list[
         return None
     if role == "governance":
         given = ["--bootstrap", repo / "bootstrap.yaml"] if (repo / "bootstrap.yaml").is_file() else []
-        return ["governance"] if run("governance", "--customer", repo / "customer.yaml", *given, "--out", out / "rendered") else None
+        return ["governance"] if run("governance", "--file", repo / renderer.FILE, *given, "--out", out / "rendered") else None
     if role == "platform":
         if not run("platform", "--repo", repo, "--out", out / "platform.json"):
             return None

@@ -109,7 +109,7 @@ class YamlTest(unittest.TestCase):
 
     def test_the_governance_contract_carries_customer_yaml_s_naming(self):
         text = render("governance", {**GOVERNANCE, "naming": {"org": "acme", "environments": {"hotfix": "hf"}}})
-        self.assertIn("# customer.yaml's naming: the customer's code, the template and short names", text)
+        self.assertIn("# governance.yaml's naming: the customer's code, the template and short names", text)
         self.assertIn("naming:\n  org: acme\n  environments:\n    hotfix: hf\n", text)
 
     def test_a_list_of_mappings_is_a_block(self):

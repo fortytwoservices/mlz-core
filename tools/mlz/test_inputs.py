@@ -188,7 +188,7 @@ class ProblemTest(unittest.TestCase):
         self.assertTrue(inputs.accepts(accepted["landing-zone"], "names.network_security_groups"))
         self.assertTrue(inputs.accepts(accepted["connectivity"], "names.firewall"))
         self.assertFalse(inputs.accepts(accepted["connectivity"], "names.nat_gateway"))
-        self.assertFalse(inputs.accepts(accepted["customer"], "primary_region.code"))
+        self.assertFalse(inputs.accepts(accepted["governance"], "primary_region.code"))
 
 
 if __name__ == "__main__":

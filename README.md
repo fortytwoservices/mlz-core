@@ -13,13 +13,13 @@ new customer up.
 ```
 bootstrap/terraform/   one-time setup per customer: top group, state, pipeline identities, GitHub settings
 governance/
-  defaults.yaml        Fortytwo's governance defaults; customer.yaml overrides them
+  defaults.yaml        Fortytwo's governance defaults; governance.yaml overrides them
   lib/                 Fortytwo's additions to the Azure Landing Zones library
   terraform/           the governance root
 platform/terraform/    the platform's connectivity root: hubs, firewalls, DNS; networks/ (management, identity)
                        and rules/ (the firewall rules) beside it
 vending/terraform/     the vending root: one landing zone per state
-tools/mlz/             the loader: customer YAML in, checked config out (mlz governance renders customer.yaml
+tools/mlz/             the loader: customer YAML in, checked config out (mlz governance renders governance.yaml
                        into the customer's library); mlz check, every check a repo's pipeline makes before it
                        plans; the IP allocator; the contracts;
                        mlz upgrade, which opens the pull request moving a customer to another release;

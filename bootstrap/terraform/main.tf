@@ -1,12 +1,12 @@
 locals {
-  customer = yamldecode(file(var.customer_file))
+  customer = yamldecode(file(var.governance_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
   # Who approves an apply (docs/bootstrap.md, GitHub plan): on Enterprise, github.reviewers in each role's environment;
   # on Team, which allows a reviewer on an environment in a private repo only on Enterprise, the pull request's approval,
   # which then covers the plan applied. mlz install checks the setting; enterprise unless set.
   team = try(local.github.plan, "enterprise") == "team"
-  # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
+  # The bootstrap's names, and the platform's it points at: worked out by mlz install from governance.yaml's naming
   # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
   names = jsondecode(file(var.names_file))
 
@@ -17,13 +17,13 @@ locals {
   connectivity  = local.subscriptions.connectivity
   tenant_id     = data.azapi_client_config.current.tenant_id
   top_group     = "/providers/Microsoft.Management/managementGroups/${local.root}"
-  # The tree goes below the tenant root, or below an existing group named in customer.yaml.
+  # The tree goes below the tenant root, or below an existing group named in governance.yaml.
   parent_group = "/providers/Microsoft.Management/managementGroups/${coalesce(try(local.customer.parent_management_group_id, null), local.tenant_id)}"
   tags         = { ManagedBy = "mlz-core" }
 
   # Management's and identity's networks, which the platform pipeline builds in resource groups made here,
   # with rights on those groups only: governance's monitoring and the state account are in management too.
-  # Identity's only when customer.yaml names an identity subscription.
+  # Identity's only when governance.yaml names an identity subscription.
   network_subscriptions = { for network in ["management", "identity"] : network => local.subscriptions[network] if contains(keys(local.subscriptions), network) }
 
   # Where the state account's private endpoint goes, once the platform has built them: management's
@@ -159,7 +159,7 @@ resource "azapi_resource" "state" {
   }
   depends_on = [azapi_resource_action.register]
 
-  # Every role's state is in it. A changed name (customer.yaml's naming) would replace it, and lose them all: the
+  # Every role's state is in it. A changed name (governance.yaml's naming) would replace it, and lose them all: the
   # plan stops here instead. To keep it, set its name in bootstrap.yaml's names.storage_account (docs/naming.md).
   lifecycle {
     prevent_destroy = true

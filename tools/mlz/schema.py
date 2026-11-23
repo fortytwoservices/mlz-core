@@ -24,7 +24,7 @@ from . import advanced, firewall, governance, install, names, naming, platform, 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
 # The archetypes governance can offer a landing zone (governance/terraform/outputs.tf): local only when
-# customer.yaml turns on management_groups.local. Vending checks against the governance contract's.
+# governance.yaml turns on management_groups.local. Vending checks against the governance contract's.
 ARCHETYPES = ("corp", "online", "sandbox", "local")
 # An IPv4 range in every form the loader reads (ipaddress.ip_network): 10.0.0.0/22, 10.0.0.0/255.255.252.0,
 # or one address, which is a /32. Whether host bits are set is the loader's check.
@@ -89,7 +89,7 @@ def landing_zone() -> dict:
             }),
         }, "The spoke network. Its addresses come from the IP allocator, in _generated/ip-plan.yaml, never from here.")),
         "github": or_empty(mapping({
-            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by governance.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
             "repo": text("An existing repo to use instead of one vending makes: vending only trusts it.", pattern=pattern(vending.GITHUB_REPO)),
             "create": {"description": "false: no repo for this landing zone, for example a sandbox. Vending makes one by default once github.organization is set.", "type": "boolean"},
             "team": text("The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in workload-defaults.yaml.", pattern=pattern(vending.GITHUB_TEAM)),
@@ -186,7 +186,7 @@ def customer() -> dict:
             "exempt_resource_groups": or_empty({"description": "Resource groups Azure creates itself, where the required tags are not enforced. One * per pattern.", "type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 90, "pattern": "^[^*]*[*]?[^*]*$"}}),
             "in_sandboxes": {"description": "Whether sandboxes must tag their resource groups too.", "type": ["boolean", "null"]},
         }, "Tag policies. A key given here replaces the default's whole list.")),
-        "advanced": advanced.schema("customer"),
+        "advanced": advanced.schema("governance"),
         "policy_assignments_to_remove": or_empty({"description": "ALZ policy assignments to leave out, by archetype.", "type": "object", "propertyNames": {"enum": list(rules.ALZ_ARCHETYPES)}, "additionalProperties": strings}),
         "naming": or_empty(mapping({
             "org": text("The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).", pattern="^[a-z0-9]{2,4}$"),
@@ -200,7 +200,7 @@ def customer() -> dict:
     }
     return {
         "$schema": DRAFT,
-        "title": "MLZ customer",
+        "title": "MLZ governance",
         "description": "Customer-wide settings for governance. Any setting in mlz-core's governance/defaults.yaml can be overridden here.",
         **mapping({key: descriptions[key] for key in rules.SETTINGS}),
     }
@@ -246,7 +246,7 @@ def bootstrap() -> dict:
 
 # The file name of each schema, and which files of which repo it is for (the starters' .vscode/settings.json).
 SCHEMAS = {
-    "customer.schema.json": customer,
+    "governance.schema.json": customer,
     "bootstrap.schema.json": bootstrap,
     "connectivity.schema.json": connectivity,
     "network.schema.json": network,

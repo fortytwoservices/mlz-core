@@ -26,9 +26,10 @@ ROOT = "/home/alex/projects"  # where someone has the repo; the editors see the 
 # Each role's files, the starter's own and some it does not have, with the schema both editors must give them.
 EXPECTED = {
     "governance": {
-        "customer.yaml": "customer",
+        "governance.yaml": "governance",
         "bootstrap.yaml": "bootstrap",
-        "customer.yml": None,
+        "governance.yml": None,
+        "customer.yaml": None,  # its name before v0.16.0, refused by mlz check
         "README.md": None,
         ".github/workflows/mlz.yml": None,
     },
@@ -44,6 +45,7 @@ EXPECTED = {
         "connectivity/README.md": None,
         "connectivity-old/norwayeast.yaml": None,
         "_generated/contract.json": None,
+        "_generated/governance.yaml": None,  # governance's contract, not its settings: no schema of the settings
         ".github/workflows/mlz.yml": None,
     },
     "vending": {
@@ -54,6 +56,7 @@ EXPECTED = {
         "examples/payments/prod.yaml": "landing-zone",
         "_generated/ip-plan.yaml": None,
         "_generated/names.yaml": None,
+        "_generated/governance.yaml": None,  # governance's contract, not its settings: no schema of the settings
         "landing-zones/README.md": None,
         ".github/workflows/mlz.yml": None,
     },
@@ -141,8 +144,8 @@ class EditorsTest(unittest.TestCase):
         self.assertFalse(vscode_takes("management/*.yaml", f"{ROOT}/mlz-platform/management/a/b.yaml"))
         self.assertTrue(vscode_takes("management/**/*.yaml", f"{ROOT}/mlz-platform/management/b.yaml"))
         self.assertFalse(jetbrains_takes("management/**/*.yaml", f"{ROOT}/mlz-platform/management/b.yaml"))
-        self.assertTrue(jetbrains_takes("customer.yaml", f"{ROOT}/mlz-governance/customer.yaml"))
-        self.assertFalse(jetbrains_takes("customer.yaml", f"{ROOT}/mlz-governance/old-customer.yaml"))
+        self.assertTrue(jetbrains_takes("governance.yaml", f"{ROOT}/mlz-governance/governance.yaml"))
+        self.assertFalse(jetbrains_takes("governance.yaml", f"{ROOT}/mlz-governance/old-governance.yaml"))
 
 
 if __name__ == "__main__":

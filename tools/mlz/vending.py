@@ -66,7 +66,7 @@ NAMED = {
 # type, 01. A subnet's NSG takes the lowest number no NSG of the landing zone holds in the record when it is first
 # named (network_security_group_number).
 NUMBERS = {"network_resource_group": 1, "identity_resource_group": 2, "state_resource_group": 3, "deploy_identity": 1, "plan_identity": 2}
-# Recorded beside them: the workload repo vending creates, named by customer.yaml's naming.repository.
+# Recorded beside them: the workload repo vending creates, named by governance.yaml's naming.repository.
 REPOSITORY = "repository"
 SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo", "create", "team"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
@@ -558,7 +558,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     given = (governance.get("naming") or {}).get("platform") if isinstance(governance.get("naming"), dict) else None
     parts = {**naming.PLATFORM, **(given if isinstance(given, dict) else {})}
     problems += [f"landing-zones: workload{'s' if len(w) > 1 else ''} {', '.join(sorted(w))} {'have' if len(w) > 1 else 'has'} the short name {k}, "
-                 f"which names the platform's {part} (customer.yaml's naming.platform); give {'each' if len(w) > 1 else 'it'} another short_name."
+                 f"which names the platform's {part} (governance.yaml's naming.platform); give {'each' if len(w) > 1 else 'it'} another short_name."
                  for k, w in sorted(shorts.items()) for part, code in parts.items() if code == k]
     # Names as recorded when first given, under any the landing zone's file sets: the template is not read here,
     # so a changed one renames nothing until the IP allocator records it for a landing zone (names --renew).
@@ -776,7 +776,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             if item in held:
                 return held[item]
             if template and env not in settings.environments:  # once, however many names need it
-                problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
+                problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in governance.yaml.")
             elif template and kind == REPOSITORY:  # a GitHub repo: long names, from naming.repository
                 return naming.repository_name(settings, lz["workload"], env)
             elif template:
@@ -893,7 +893,7 @@ def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[s
         if key not in plan:
             raise ConfigError(f"{key} has no address range yet, so no names to renew; the IP allocator gives both on its pull request.")
     try:
-        # customer.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
+        # governance.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
         settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
     except ConfigError as error:
         raise ConfigError(f"_generated/governance.yaml: {error}") from None

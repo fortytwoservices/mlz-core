@@ -27,11 +27,11 @@ Settings from `connectivity/<region>.yaml`.
 
 | Input | Type | Class | Source, value or reason |
 |---|---|---|---|
-| `parent_id` | string | derived | the connectivity subscription: customer.yaml's subscriptions.connectivity, through the governance contract |
+| `parent_id` | string | derived | the connectivity subscription: governance.yaml's subscriptions.connectivity, through the governance contract |
 | `hub_virtual_networks` | map(object) | | one hub per connectivity/&lt;region&gt;.yaml, keyed by the region |
 | `hub_virtual_networks.location` | string | derived | the region: the file's name |
 | `hub_virtual_networks.address_space` | list(string) | derived | the first /22 of platform_address_space |
-| `hub_virtual_networks.is_primary` | bool | derived | customer.yaml's primary_region, through the governance contract |
+| `hub_virtual_networks.is_primary` | bool | derived | governance.yaml's primary_region, through the governance contract |
 | `hub_virtual_networks.name` | string | derived | the naming template; set it with `names.virtual_network` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.resource_group_name` | string | derived | the naming template; set it with `names.resource_group` in `connectivity/<region>.yaml` |
 | `hub_virtual_networks.routing_supernet` | list(string) | derived | what the other hubs send to this hub's firewall: platform_address_space (unless a landing zone range holds it) and landing_zone_ranges |
@@ -91,7 +91,7 @@ Settings from `connectivity/<region>.yaml`.
 | `resource_types` | object | fixed | the module's default (`{}`): the API versions the module is tested with; new ones come with a module release |
 | `retry` | object | open | the module's default: `{}` |
 | `timeouts` | object | open | the module's default: `{}` |
-| `diagnostic_settings.name` | string | derived | to-&lt;org&gt;-workspace, from customer.yaml's naming |
+| `diagnostic_settings.name` | string | derived | to-&lt;org&gt;-workspace, from governance.yaml's naming |
 | `diagnostic_settings.logs` | set(object) | fixed | `[{"category_group": "allLogs"}]`: every log goes to the central workspace |
 | `diagnostic_settings.metrics` | set(object) | open | the module's default: `[]` |
 | `diagnostic_settings.log_analytics_destination_type` | string | fixed | the module's default (`"Dedicated"`): Azure's resource-specific tables: a table per kind of log (rule hits, threat intelligence, DNS proxy) |

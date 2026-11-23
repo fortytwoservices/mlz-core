@@ -26,7 +26,7 @@ builds:
 |---|---|---|
 | `connectivity/<region>.yaml` | that region's hub in `az-tf-mlz-connectivity-hub`'s `hub_virtual_networks` | `bastion.sku`, `firewall.zones`, `virtual_network_dns_servers`, ... |
 | a landing zone's file, or a layer above it | `Azure/avm-ptn-alz-sub-vending`'s call: its own inputs, and its objects by the keys vending gives them | `role_assignments`, `virtual_networks.spoke.subnets.<subnet>.service_endpoints`, `network_security_groups.<subnet>.security_rules`, ... |
-| `customer.yaml` | governance's two calls, each under its name: `alz` (`Azure/avm-ptn-alz`) and `management` (`az-tf-mlz-management`) | `alz.policy_assignments_to_modify`, `management.retention_in_days`, `management.data_collection_rules.vm_insights.processes_and_dependencies_enabled`, ... |
+| `governance.yaml` | governance's two calls, each under its name: `alz` (`Azure/avm-ptn-alz`) and `management` (`az-tf-mlz-management`) | `alz.policy_assignments_to_modify`, `management.retention_in_days`, `management.data_collection_rules.vm_insights.processes_and_dependencies_enabled`, ... |
 
 An input of the whole hub module call, such as its `retry`, is not reached from a hub file, since each region has
 its own file.

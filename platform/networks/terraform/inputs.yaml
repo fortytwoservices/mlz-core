@@ -7,7 +7,7 @@ network:
   notes:
     names: a network's names override will go in its own file, management/<region>.yaml or identity/<region>.yaml; not built yet
   inputs:
-    names: {class: derived, by: "the naming template (customer.yaml's naming, through the governance contract)", config: "networks.{network}.{region}.names"}
+    names: {class: derived, by: "the naming template (governance.yaml's naming, through the governance contract)", config: "networks.{network}.{region}.names"}
     location: {class: derived, by: "the region: the primary region for management, the file's name for identity"}
     parent_id: {class: derived, by: "the network's resource group, which the bootstrap made"}
     address_space: {class: derived, by: "the fifth /24 of the region's platform_address_space for management, the sixth for identity", config: "networks.{network}.{region}.address_space"}

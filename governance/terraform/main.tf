@@ -1,5 +1,5 @@
 locals {
-  # Defaults and customer.yaml, merged and checked by mlz governance (tools/mlz/governance.py).
+  # Defaults and governance.yaml, merged and checked by mlz governance (tools/mlz/governance.py).
   config = jsondecode(file("${var.rendered_library_path}/config.json"))
 
   subscriptions = local.config.subscriptions
@@ -7,7 +7,7 @@ locals {
   tags          = { ManagedBy = "mlz-core" }
   # From the customer's naming template, worked out by mlz governance (tools/mlz/names.py).
   names = local.config.names
-  # customer.yaml's advanced:, checked by mlz governance; absent when it sets nothing.
+  # governance.yaml's advanced:, checked by mlz governance; absent when it sets nothing.
   advanced = try(local.config.advanced, {})
 
   # Resource IDs built from names, so the policies know them at plan time, before management is applied.
@@ -87,7 +87,7 @@ module "management" {
   name      = local.names.management.workspace
   parent_id = azapi_resource.management_resource_group.id
   location  = local.region
-  # customer.yaml's advanced.management (tools/mlz/advanced.py: only inputs the input map calls open, checked against
+  # governance.yaml's advanced.management (tools/mlz/advanced.py: only inputs the input map calls open, checked against
   # the module's types): each given, or the module's default when it sets none, so governance without it is planned
   # as it always was (null is the default of a nullable = false input, or the default itself). In the objects it goes
   # in first and mlz-core's values over it.
@@ -148,7 +148,7 @@ module "alz" {
 
   subscription_placement = local.placement
 
-  # customer.yaml's advanced.alz, as advanced.management above: each given, or the module's default.
+  # governance.yaml's advanced.alz, as advanced.management above: each given, or the module's default.
   management_group_role_assignments                                = try(local.advanced.alz.management_group_role_assignments, null)
   management_group_hierarchy_settings                              = try(local.advanced.alz.management_group_hierarchy_settings, null)
   role_assignment_definition_lookup_enabled                        = try(local.advanced.alz.role_assignment_definition_lookup_enabled, true)

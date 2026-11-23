@@ -84,8 +84,12 @@ class StacksTest(unittest.TestCase):
             self.assertRegex(printed, rf"\n  {re.escape(path)} +-> NOT READ by any stack\n")
 
     def test_governance_s_files_are_read_by_their_exact_names(self):
-        self.assertEqual(stacks.stack_of("governance", "customer.yaml").name, "governance")
-        self.assertIsNone(stacks.stack_of("governance", "customer.yml"))
+        self.assertEqual(stacks.stack_of("governance", "governance.yaml").name, "governance")
+        self.assertIsNone(stacks.stack_of("governance", "governance.yml"))
+        self.assertIsNone(stacks.stack_of("governance", "customer.yaml"))  # its name before v0.16.0
+        # The settings file and governance's contract share a name, never a path: the contract plans what reads it.
+        for role in ("governance", "platform", "vending"):
+            self.assertIsNone(stacks.stack_of(role, "_generated/governance.yaml"), role)
         self.assertIsNone(stacks.stack_of("governance", "bootstrap.yml"))
 
     def test_a_landing_zone_file_outside_a_workload_folder_is_not_read(self):

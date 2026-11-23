@@ -3,7 +3,7 @@
     python3 -m mlz explain --repo <mlz-vending> <key>                  a landing zone
     python3 -m mlz explain --repo <mlz-platform> <region>              a hub: connectivity/<region>.yaml
     python3 -m mlz explain --repo <mlz-platform> management|identity/<region>|firewall-rules
-    python3 -m mlz explain --repo <mlz-governance>                     governance: customer.yaml
+    python3 -m mlz explain --repo <mlz-governance>                     governance: governance.yaml
     ... --inputs                                                       every input of the stack's module calls
 
 Three parts: every setting the stack's files set, with the file that set it and any value it replaced there; what
@@ -105,7 +105,7 @@ def explain(repo: Path, key: str, lz: dict, plan: dict, governance: dict | None,
         filled.append(("network.subnets.default", str(default), "mlz-core's default: one subnet, a /26 or the whole of a smaller range"))
     github = settings.get("github") if isinstance(settings.get("github"), dict) else {}
     if vending.creates_repo(lz):
-        filled.append(("github.repo", "made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
+        filled.append(("github.repo", "made by vending", "github.organization is set; governance.yaml's naming.repository names it (below)"))
     elif not github.get("repo"):
         filled.append(("github", "no repo", "github.create is false" if github.get("create") is False else "no github.organization"))
 
@@ -280,9 +280,12 @@ def role_of(repo: Path) -> str:
         return "vending"
     if (repo / platform.CONNECTIVITY).is_dir():
         return "platform"
-    if (repo / "customer.yaml").is_file():
+    # Before governance.yaml: a rename left half done (both files there) is refused as mlz check refuses it.
+    if (refused := governance.renamed(repo)) is not None:
+        raise ConfigError(refused)
+    if (repo / governance.FILE).is_file():
         return "governance"
-    raise ConfigError(f"{repo}: neither landing-zones/, {platform.CONNECTIVITY}/ nor customer.yaml; run explain in a vending, platform or governance repo.")
+    raise ConfigError(f"{repo}: neither landing-zones/, {platform.CONNECTIVITY}/ nor governance.yaml; run explain in a vending, platform or governance repo.")
 
 
 def plain(text: str) -> str:
@@ -455,7 +458,7 @@ def governance_explain(repo: Path, show_inputs: bool) -> str:
     rules = governance
     defaults_file = inputs.CORE / "governance" / "defaults.yaml"
     try:
-        defaults, customer = rules.load_yaml(defaults_file), rules.load_yaml(repo / "customer.yaml")
+        defaults, customer = rules.load_yaml(defaults_file), rules.load_yaml(repo / "governance.yaml")
     except rules.RenderError as error:
         raise ConfigError(str(error)) from None
     merged, config, found = rules.merge(defaults, customer), None, []
@@ -466,7 +469,7 @@ def governance_explain(repo: Path, show_inputs: bool) -> str:
         if show_inputs:  # the values would be missing: say why, and fail
             raise ConfigError(str(error)) from None
         found = problems_of(ConfigError(str(error)))
-    heading = "governance (customer.yaml)"
+    heading = "governance (governance.yaml)"
     if show_inputs:
         return render_parts(heading, module_inputs("governance/terraform", config, {}), None)
     defaults_name = "mlz-core's governance/defaults.yaml"
@@ -474,11 +477,11 @@ def governance_explain(repo: Path, show_inputs: bool) -> str:
     layered = []
     for path, value in mine.items():
         if path in theirs and theirs[path] != value:
-            source = f"customer.yaml, replacing {defaults_name}: {show(theirs[path])}"
+            source = f"governance.yaml, replacing {defaults_name}: {show(theirs[path])}"
         elif path[0] in defaults and path[0] not in rules.MERGED_KEY_BY_KEY and path not in theirs and path == next(p for p in mine if p[0] == path[0]):
-            source = f"customer.yaml, replacing {defaults_name}'s {path[0]} whole"
+            source = f"governance.yaml, replacing {defaults_name}'s {path[0]} whole"
         else:
-            source = "customer.yaml"
+            source = "governance.yaml"
         layered.append((dotted(path), show(value), source))
     filled = [(dotted(path), show(value), defaults_name) for path, value in leaves(merged).items() if path not in mine]
     given = customer.get("naming") if isinstance(customer.get("naming"), dict) else {}
@@ -487,9 +490,9 @@ def governance_explain(repo: Path, show_inputs: bool) -> str:
     if "org" not in given:
         filled.append(("naming.org", show(customer.get("root_id")), "the root ID"))
     worked = module_inputs("governance/terraform", config, {}, worked_out=True).get("Worked out", []) if config else \
-        [("everything else", "not known yet", "customer.yaml must check first (below)")]
-    return render_parts(heading, {"Set in customer.yaml": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found,
-                        nothing="no problems in customer.yaml")
+        [("everything else", "not known yet", "governance.yaml must check first (below)")]
+    return render_parts(heading, {"Set in governance.yaml": layered, "Filled in by mlz-core": filled, "Worked out": worked}, found,
+                        nothing="no problems in governance.yaml")
 
 
 def dotted(path: tuple) -> str:

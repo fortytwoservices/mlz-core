@@ -71,7 +71,7 @@ edited by hand could ask for that.
 - **Names**, from the customer's naming template (`docs/naming.md`), each part of the platform an app of its
   own in `prod`: the hub's components `vnet-acme-hub-pd-nwe-01`, `afw-acme-hub-pd-nwe-01`,
   `pip-acme-hub-afw-pd-nwe-01` and so on, and the Private Link zones' group `rg-acme-dns-pd-nwe-01`, the one
-  governance's DNS policy points at. They are worked out on every run, so a change to `customer.yaml`'s `naming:`
+  governance's DNS policy points at. They are worked out on every run, so a change to `governance.yaml`'s `naming:`
   renames them, and the plan shows each one replaced for the reviewer to decide. A component can keep a name of
   its own under `names:` in the connectivity file (`firewall: afw-legacy`; the components are in `tools/mlz/names.py`'s
   `HUB`). Region codes are Microsoft's, for every Azure region (`modules/naming/region-codes.json`, from
@@ -128,7 +128,7 @@ firewall); and a network security group on every subnet.
 Each is a stack of its own in the platform pipeline, `management` and `identity`, with its own state, so
 a change to one never plans the hub or the other. They apply after the hub, which they peer with. Both run
 every time, so deleting a region's identity file takes identity's network there out of Azure. Identity needs an identity
-subscription in `customer.yaml`.
+subscription in `governance.yaml`.
 
 They are built in a resource group the bootstrap makes in each subscription, `rg-acme-mgt-net-pd-nwe-01` or
 `rg-acme-idn-net-pd-nwe-01`, named for the primary region, which holds the network in every region.

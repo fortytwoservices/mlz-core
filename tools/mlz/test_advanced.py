@@ -247,13 +247,13 @@ class LandingZoneTest(unittest.TestCase):
 
 
 class GovernanceTest(unittest.TestCase):
-    """customer.yaml's advanced: reaches both of governance's calls, each under its name."""
+    """governance.yaml's advanced: reaches both of governance's calls, each under its name."""
     rules = governance
-    starter = (inputs.CORE / "starter/mlz-governance/customer.yaml").read_text()
+    starter = (inputs.CORE / "starter/mlz-governance/governance.yaml").read_text()
 
     def render(self, block: str) -> dict:
         with tempfile.TemporaryDirectory() as folder:
-            path = Path(folder) / "customer.yaml"
+            path = Path(folder) / "governance.yaml"
             path.write_text(self.starter + block)
             merged = self.rules.merge(self.rules.load_yaml(inputs.CORE / "governance/defaults.yaml"), self.rules.load_yaml(path))
         self.rules.validate(merged)
@@ -281,21 +281,21 @@ class GovernanceTest(unittest.TestCase):
     def test_what_governance_owns_and_calls_it_does_not_reach_are_refused(self):
         self.assertEqual(sorted(self.problems("advanced:\n  management:\n    name: log-mine\n    local_authentication_enabled: true\n"
                                               "  alz:\n    enable_telemetry: true\n  platform:\n    x: 1\n")), [
-            "customer.yaml: advanced.alz.enable_telemetry is fixed by Fortytwo (no module mlz-core calls sends telemetry). Ask for a change in mlz-core.",
-            "customer.yaml: advanced.management.local_authentication_enabled is fixed by Fortytwo (off: Entra ID only). Ask for a change in mlz-core.",
-            "customer.yaml: advanced.management.name is worked out by mlz-core (the naming template (customer.yaml's naming)); it cannot be set.",
-            "customer.yaml: advanced.platform is not a module call this file reaches; use alz or management."])
+            "governance.yaml: advanced.alz.enable_telemetry is fixed by Fortytwo (no module mlz-core calls sends telemetry). Ask for a change in mlz-core.",
+            "governance.yaml: advanced.management.local_authentication_enabled is fixed by Fortytwo (off: Entra ID only). Ask for a change in mlz-core.",
+            "governance.yaml: advanced.management.name is worked out by mlz-core (the naming template (governance.yaml's naming)); it cannot be set.",
+            "governance.yaml: advanced.platform is not a module call this file reaches; use alz or management."])
 
     def test_the_schema_and_the_reference_page_name_the_call(self):
         block = schema.customer()["properties"]["advanced"]
         self.assertEqual(set(block["properties"]), {"alz", "management"})
         self.assertEqual(block["properties"]["management"]["properties"]["retention_in_days"], {"type": ["number", "null"]})
-        self.assertIn("set it with `advanced.management.retention_in_days` in `customer.yaml`", (inputs.CORE / "docs/reference/governance.md").read_text())
+        self.assertIn("set it with `advanced.management.retention_in_days` in `governance.yaml`", (inputs.CORE / "docs/reference/governance.md").read_text())
 
     def test_explain_shows_what_it_sets(self):
         config = self.render("advanced:\n  management:\n    retention_in_days: 90\n")
         rows = {row[0]: row for part in explain.module_inputs("governance/terraform", config, {}).values() for row in part}
-        self.assertEqual(rows["retention_in_days"][1:], ("90", "open: set under advanced.management.retention_in_days in customer.yaml"))
+        self.assertEqual(rows["retention_in_days"][1:], ("90", "open: set under advanced.management.retention_in_days in governance.yaml"))
 
 
 if __name__ == "__main__":

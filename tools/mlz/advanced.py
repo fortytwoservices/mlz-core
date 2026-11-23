@@ -43,12 +43,12 @@ SCOPES = {
         "virtual_networks": "spoke", "virtual_networks.subnets": "<subnet>", "network_security_groups": "<subnet>",
         "budgets": "monthly", "budgets.notifications": "<actual_80 or forecast_100>",
     }),
-    # customer.yaml reaches both of governance's calls, each under its name: advanced.alz, advanced.management.
-    "customer.alz": Scope("customer", "governance/terraform", "alz", "", "advanced.alz", {}, "alz"),
-    "customer.management": Scope("customer", "governance/terraform", "management", "", "advanced.management", {}, "management"),
+    # governance.yaml reaches both of governance's calls, each under its name: advanced.alz, advanced.management.
+    "governance.alz": Scope("governance", "governance/terraform", "alz", "", "advanced.alz", {}, "alz"),
+    "governance.management": Scope("governance", "governance/terraform", "management", "", "advanced.management", {}, "management"),
 }
 # A file whose advanced: reaches several module calls names the call first.
-CALLS = {"customer": ("alz", "management")}
+CALLS = {"governance": ("alz", "management")}
 PRIMITIVES = {"string": str, "number": (int, float), "bool": bool}
 
 
