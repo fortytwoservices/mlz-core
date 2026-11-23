@@ -184,8 +184,16 @@ class UpgradeTest(unittest.TestCase):
             self.assertEqual(module.caller(team, "team"), team, role)
             # Under with:, right after the role, at its indent.
             self.assertIn(f"      role: {role}\n      approval: pull-request ", team, role)
-        with self.assertRaisesRegex(ConfigError, "names no role"):
+        with self.assertRaisesRegex(ConfigError, "has no with: block in the job that calls mlz-core's role.yml"):
             module.caller("on: push\n", "team")
+        # Only that with: changes: an approval: elsewhere stays, and an inline with: is refused rather than rewritten.
+        enterprise = (STARTERS / "mlz-platform" / WORKFLOW).read_text()
+        elsewhere = enterprise.replace("permissions:\n", "env:\n  approval: keep-me\npermissions:\n", 1)
+        self.assertIn("  approval: keep-me\n", module.caller(module.caller(elsewhere, "team"), "enterprise"))
+        self.assertEqual(module.caller(module.caller(elsewhere, "team"), "enterprise"), elsewhere)
+        inline = "jobs:\n  platform:\n    uses: o/mlz-core/.github/workflows/role.yml@v1\n    with: {role: platform}\n"
+        with self.assertRaisesRegex(ConfigError, "has no with: block"):
+            module.caller(inline, "team")
 
     def test_a_release_with_the_wrapper_writes_it_and_makes_it_executable(self):
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, wrapper_from="v0.1.8")

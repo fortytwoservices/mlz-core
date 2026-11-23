@@ -811,9 +811,11 @@ def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[st
         found.append(f"{repo}: its environment {role} has no variable {APPROVAL_VARIABLE}: pull-request, which makes an apply refuse whose "
                      "pipeline still expects a reviewer. mlz install bootstrap sets it.")
     policy = environment.get("deployment_branch_policy") or {}
-    if not policy.get("custom_branch_policies") or "main" not in github.branch_policies(repo, role):
-        found.append(f"{repo}: its environment {role} is not limited to main, so a run on another branch could apply. GitHub has branch "
-                     "policies on an environment in a private repo on Team and Enterprise; mlz install bootstrap sets it.")
+    allowed = github.branch_policies(repo, role) if policy.get("custom_branch_policies") else []
+    if policy.get("protected_branches") or sorted(allowed) != ["main"]:
+        accepts = "any protected branch" if policy.get("protected_branches") else ", ".join(allowed) if allowed else "any branch"
+        found.append(f"{repo}: its environment {role} is not limited to main (it accepts {accepts}), so a run on another branch could apply. "
+                     "GitHub has branch policies on an environment in a private repo on Team and Enterprise; mlz install bootstrap sets main alone.")
     if not found:
         out(f"{repo}: its pipeline and its environment {role} are GitHub {plan.capitalize()}'s: "
             + ("an apply waits for a reviewer" if plan == "enterprise" else "no reviewer, each apply approved on its pull request")
@@ -1291,7 +1293,7 @@ def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | 
         raise ConfigError(f"the runners' vault {named['key_vault']} is not there yet: the bootstrap makes it once management's network and the "
                           "hub's zones exist. Run mlz install bootstrap again, then this step.")
 
-    group = self_hosted_group(github, org, repos, core, out, github_plan(bootstrap))
+    group = self_hosted_group(github, org, repos, core, out, bootstrap)
     if group is None:
         return
 
@@ -1351,7 +1353,7 @@ def pinned_releases(github, repos: dict[str, str], core: str) -> set[str]:
     return found
 
 
-def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None], plan: str = "enterprise") -> dict | None:
+def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None], bootstrap: dict | None = None) -> dict | None:
     """The organization's runner group mlz, for the three repos and role.yml in the organization's copy of mlz-core,
     at the releases they pin, only: a runner group can admit no workflow of another organization's. Only an owner
     may make it: anyone else gets the command to send to one, and None."""
@@ -1370,7 +1372,7 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     if made is None:
         made = github.create_runner_group(org, body)
         out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
-        workflows_kept(github, org, pinned, plan, out)
+        workflows_kept(github, org, repos, pinned, bootstrap, out)
         return made
     if made.get("network_configuration_id"):
         raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
@@ -1385,20 +1387,24 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
         github.set_runner_group_repositories(org, made["id"], repo_ids)
     out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
-    workflows_kept(github, org, pinned, plan, out)
+    workflows_kept(github, org, repos, pinned, bootstrap, out)
     return made
 
 
-def workflows_kept(github, org: str, pinned: list[str], plan: str, out: Callable[[str], None]) -> None:
+def workflows_kept(github, org: str, repos: dict[str, str], pinned: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
     """Whether GitHub kept the group's limit to role.yml at the pinned releases, read back. GitHub documents that limit
     ("Changing which workflows can access a runner group") for Enterprise Cloud only, so on Team it may not hold: said,
-    and the step goes on, since pipeline-files keeps every other workflow out of the three repos. On Enterprise it holds,
-    so a group without it is a failure."""
+    and the step goes on, once each repo's push ruleset is seen to keep every other workflow out of it, as this step
+    can run without mlz install check. On Enterprise it holds, so a group without it is a failure."""
     group = github.runner_group(org, RUNNER) or {}
     if group.get("restricted_to_workflows") and set(pinned) <= set(group.get("selected_workflows") or []):
         return
     lost = f"{org}'s runner group {RUNNER} is not limited to {' and '.join(pinned)}: GitHub did not keep its limit to selected workflows"
-    if plan == "team":
+    if bootstrap is not None and github_plan(bootstrap) == "team":
+        guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
+        if guards:
+            raise ConfigError("\n  ".join([f"{lost}, and on Team only each repo's push ruleset {PUSH_RULESET} keeps another workflow off the "
+                                             "runners, where the runner App's key is. Not until it does:"] + guards))
         out(f"runners: {lost}. GitHub documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the "
             f"three repos; the push ruleset {PUSH_RULESET}, which only the bypass team may pass, is what keeps any other workflow out of "
             "them (docs/bootstrap.md, private runners).")

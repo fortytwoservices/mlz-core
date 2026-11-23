@@ -73,12 +73,50 @@ def role_of(workflow: str) -> str:
 # Who approves an apply, as a caller passes it to role.yml and workload.yml: environment (the default, when the caller
 # passes nothing: a reviewer in the environment, GitHub Enterprise) or pull-request (GitHub Team: the pull request's
 # approval, which then covers the plan applied). The caller is under .github/, which only the bypass team may change.
-APPROVAL = re.compile(r"^[ \t]+approval:[ \t]*['\"]?(?P<approval>[\w-]+)['\"]?[ \t]*(#[^\n]*)?$", re.M)
+CALL = re.compile(r"^(?P<indent>[ \t]+)uses:\s*[\w.-]+/[\w.-]+/\.github/workflows/(role|workload)\.yml@")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _with(lines: list[str]) -> tuple[int, int, str] | None:
+    """The with: of the job that calls mlz-core's workflow: (its line, the line after its block, its inline value, or
+    "" for a block), or None when that job has no with:. Only that mapping is the input, so an approval: anywhere else
+    in the file, a step's env or a comment, is never taken for it."""
+    call = next((n for n, line in enumerate(lines) if CALL.match(line)), None)
+    if call is None:
+        return None
+    indent = _indent(lines[call])
+
+    def key(n: int) -> bool:  # a line of YAML, not blank and not a comment
+        return bool(lines[n].strip()) and not lines[n].lstrip().startswith("#")
+    first = call
+    while first > 0 and (not key(first - 1) or _indent(lines[first - 1]) >= indent):
+        first -= 1
+    last = call + 1
+    while last < len(lines) and (not key(last) or _indent(lines[last]) >= indent):
+        last += 1
+    for n in range(first, last):
+        match = re.match(rf"^[ \t]{{{indent}}}with:[ \t]*(?P<inline>[^#\n]*?)[ \t]*(#.*)?$", lines[n])
+        if match:
+            end = n + 1
+            while end < last and (not key(end) or _indent(lines[end]) > indent):
+                end += 1
+            return n, end, match["inline"]
+    return None
 
 
 def approval_of(workflow: str) -> str:
-    """The approval a caller's workflow passes: environment when it passes none."""
-    match = APPROVAL.search(workflow)
+    """The approval a caller's workflow passes to mlz-core's workflow, in the with: of the job that calls it, as a block
+    or inline: environment when it passes none."""
+    lines = workflow.splitlines()
+    found = _with(lines)
+    if found is None:
+        return "environment"
+    start, end, inline = found
+    text = inline if inline else "\n".join(lines[start + 1:end])
+    match = re.search(r"(^|[{,\s])approval:[ \t]*['\"]?(?P<approval>[\w-]+)", text, re.M)
     return match["approval"] if match else "environment"
 
 
@@ -94,14 +132,22 @@ def plan_of(workflow: str) -> str:
 def caller(workflow: str, plan: str) -> str:
     """A role repo's caller (.github/workflows/mlz.yml) written for the plan: on Team it passes approval:
     pull-request, on Enterprise none, so that an Enterprise caller is the starter's byte for byte. The same text from
-    either plan, so the installer, mlz upgrade and a switch of plans all write it alike."""
-    text = re.sub(r"^[ \t]+approval:[^\n]*\n", "", workflow, flags=re.M)
-    if plan == "enterprise":
-        return text
-    match = re.search(r"^([ \t]+)role:[ \t]*(governance|platform|vending)\b[^\n]*\n", text, re.M)
-    if not match:
-        raise ConfigError(f"{WORKFLOW} names no role (governance, platform or vending), so its approval cannot be set.")
-    return f"{text[:match.end()]}{match[1]}{TEAM_APPROVAL}\n{text[match.end():]}"
+    either plan, so the installer, mlz upgrade and a switch of plans all write it alike. Only the with: of the job that
+    calls role.yml changes; a with: written inline is refused, since that one line would be rewritten whole."""
+    lines = workflow.splitlines(keepends=True)
+    found = _with([line.rstrip("\n") for line in lines])
+    if (found is None or found[2]) and plan == "enterprise" and approval_of(workflow) == "environment":
+        return workflow  # nothing to take out
+    if found is None or found[2]:
+        raise ConfigError(f"{WORKFLOW} has no with: block in the job that calls mlz-core's role.yml, so its approval cannot be set; "
+                          "write it as the starter has it (with: on its own line, role: under it).")
+    start, end, _ = found
+    block = [line for line in lines[start + 1:end] if not re.match(r"^[ \t]+approval:", line)]
+    if plan == "team":
+        at = next((n + 1 for n, line in enumerate(block) if re.match(r"^[ \t]+role:", line)), len(block))
+        indent = re.match(r"^[ \t]*", block[at - 1] if at else lines[start])[0] if at else re.match(r"^[ \t]*", lines[start])[0] + "  "
+        block[at:at] = [f"{indent}{TEAM_APPROVAL}\n"]
+    return "".join(lines[:start + 1] + block + lines[end:])
 
 
 def gitignore_with(current: str | None, starter: str) -> str | None:
