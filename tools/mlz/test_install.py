@@ -47,6 +47,8 @@ TEAM_IDS = {"platform": 11, "mlz-admins": 12}
 ENTERPRISE_ENVIRONMENT = {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "acme-lead"}}]},
                                                {"type": "branch_policy"}],
                           "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+# A role repo's caller on GitHub Team: the approval in the with: of the job that calls role.yml.
+TEAM_CALLER = "jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n      role: platform\n      approval: pull-request\n"
 TEAM_ENVIRONMENT = {"protection_rules": [{"type": "branch_policy"}], "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
 APP = {"id": 77, "slug": "acme-mlz", "client_id": "Iv23liAcme", "owner": {"login": "acme"}}  # the MLZ App, as GET /apps/<slug> answers
 
@@ -981,10 +983,25 @@ class InstallTest(unittest.TestCase):
         given = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         if plan == "team":
-            given.update(files={(r, WORKFLOW): ("    with:\n      role: x\n      approval: pull-request\n", "sha") for r in REPOS.values()},
+            given.update(files={(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()},
                          environments={r: TEAM_ENVIRONMENT for r in REPOS.values()},
                          environment_variables={(r, role, "MLZ_APPROVAL"): "pull-request" for role, r in REPOS.items()})
         return {**given, **more}
+
+    def test_the_approval_is_read_from_the_with_of_the_job_that_calls_mlz_core(self):
+        approval_of = install.approval_of
+        self.assertEqual(approval_of(TEAM_CALLER), "pull-request")
+        self.assertEqual(approval_of(TEAM_CALLER.replace("    with:\n      role: platform\n      approval: pull-request\n",
+                                                         "    with: {role: platform, approval: pull-request} # inline\n")), "pull-request")
+        # An approval: anywhere else is not the input: a step's env, another job, a comment.
+        elsewhere = ("jobs:\n  lint:\n    runs-on: ubuntu-latest\n    env:\n      approval: pull-request\n    steps: []\n"
+                     "  platform:\n    # approval: pull-request\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n      role: platform\n"
+                     "    secrets:\n      approval: pull-request\n")
+        self.assertEqual(approval_of(elsewhere), "environment")
+        self.assertEqual(approval_of("on: push\n"), "environment")
+        # The with: may come before uses:, and a workload caller calls workload.yml.
+        self.assertEqual(approval_of("jobs:\n  workload:\n    with:\n      approval: pull-request\n    uses: o/mlz-core/.github/workflows/workload.yml@v1\n"),
+                         "pull-request")
 
     def test_the_plan_is_enterprise_or_team_and_team_takes_no_reviewers(self):
         _, bootstrap = install.settings(self.folder)
@@ -1029,7 +1046,7 @@ class InstallTest(unittest.TestCase):
             with self.assertRaises(ConfigError) as caught:
                 install.step_check(FakeGitHub(**self.ready(plan, **change)), self.folder, self.out)
             return str(caught.exception)
-        team_pipeline = {(r, WORKFLOW): ("      approval: pull-request\n", "sha") for r in REPOS.values()}
+        team_pipeline = {(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()}
         # Enterprise: a pipeline in Team's way, an environment without its reviewer or with Team's variable, or open to any branch.
         self.assertIn("acme/mlz-governance: its pipeline (.github/workflows/mlz.yml) passes approval: pull-request, but bootstrap.yaml's "
                       "github.plan is enterprise, whose approval is environment. mlz install repos offers the change", found(files=team_pipeline))
@@ -1038,9 +1055,19 @@ class InstallTest(unittest.TestCase):
         self.assertIn("acme/mlz-vending: its environment vending has the variable MLZ_APPROVAL, left from GitHub Team's way, so every apply "
                       "there refuses", found(environment_variables={("acme/mlz-vending", "vending", "MLZ_APPROVAL"): "pull-request"}))
         anywhere = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": None}
-        self.assertIn("acme/mlz-vending: its environment vending is not limited to main, so a run on another branch could apply. GitHub has "
-                      "branch policies on an environment in a private repo on Team and Enterprise",
+        self.assertIn("acme/mlz-vending: its environment vending is not limited to main (it accepts any branch), so a run on another branch "
+                      "could apply. GitHub has branch policies on an environment in a private repo on Team and Enterprise",
                       found(environments={r: anywhere for r in REPOS.values()}))
+        # main and more is not main only, and neither is any protected branch.
+
+        class Wider(FakeGitHub):
+            def branch_policies(self, repo, environment):
+                return ["main", "feature/*"]
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(Wider(**self.ready()), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: its environment platform is not limited to main (it accepts main, feature/*)", str(caught.exception))
+        protected = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}
+        self.assertIn("is not limited to main (it accepts any protected branch)", found(environments={r: protected for r in REPOS.values()}))
         # Before the bootstrap there is no environment: said, not refused.
         install.step_check(FakeGitHub(**self.ready(environments={})), self.folder, self.out)
         self.assertIn("acme/mlz-governance: no environment governance yet; mlz install bootstrap makes it", self.printed)
@@ -1670,7 +1697,9 @@ class InstallTest(unittest.TestCase):
                 super().update_runner_group(org, group, {**body, "restricted_to_workflows": False, "selected_workflows": []})
         role = mirror.workflow(CORE_COPY, install.release())
         # On Team: said, and the step goes on, since pipeline-files keeps any other workflow out of the three repos.
-        made = install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out, "team")
+        self.team()
+        _, team = install.settings(self.folder)
+        made = install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out, team)
         self.assertEqual(made["id"], 7)
         self.assertIn(f"runners: acme's runner group mlz is not limited to {role}: GitHub did not keep its limit to selected workflows. GitHub "
                       "documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the three repos; the push "
@@ -1683,8 +1712,12 @@ class InstallTest(unittest.TestCase):
             install.self_hosted_group(widened, "acme", REPOS, CORE_COPY, self.out)
         # Where GitHub keeps it, nothing more is said.
         self.printed.clear()
-        install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, "team")
+        install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, team)
         self.assertEqual(self.printed, [f"runners: runner group mlz made, for the three repos and {role} only"])
+        # On Team, not without the push ruleset that keeps every other workflow out of the repos.
+        with self.assertRaisesRegex(ConfigError, "on Team only each repo's push ruleset pipeline-files keeps another workflow off the runners, "
+                                                 "where the runner App's key is. Not until it does:\n  acme/mlz-governance: no active push ruleset"):
+            install.self_hosted_group(Unlimited(push_guard=False), "acme", REPOS, CORE_COPY, self.out, team)
 
     def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
         self.self_hosted()
