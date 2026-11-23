@@ -97,7 +97,9 @@ class FakeGitHub:
 
     def text(self, repo, path, ref=None):
         self.asked.append(("text", path, ref))
-        return self.codeowners
+        if isinstance(self.codeowners, dict):  # by location; a location it lacks is no file there
+            return self.codeowners.get(path)
+        return self.codeowners if path == ".github/CODEOWNERS" else None
 
     def team_member(self, org, team, login):
         return (org, team) == ("acme", "platform") and login in self.members
@@ -362,6 +364,24 @@ class CoversTest(Case):
         self.assertIn(("text", ".github/CODEOWNERS", "main"), github.asked)  # the base branch's
         with self.assertRaises(gh.ConfigError):
             self.covers(self.github([review()], codeowners="# nobody\n"))
+        with self.assertRaisesRegex(gh.ConfigError, r"^\.github/CODEOWNERS on main names no owner"):
+            self.covers(self.github([review()], codeowners={}))
+
+    def test_a_comment_names_no_owner(self):
+        # GitHub ignores a line's own comment: a mention in it makes nobody a code owner.
+        github = self.github([review("bea", at="2026-11-23T09:50:00Z", commit="head0", ), review("alice", at="2026-11-23T10:05:00Z")],
+                             seen_plans="add hub xyz\n", codeowners="*  @acme/platform # ask @alice\n# or @alice\n")
+        self.assertFalse(self.covers(github))
+        self.assertIn("changed since @bea approved the pull request", self.said[-1])
+
+    def test_the_codeowners_file_github_reads_first(self):
+        # An adopted repo's own file at the top or in docs/, where the installer leaves it, as GitHub looks.
+        for files in ({"CODEOWNERS": "* @dan\n"}, {"docs/CODEOWNERS": "* @dan\n"},
+                      {".github/CODEOWNERS": "* @dan\n", "CODEOWNERS": "* @eve\n", "docs/CODEOWNERS": "* @eve\n"}):
+            with self.subTest(files=sorted(files)):
+                self.assertTrue(self.covers(self.github([review("eve", at="2026-11-23T10:05:00Z"), review("dan", at="2026-11-23T10:06:00Z")],
+                                                        codeowners=files)))
+                self.assertIn("@dan approved after these plans", self.said[-1])
 
     def test_a_workload_repo_counts_anyone_with_write_access(self):
         Path(".mlz/planned/mlz-platform-plan-a/changes-connectivity.txt").unlink()
