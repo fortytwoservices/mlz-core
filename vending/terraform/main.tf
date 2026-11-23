@@ -202,7 +202,7 @@ resource "azapi_resource" "state_resource_group" {
 # ALZ denies public network access to PaaS services in a corp landing zone (the assignment Deny-Public-Endpoints, on its
 # management group), and so the state account below, which the pipelines reach over its public endpoint with Entra ID
 # only, as they reach the bootstrap's. The state's group is exempt from that one rule of the assignment. None where the
-# assignment is not: an online or sandbox landing zone, or one whose archetype customer.yaml's
+# assignment is not: an online or sandbox landing zone, or one whose archetype governance.yaml's
 # policy_assignments_to_remove takes it from.
 data "azapi_resource" "public_endpoints_deny" {
   type                   = "Microsoft.Authorization/policyAssignments@2024-04-01"

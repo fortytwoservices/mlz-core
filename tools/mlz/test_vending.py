@@ -360,7 +360,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("  network_security_groups:\n    default: nsg-demo-pay-default-pd-nwe-01\n", text)
 
     def test_the_state_account_has_no_purpose_and_a_recorded_one_keeps_its_name(self):
-        # At the longest codes customer.yaml allows, a purpose would take it past Azure's 24 characters.
+        # At the longest codes governance.yaml allows, a purpose would take it past Azure's 24 characters.
         longest = naming.Naming(org="abcd", template=naming.parse(naming.TEMPLATE, "t", []), environments={"prod": "prod"},
                                 regions={"norwayeast": "nweab"})
         kind, purpose = vending.NAMED["state_account"]
@@ -377,7 +377,7 @@ class VendingTest(unittest.TestCase):
 
     def test_a_name_once_given_stays_until_renewed(self):
         self.allocate()
-        # customer.yaml's naming changes, through governance's contract: what has names keeps them; a new
+        # governance.yaml's naming changes, through governance's contract: what has names keeps them; a new
         # landing zone, and a new subnet's NSG, take the new template.
         named = {**GOVERNANCE, "naming": {"org": "acme", "environments": {"prod": "pr"}}}
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n")
@@ -592,9 +592,9 @@ class VendingTest(unittest.TestCase):
     def test_a_workload_may_not_take_a_platform_part_s_short_name(self):
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: hub"))
         self.allocate()
-        self.assertIn("landing-zones: workload payments has the short name hub, which names the platform's hub (customer.yaml's naming.platform); "
+        self.assertIn("landing-zones: workload payments has the short name hub, which names the platform's hub (governance.yaml's naming.platform); "
                       "give it another short_name.", self.problems(build, GOVERNANCE, PLATFORM))
-        # customer.yaml gives the hub another: hub is free, con is not.
+        # governance.yaml gives the hub another: hub is free, con is not.
         moved = {**GOVERNANCE, "naming": {"platform": {"hub": "con"}}}
         build(self.repo, moved, PLATFORM)
         self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: con"))
@@ -779,11 +779,11 @@ class VendingTest(unittest.TestCase):
         for subnet in workload["network"]["subnets"].values():
             self.assertEqual(set(subnet) - subnet_declared, set())
         self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
-        # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
+        # An environment's code taken out of governance.yaml after its names were recorded: said where, not a crash.
         self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
         self.allocate(governance={**own, "naming": {**own["naming"], "environments": {"hotfix": "hf"}}})
         self.assertIn("landing-zones/payments/hotfix: its workload repo's values: the environment 'hotfix' has no short name; add it under "
-                      "naming.environments in customer.yaml.", self.problems(build, own, PLATFORM))
+                      "naming.environments in governance.yaml.", self.problems(build, own, PLATFORM))
 
     def test_a_repo_vending_makes_needs_its_team(self):
         # Every apply needs someone to approve it: in a repo vending makes, the owning team.

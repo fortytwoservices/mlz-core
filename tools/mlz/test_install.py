@@ -474,7 +474,7 @@ class InstallTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.folder = Path(self.tmp.name) / "settings"
         self.folder.mkdir()
-        (self.folder / "customer.yaml").write_text(CUSTOMER)
+        (self.folder / "governance.yaml").write_text(CUSTOMER)
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
         self.work = Path(self.tmp.name) / "work"
         self.printed: list[str] = []
@@ -487,6 +487,14 @@ class InstallTest(unittest.TestCase):
 
     # repos and check
 
+    def test_settings_with_customer_yaml_are_refused_with_the_new_name_and_the_command(self):
+        # Every step of mlz install reads the settings first, mlz install check among them.
+        (self.folder / "governance.yaml").rename(self.folder / "customer.yaml")
+        with self.assertRaises(ConfigError) as refused:
+            install.settings(self.folder)
+        self.assertEqual(str(refused.exception), f"{self.folder / 'customer.yaml'}: this file is called governance.yaml now; rename it, in the "
+                         "governance repo and in the folder mlz install reads: git mv customer.yaml governance.yaml (docs/governance.md).")
+
     def test_creates_missing_repos_from_the_starters(self):
         github = FakeGitHub(existing=["acme/mlz-platform"])
         install.step_repos(github, self.folder, self.out)
@@ -494,7 +502,7 @@ class InstallTest(unittest.TestCase):
         commits = {repo: files for repo, _, _, files, _ in github.commits}
         self.assertEqual(set(commits), {"acme/mlz-governance", "acme/mlz-vending"})
         governance = commits["acme/mlz-governance"]
-        self.assertEqual(governance["customer.yaml"], CUSTOMER)  # the customer's own, not the starter's example
+        self.assertEqual(governance["governance.yaml"], CUSTOMER)  # the customer's own, not the starter's example
         self.assertEqual(governance["bootstrap.yaml"], BOOTSTRAP)
         workflow = commits["acme/mlz-vending"][".github/workflows/mlz.yml"]
         self.assertIn("role: vending", workflow)
@@ -587,12 +595,12 @@ class InstallTest(unittest.TestCase):
                       "and requires a code owner's review (mlz install check says)", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
-        own = ("acme/mlz-governance", "customer.yaml")
+        own = ("acme/mlz-governance", "governance.yaml")
         github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={own: ("name: Ours\n", "sha")})
         install.step_repos(github, self.folder, self.out)
         added = github.commits[0][3]
         self.assertIn(WORKFLOW, added)
-        self.assertNotIn("customer.yaml", added)  # already there: never replaced
+        self.assertNotIn("governance.yaml", added)  # already there: never replaced
         self.assertIn("bootstrap.yaml", added)
 
     def test_an_adopted_repo_s_own_gitignore_keeps_its_lines_and_gets_the_starter_s(self):
@@ -738,7 +746,7 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(ruleset["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}])
         for path in (".github/workflows/mlz.yml", ".github/CODEOWNERS", ".github/actions/x/action.yml"):
             self.assertTrue(install.matches(".github/**/*", path), path)
-        for path in ("customer.yaml", "mlz", "_generated/governance.yaml", "docs/.github/x", ".githubx/y"):
+        for path in ("governance.yaml", "mlz", "_generated/governance.yaml", "docs/.github/x", ".githubx/y"):
             self.assertFalse(install.matches(".github/**/*", path), path)
         self.assertTrue(install.matches(".github/**", ".github/CODEOWNERS"))
         self.assertFalse(install.matches(".github/**", ".github/workflows/mlz.yml"))  # ** without its slash is *
@@ -1275,8 +1283,8 @@ class InstallTest(unittest.TestCase):
         (self.folder / "bootstrap.yaml").write_text("github:\n  organization: acme\n  repositories:\n    governance: g\n")
         with self.assertRaisesRegex(ConfigError, "github.repositories for governance, platform and vending"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
-        (self.folder / "customer.yaml").unlink()
-        with self.assertRaisesRegex(ConfigError, "missing .*customer.yaml"):
+        (self.folder / "governance.yaml").unlink()
+        with self.assertRaisesRegex(ConfigError, "missing .*governance.yaml"):
             install.step_repos(FakeGitHub(), self.folder, self.out)
 
     # bootstrap
@@ -1636,7 +1644,7 @@ class InstallTest(unittest.TestCase):
 
     def test_no_runners_where_github_does_not_join_them_to_a_network(self):
         self.hosted()
-        (self.folder / "customer.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
+        (self.folder / "governance.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
         with self.assertRaisesRegex(ConfigError, "only in some regions, not westeurope"):
             install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
 

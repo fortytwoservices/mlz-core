@@ -114,7 +114,7 @@
       "properties": {
         "organization": {
           "type": "string",
-          "description": "The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.",
+          "description": "The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by governance.yaml's naming.repository.",
           "pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
         },
         "repo": {

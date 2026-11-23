@@ -148,7 +148,7 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual((on, head, message), ("mlz/upgrade-v0.1.7", "head-of-main", "chore: mlz-core v0.1.7"))
         self.assertEqual(set(files), {WORKFLOW, *EDITOR})  # one commit: the workflow and the editor settings
         self.assertEqual(pin_of(files[WORKFLOW]), (CORE, "v0.1.7"))
-        self.assertIn("/mlz-core/v0.1.7/schemas/customer.schema.json", files[".vscode/settings.json"])
+        self.assertIn("/mlz-core/v0.1.7/schemas/governance.schema.json", files[".vscode/settings.json"])
         for text in files.values():
             self.assertNotIn("x-release-please", text)
         body = pull[5]
@@ -279,7 +279,7 @@ class UpgradeTest(unittest.TestCase):
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, jetbrains_from="v0.1.8")
         self.run_upgrade(github)
         files, body = github.writes[1][4], github.writes[2][5]
-        self.assertIn("/mlz-core/v0.1.8/schemas/customer.schema.json", files[JETBRAINS])
+        self.assertIn("/mlz-core/v0.1.8/schemas/governance.schema.json", files[JETBRAINS])
         self.assertNotIn("x-release-please", files[JETBRAINS])
         self.assertEqual(files[GITIGNORE], (STARTERS / "mlz-governance" / GITIGNORE).read_text())
         self.assertIn(JETBRAINS, OWNED)

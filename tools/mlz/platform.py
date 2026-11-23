@@ -253,13 +253,13 @@ def build(repo: Path, governance: dict, vending: dict | None = None) -> dict:
         for a, net in spaces for b, pool in pools if a != b and net.overlaps(pool)
     ]
     try:
-        # customer.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
+        # governance.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
         settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
     except ConfigError as error:
         problems.append(f"_generated/governance.yaml: {error}")
     subscriptions = governance["platform_subscriptions"]
     problems += [
-        f"identity/{region}: builds identity's network in the identity subscription, and customer.yaml names none; add subscriptions.identity in the governance repo."
+        f"identity/{region}: builds identity's network in the identity subscription, and governance.yaml names none; add subscriptions.identity in the governance repo."
         for region in identity if not subscriptions.get("identity")
     ]
     if problems:

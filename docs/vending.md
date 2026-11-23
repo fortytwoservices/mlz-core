@@ -256,7 +256,7 @@ which every plan would read. From then on sub-vending places, names and tags the
 Once `github.organization` is set, every landing zone has a workload repo of its own for the team's code, in the
 customer's GitHub organization, unless its `github.repo` names an existing one or `github.create` is `false`.
 
-- **Its name**, from `customer.yaml`'s `naming.repository` (default `{app}-{env}`, with long names:
+- **Its name**, from `governance.yaml`'s `naming.repository` (default `{app}-{env}`, with long names:
   `payments-prod`), recorded with the landing zone's other names (`docs/naming.md`).
 - **The repo**, made by vending's Terraform, as the customer's MLZ App: private, squash merges only, its default
   branch `main` whatever the organization's default is. Decommissioned, it is archived, never deleted: the team's

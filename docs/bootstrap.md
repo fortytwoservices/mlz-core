@@ -2,7 +2,7 @@
 
 The one-time setup a customer's pipelines run on. A person at Fortytwo runs it once per customer, before
 the first pipeline run; running it again changes only what differs. It is `bootstrap/terraform`, and it
-reads two files from the customer's governance repo: `customer.yaml` (root ID, display name, primary
+reads two files from the customer's governance repo: `governance.yaml` (root ID, display name, primary
 region, platform subscriptions) and `bootstrap.yaml` (GitHub repos, MLZ App, platform team, bypass team, reviewers, state
 operators).
 
@@ -36,7 +36,7 @@ state_operators:                   # people who may run Terraform by hand, by En
 |---|---|
 | Tenant | The top management group, `<root>`, below the tenant root or `parent_management_group_id`. Governance builds everything below it, so its pipeline never needs rights at the tenant root. |
 | Management subscription | `rg-acme-mlz-pd-nwe-01`, holding the state account, the six pipeline identities and the self-hosted runners. `rg-acme-mgt-net-pd-nwe-01`, empty, for management's network, which the platform builds. `GitHub.Network` registered, for GitHub-hosted runners in that network. |
-| Identity subscription | `rg-acme-idn-net-pd-nwe-01`, empty, for identity's network, when `customer.yaml` names an identity subscription. |
+| Identity subscription | `rg-acme-idn-net-pd-nwe-01`, empty, for identity's network, when `governance.yaml` names an identity subscription. |
 | State account | `stacmemlzstatepdnwe01`: Entra ID only (no account keys, no key-signed SAS), versioning, 30 days of soft delete for blobs and containers. One container per role, plus `bootstrap` for its own state. The public endpoint stays on until the private runners use the private endpoint. Never replaced: see [names](#names). |
 | State account's private endpoint | `pep-acme-mlz-state-pd-nwe-01`, beside the account, in management's `snet-private-endpoints`, with its name in the hub's `privatelink.blob.core.windows.net` zone, and that zone linked to management's network, so the name resolves there whether management asks the hub or, behind a Basic firewall without a resolver, Azure's own DNS. Made on the first run after the platform has built that network and zone ([below](#running-it-again)); until then there is none. |
 | Runners' vault | `kv-acme-mlz-pd-nwe-01`, for self-hosted runners: the runner App's private key and nothing else. Roles only, given to nobody but the runners' identity; purge protection; a firewall that admits no address, and a private endpoint in management's `snet-private-endpoints` (`pep-acme-mlz-vault-pd-nwe-01`) with its name in the hub's `privatelink.vaultcore.azure.net` zone. Made on the same run as the state account's endpoint; set `names.key_vault` for a name taken elsewhere. |
@@ -47,7 +47,7 @@ state_operators:                   # people who may run Terraform by hand, by En
 ## Names
 
 Every name here comes from the customer's naming template, worked out by `mlz install` on every run from
-`customer.yaml`'s `naming:` (`docs/naming.md`): the bootstrap is the platform's `mlz` part, in `prod`, in the primary
+`governance.yaml`'s `naming:` (`docs/naming.md`): the bootstrap is the platform's `mlz` part, in `prod`, in the primary
 region. The examples above are for a customer whose code is `acme`. `mlz install bootstrap` writes them to
 `names.json` in its work folder, and the root reads them from there; `mlz install check` shows the state account's.
 
@@ -299,12 +299,12 @@ It needs:
   subscriptions;
 - `gh` signed in with admin rights on the three repos and the `workflow` scope.
 
-`--settings` is the folder with the customer's `customer.yaml` and `bootstrap.yaml`: a checkout of the
+`--settings` is the folder with the customer's `governance.yaml` and `bootstrap.yaml`: a checkout of the
 governance repo, or, for a new customer, a folder with just the two files.
 
 ```sh
 export PYTHONPATH=tools
-SET=<folder with customer.yaml and bootstrap.yaml>
+SET=<folder with governance.yaml and bootstrap.yaml>
 TENANT=<the customer's Entra tenant ID>
 
 python3 -m mlz install repos     --settings $SET                  # 1
@@ -328,7 +328,7 @@ python3 -m mlz install publish   --settings $SET --tenant $TENANT  # 5
      `github.repositories.core` must name another repo: the step refuses to treat mlz-core as the copy.
 
    Then it creates the three repos named in `bootstrap.yaml`: private, on `main`, each with a signed first
-   commit from its starter, calling the copy. The governance repo gets the customer's own `customer.yaml` and
+   commit from its starter, calling the copy. The governance repo gets the customer's own `governance.yaml` and
    `bootstrap.yaml`.
    - Each gets the ruleset `main`: changes only through pull requests, a code owner's approval, no force push, no
      deletion. The bypass team may merge a pull request without the approval, pull requests only.
@@ -527,7 +527,7 @@ To go back to GitHub's public runners, whichever the kind, delete the variable: 
 
 Run `bootstrap` again before the platform's next run when:
 - the customer was bootstrapped before mlz-core built management's and identity's networks;
-- or an identity subscription was added to `customer.yaml`.
+- or an identity subscription was added to `governance.yaml`.
 
 It makes the networks' resource groups, registers `Microsoft.Network` in their subscriptions, and gives the
 platform's identities their rights there. Without it, the platform's `management` or `identity` apply fails
@@ -543,7 +543,7 @@ rest of the tree):
 
 ```sh
 terraform -chdir=governance/terraform state rm 'module.alz.azapi_resource.management_groups_level_0["<root>"]'
-terraform -chdir=bootstrap/terraform import -var customer_file=$GOV/customer.yaml -var bootstrap_file=$GOV/bootstrap.yaml \
+terraform -chdir=bootstrap/terraform import -var governance_file=$GOV/governance.yaml -var bootstrap_file=$GOV/bootstrap.yaml \
   azapi_resource.top_group /providers/Microsoft.Management/managementGroups/<root>
 ```
 

@@ -4,7 +4,7 @@ variable "mlz" {
     app         = string                    # the workload's short name: pay
     env         = string                    # the environment's code: pd
     region_code = string                    # the region's code: nwe (region, the name, is not read here)
-    template    = string                    # customer.yaml's naming.template, or mlz-core's default
+    template    = string                    # governance.yaml's naming.template, or mlz-core's default
     templates   = optional(map(string), {}) # a type's own, by type
   })
   description = "The landing zone's naming values, as vending writes them to the workload repo's mlz.auto.tfvars.json."
@@ -17,7 +17,7 @@ variable "mlz" {
     can(regex(format("^[a-z0-9]{%d,%d}$", limits[0], limits[1]), var.mlz[code]))])
     error_message = "The codes are lower-case letters and digits: org 2 to 4, app 2 to 5, env 1 to 4, region_code 2 to 5."
   }
-  # Templates are checked as customer.yaml's are (tools/mlz/naming.py, parse()), so none renders a name Python would not.
+  # Templates are checked as governance.yaml's are (tools/mlz/naming.py, parse()), so none renders a name Python would not.
   validation {
     condition = alltrue([for template in concat([var.mlz.template], values(var.mlz.templates)) :
     can(regex("^(?:\\{[a-z]+\\}|-|[a-z0-9]+)+$", template))])

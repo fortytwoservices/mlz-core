@@ -36,7 +36,7 @@ class Stack(NamedTuple):
 SETTING = r"(\.ya?ml|/[^/]+\.ya?ml)"
 STACKS = (
     Stack("governance", "bootstrap", r"bootstrap\.yaml", "bootstrap/terraform", "run by mlz install from a laptop, not by the pipeline"),
-    Stack("governance", "governance", r"customer\.yaml", "governance/terraform"),
+    Stack("governance", "governance", r"governance\.yaml", "governance/terraform"),
     Stack("platform", "connectivity", rf"connectivity/[^/]+{SETTING}", "platform/terraform"),
     Stack("platform", "management", rf"management/[^/]+{SETTING}", "platform/networks/terraform", "built in the primary region with or without a file"),
     Stack("platform", "identity", rf"identity/[^/]+{SETTING}", "platform/networks/terraform", "built in each region with a file"),
@@ -56,7 +56,7 @@ WRITERS = {
 }
 # Built by another role than the one whose repo looks like its home.
 ELSEWHERE = {
-    "platform": ("management's Log Analytics workspace and its group: governance, from customer.yaml",
+    "platform": ("management's Log Analytics workspace and its group: governance, from governance.yaml",
                  "the hubs' peerings with landing zones: vending, as each landing zone is made"),
     "vending": ("each landing zone's firewall rules: the platform repo's firewall-rules/landing-zones/<key>.yaml",),
 }

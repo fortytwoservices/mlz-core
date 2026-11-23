@@ -72,7 +72,7 @@ class RenderTest(unittest.TestCase):
         self.assertEqual(naming.render(n, "virtual_network", app="pay", env="prod", region="northeurope"), "vnet-acme-pay-pr-ne-01")
 
     def test_what_a_name_cannot_be_made_from(self):
-        with self.assertRaisesRegex(ConfigError, "the environment 'staging' has no short name; add it under naming.environments in customer.yaml"):
+        with self.assertRaisesRegex(ConfigError, "the environment 'staging' has no short name; add it under naming.environments in governance.yaml"):
             naming.render(acme(), "virtual_network", app="pay", env="staging", region="norwayeast")
         with self.assertRaisesRegex(ConfigError, "app is 'payments'; it must be 2 to 5 lower-case letters and digits"):
             naming.render(acme(), "virtual_network", app="payments", env="prod", region="norwayeast")
@@ -118,7 +118,7 @@ class SettingsTest(unittest.TestCase):
 
     def test_a_naming_section_that_is_not_one_is_refused_not_ignored(self):
         for odd in (False, 0, "", [], "acme"):
-            with self.assertRaisesRegex(ConfigError, "customer.yaml: naming is a group of settings"):
+            with self.assertRaisesRegex(ConfigError, "governance.yaml: naming is a group of settings"):
                 naming.settings({"naming": odd}, "mlz")
         self.assertEqual(naming.settings({"naming": None}, "mlz").org, "mlz")  # naming: with nothing under it
 

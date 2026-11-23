@@ -238,7 +238,7 @@ class PlatformTest(unittest.TestCase):
         self.network("identity", "norwayeast")
         with self.assertRaises(ConfigError) as caught:
             build(self.repo, GOVERNANCE)
-        self.assertIn("identity/norwayeast: builds identity's network in the identity subscription, and customer.yaml names none", str(caught.exception))
+        self.assertIn("identity/norwayeast: builds identity's network in the identity subscription, and governance.yaml names none", str(caught.exception))
 
     def test_a_network_file_takes_no_settings_and_needs_its_hub(self):
         self.hub("norwayeast", HUB)

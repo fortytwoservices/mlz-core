@@ -5,9 +5,9 @@ runners:
   builds: the self-hosted runners, Fortytwo's runner image on a scale set in management's network, once their vault holds the runner App's key
   file: bootstrap
   inputs:
-    name: {class: derived, by: "the naming template (customer.yaml's naming)"}
+    name: {class: derived, by: "the naming template (governance.yaml's naming)"}
     parent_id: {class: derived, by: "the bootstrap's resource group"}
-    location: {class: setting, file: customer, key: primary_region}
+    location: {class: setting, file: governance, key: primary_region}
     subnet_resource_id: {class: derived, by: "management's runners subnet, from names"}
     sku_name: {class: setting, key: github.runners.size}
     instances: {class: setting, key: github.runners.instances}

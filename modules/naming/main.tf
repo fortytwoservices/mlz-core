@@ -44,7 +44,7 @@ locals {
   )
   min_length = coalesce(local.rules.min_length, 1)
   problems = compact([
-    length(local.name) > local.rules.max_length ? "${var.type} name ${local.name} is ${length(local.name)} characters, ${length(local.name) - local.rules.max_length} more than Azure allows; shorten a short name, give the type a template of its own in customer.yaml, or set this name explicitly." : "",
+    length(local.name) > local.rules.max_length ? "${var.type} name ${local.name} is ${length(local.name)} characters, ${length(local.name) - local.rules.max_length} more than Azure allows; shorten a short name, give the type a template of its own in governance.yaml, or set this name explicitly." : "",
     length(local.name) < local.min_length ? "${var.type} name ${local.name} is ${length(local.name)} characters; Azure needs at least ${local.min_length}." : "",
     !can(regex(local.pattern, local.name)) || (try(local.rules.no_double_hyphen, false) && strcontains(local.name, "--")) ? "${var.type} name ${local.name} has characters Azure does not allow there." : "",
     try(local.rules.no_trailing_period, false) && endswith(local.name, ".") ? "${var.type} name ${local.name} ends with a period, which Azure does not allow." : "",

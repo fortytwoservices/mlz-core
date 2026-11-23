@@ -127,7 +127,7 @@ class ExplainTest(unittest.TestCase):
         self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
         self.allocate()
         rows = self.rows()
-        self.assertEqual(rows["github.repo"], ("made by vending", "github.organization is set; customer.yaml's naming.repository names it (below)"))
+        self.assertEqual(rows["github.repo"], ("made by vending", "github.organization is set; governance.yaml's naming.repository names it (below)"))
         self.assertEqual(rows["name repository"], ("payments-prod", "recorded in _generated/names.yaml"))
         self.assertEqual(rows["name state_account"], ("stdemopaypdnwe01", "recorded in _generated/names.yaml"))
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  create: false\n")
@@ -432,36 +432,43 @@ class GovernanceExplainTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def explain(self, customer: str, show_inputs: bool = False) -> str:
-        (self.repo / "customer.yaml").write_text(customer)
+        (self.repo / "governance.yaml").write_text(customer)
         return explain.governance_explain(self.repo, show_inputs)
 
     def test_the_starter_names_a_source_for_every_value(self):
-        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text())
-        self.assertRegex(out, r"root_id +demo +<- customer.yaml")
+        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/governance.yaml").read_text())
+        self.assertRegex(out, r"root_id +demo +<- governance.yaml")
         self.assertRegex(out, r"tags.required +\[Owner, CostCenter\] +<- mlz-core's governance/defaults.yaml")
         self.assertRegex(out, r"management.name +log-demo-mgt-pd-nwe-01 +<- the naming template")
-        self.assertIn("no problems in customer.yaml", out)
+        self.assertIn("no problems in governance.yaml", out)
         self.assertEqual([row for row in rows_of(out) if "<-" not in row], [])
 
+    def test_a_repo_with_customer_yaml_is_refused_with_the_new_name_and_the_command(self):
+        (self.repo / "customer.yaml").write_text("root_id: demo\n")
+        with self.assertRaises(explain.ConfigError) as refused:
+            explain.role_of(self.repo)
+        self.assertIn("customer.yaml: this file is called governance.yaml now; rename it", str(refused.exception))
+        self.assertIn("git mv customer.yaml governance.yaml (docs/governance.md)", str(refused.exception))
+
     def test_a_value_that_replaces_a_default_names_it(self):
-        customer = (explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text()
+        customer = (explain.inputs.CORE / "starter/mlz-governance/governance.yaml").read_text()
         out = self.explain(customer + "allowed_regions: [norwayeast]\ntags:\n  required: [Owner]\n")
-        self.assertRegex(out, r"allowed_regions +\[norwayeast\] +<- customer.yaml, replacing mlz-core's governance/defaults.yaml: \[norwayeast, norwaywest")
-        self.assertRegex(out, r"tags.required +\[Owner\] +<- customer.yaml, replacing mlz-core's governance/defaults.yaml: \[Owner, CostCenter\]")
+        self.assertRegex(out, r"allowed_regions +\[norwayeast\] +<- governance.yaml, replacing mlz-core's governance/defaults.yaml: \[norwayeast, norwaywest")
+        self.assertRegex(out, r"tags.required +\[Owner\] +<- governance.yaml, replacing mlz-core's governance/defaults.yaml: \[Owner, CostCenter\]")
         self.assertRegex(out, r"tags.inherited +\[Owner, CostCenter, Environment, Workload\] +<- mlz-core's governance/defaults.yaml")
 
-    def test_a_customer_file_that_does_not_check_is_reported(self):
+    def test_a_governance_file_that_does_not_check_is_reported(self):
         out = self.explain("root_id: Demo\n")
         self.assertIn("root_id 'Demo'", out)
-        self.assertIn("customer.yaml must check first", out)
+        self.assertIn("governance.yaml must check first", out)
         with self.assertRaisesRegex(explain.ConfigError, "root_id 'Demo'"):  # --inputs: no values to show, so it fails
             self.explain("root_id: Demo\n", show_inputs=True)
 
     def test_inputs_shows_both_module_calls(self):
-        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/customer.yaml").read_text(), show_inputs=True)
+        out = self.explain((explain.inputs.CORE / "starter/mlz-governance/governance.yaml").read_text(), show_inputs=True)
         self.assertIn("module.alz: Azure/avm-ptn-alz/azurerm 0.22.0", out)
         self.assertIn("module.management: az-tf-mlz-management v0.2.0", out)
-        self.assertRegex(out, r"architecture_name +demo +<- setting: root_id in customer.yaml")
+        self.assertRegex(out, r"architecture_name +demo +<- setting: root_id in governance.yaml")
 
 
 class ConfigPathTest(unittest.TestCase):
@@ -486,7 +493,7 @@ class ConfigPathTest(unittest.TestCase):
             case.tearDown()
         with tempfile.TemporaryDirectory() as folder:
             rules = explain.governance
-            customer = rules.load_yaml(explain.inputs.CORE / "starter/mlz-governance/customer.yaml")
+            customer = rules.load_yaml(explain.inputs.CORE / "starter/mlz-governance/governance.yaml")
             merged = rules.merge(rules.load_yaml(explain.inputs.CORE / "governance/defaults.yaml"), customer)
             configs["governance/terraform"] = (rules.normalize(merged), [{}])
         checked = 0

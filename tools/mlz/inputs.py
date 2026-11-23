@@ -330,7 +330,7 @@ def snapshot_text(snapshot: dict) -> str:
 MAP = "inputs.yaml"
 # The customer's files a setting can come from: how a page names each, by its schema (schemas/<kind>.schema.json).
 FILES = {
-    "customer": "`customer.yaml`",
+    "governance": "`governance.yaml`",
     "bootstrap": "`bootstrap.yaml`",
     "connectivity": "`connectivity/<region>.yaml`",
     "firewall-rules": "a rules file in `firewall-rules/`",

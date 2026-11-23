@@ -23,16 +23,16 @@
             </SchemaInfo>
           </value>
         </entry>
-        <entry key="mlz-core customer">
+        <entry key="mlz-core governance">
           <value>
             <SchemaInfo>
-              <option name="name" value="mlz-core customer" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.15.0/schemas/customer.schema.json" /> <!-- x-release-please-version -->
+              <option name="name" value="mlz-core governance" />
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.15.0/schemas/governance.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
                   <Item>
-                    <option name="path" value="customer.yaml" />
+                    <option name="path" value="governance.yaml" />
                     <option name="mappingKind" value="Pattern" />
                   </Item>
                 </list>

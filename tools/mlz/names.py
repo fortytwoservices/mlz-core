@@ -4,7 +4,7 @@ Each part of the platform is an app of its own, in prod (naming.PLATFORM): rg-ac
 vnet-acme-hub-pd-nwe-01, id-acme-mlz-govplan-pd-nwe-01. The loaders put each root's names in its config, all from
 here: a name two roots share (the DNS zones' resource group, management's network and its resource group) is
 worked out once, so they always agree. Unlike a landing zone's, these are worked out on every run, and change only
-with a reviewed change to customer.yaml (or a hub file's or bootstrap.yaml's names:).
+with a reviewed change to governance.yaml (or a hub file's or bootstrap.yaml's names:).
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def network(naming: Naming, network: str, region: str, subnets: list[str]) -> di
         # or removed, as vending's _generated/names.yaml does for a landing zone's.
         raise ConfigError(f"{network}'s network security groups are told apart by their subnets' names, which their template has no "
                           "{purpose} for: give them a template with {purpose}, as naming.templates.network_security_group: "
-                          '"{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}" in customer.yaml.')
+                          '"{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}" in governance.yaml.')
     return {
         "virtual_network": platform_name(naming, network, "virtual_network", region),
         "route_table": platform_name(naming, network, "route_table", region),

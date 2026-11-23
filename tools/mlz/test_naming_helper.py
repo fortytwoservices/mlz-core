@@ -14,7 +14,7 @@ from mlz import naming
 
 MODULE = Path(__file__).resolve().parents[2] / "modules" / "naming"
 FLAT = "{type}-{org}-{app}-{env}-{region}-{nn}"
-# (customer.yaml's naming, type, app, environment, region, purpose, nn)
+# (governance.yaml's naming, type, app, environment, region, purpose, nn)
 CASES = {
     "network group": ({"org": "acme"}, "resource_group", "pay", "prod", "norwayeast", "net", 1),
     "network": ({"org": "acme"}, "virtual_network", "pay", "prod", "norwayeast", None, 1),

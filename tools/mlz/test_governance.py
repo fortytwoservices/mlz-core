@@ -1,4 +1,4 @@
-"""Tests for governance.py, the renderer of customer.yaml. Run with: python3 -m unittest discover -s tools -t tools"""
+"""Tests for governance.py, the renderer of governance.yaml. Run with: python3 -m unittest discover -s tools -t tools"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class RenderTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def customer(self, text: str) -> Path:
-        path = self.dir / "customer.yaml"
+        path = self.dir / "governance.yaml"
         path.write_text(text)
         return path
 
@@ -128,7 +128,7 @@ class RenderTest(unittest.TestCase):
         with self.assertRaises(rl.RenderError) as caught:
             self.render(self.BASE + "naming:\n  org: democorp\n  template: '{type}-{name}'\n")
         message = str(caught.exception)
-        self.assertIn("customer.yaml: naming.org is 'democorp'; it must be 2 to 4 lower-case letters and digits.", message)
+        self.assertIn("governance.yaml: naming.org is 'democorp'; it must be 2 to 4 lower-case letters and digits.", message)
         self.assertIn("{name} is not a token", message)
         # Governance names management's resources from it, so a root ID too long to be the customer's code needs
         # naming.org, with or without the section.
@@ -185,7 +185,7 @@ class RenderTest(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("policy_assignments_to_remove.../../../../existing: not an ALZ archetype", message)
         self.assertIn("policy_assignments_to_remove.landing_zone: not an ALZ archetype", message)
-        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["customer.yaml"])
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["governance.yaml"])
 
     def test_writes_never_leave_the_output_folder(self):
         out = self.dir / "out"
@@ -294,7 +294,7 @@ class RenderTest(unittest.TestCase):
         with self.assertRaises(rl.RenderError) as caught:
             rl.render(self.customer(self.BASE), DEFAULTS, self.dir)
         self.assertIn("holds source files", str(caught.exception))
-        self.assertTrue((self.dir / "customer.yaml").exists())
+        self.assertTrue((self.dir / "governance.yaml").exists())
 
     def test_output_inside_the_governance_sources_is_refused(self):
         for folder in (rl.GOVERNANCE, rl.GOVERNANCE.parent):
@@ -386,7 +386,7 @@ class RenderTest(unittest.TestCase):
         )
 
     def test_the_starter_customer_renders(self):
-        starter = rl.GOVERNANCE.parent / "starter" / "mlz-governance" / "customer.yaml"
+        starter = rl.GOVERNANCE.parent / "starter" / "mlz-governance" / "governance.yaml"
         config = rl.render(starter, DEFAULTS, self.dir / "starter")
         self.assertEqual(config["root_id"], "demo")
 

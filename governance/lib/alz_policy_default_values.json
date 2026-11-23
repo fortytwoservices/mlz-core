@@ -3,7 +3,7 @@
   "defaults": [
     {
       "default_name": "allowed_locations",
-      "description": "The customer's allowed regions, from customer.yaml (allowed_regions).",
+      "description": "The customer's allowed regions, from governance.yaml (allowed_regions).",
       "policy_assignments": [
         {
           "policy_assignment_name": "Deny-Resource-Locations",

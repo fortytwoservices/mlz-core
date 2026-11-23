@@ -33,8 +33,8 @@ Settings from `bootstrap.yaml`.
 | `github.labels` | list(string) | fixed | `["mlz"]`: the label the pipelines' MLZ_RUNS_ON names |
 | `github.runner_group` | string | fixed | `"mlz"`: the runner group mlz install runners makes, open to the three repos only |
 | `instances` | number | setting | `github.runners.instances` in `bootstrap.yaml` |
-| `location` | string | setting | `primary_region` in `customer.yaml` |
-| `name` | string | derived | the naming template (customer.yaml's naming) |
+| `location` | string | setting | `primary_region` in `governance.yaml` |
+| `name` | string | derived | the naming template (governance.yaml's naming) |
 | `network_security_group_name` | string | derived | the naming template |
 | `parent_id` | string | derived | the bootstrap's resource group |
 | `sku_name` | string | setting | `github.runners.size` in `bootstrap.yaml` |

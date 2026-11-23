@@ -1,9 +1,9 @@
-"""Renders a customer's part of the ALZ library from customer.yaml: python3 -m mlz governance, which mlz check runs.
+"""Renders a customer's part of the ALZ library from governance.yaml: python3 -m mlz governance, which mlz check runs.
 
 The ALZ provider reads management group IDs and archetypes from library files,
 and those cannot be templated at plan time. So this module writes them before
 terraform init, from Fortytwo's defaults (governance/defaults.yaml) merged with
-the customer's customer.yaml:
+the customer's governance.yaml:
 
   config.json                       the merged settings, which the governance root reads
   alz_library_metadata.json
@@ -14,7 +14,7 @@ the customer's customer.yaml:
 The governance root loads Microsoft's library, then governance/lib, then this
 output, in that order.
 
-Merging: a top-level key in customer.yaml replaces the default, except the
+Merging: a top-level key in governance.yaml replaces the default, except the
 mappings management_groups and tags, which are merged key by key, so a customer
 can set management_groups.local alone.
 
@@ -22,7 +22,7 @@ It needs Python 3.10 or later (standard library only) and terraform on the
 PATH, which converts the YAML.
 
 Usage:
-    python3 -m mlz governance --customer FILE [--defaults FILE] --out DIR
+    python3 -m mlz governance --file FILE [--defaults FILE] --out DIR
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# customer.yaml's naming section is checked here, where it is written, and names management's resources (naming.py,
+# governance.yaml's naming section is checked here, where it is written, and names management's resources (naming.py,
 # names.py); platform, vending and the bootstrap name theirs with it.
 from . import advanced, naming
 from .names import governance as governance_names
@@ -43,6 +43,9 @@ from .merge import ConfigError
 GOVERNANCE = Path(__file__).resolve().parents[2] / "governance"
 DEFAULTS = GOVERNANCE / "defaults.yaml"
 MERGED_KEY_BY_KEY = ("management_groups", "tags")
+# The file a person edits in the governance repo, and its name before v0.16.0, which is refused with the new one (no
+# compatibility code, decision D5).
+FILE, OLD_FILE = "governance.yaml", "customer.yaml"
 # Written into every output folder, so a later run replaces only a folder mlz governance made.
 MARKER = ".rendered-by-mlz-core"
 
@@ -73,7 +76,7 @@ LANDING_ZONE_ADDITIONS = ["Deny-Resource-Locations", "Deny-RSG-Locations"]
 WORKLOAD_ARCHETYPES = ("landing_zones", "sandbox")
 TAG_KEYS = ("required", "inherited", "exempt_resource_groups", "in_sandboxes")
 OPTIONAL_GROUPS = ("security", "local")
-# Every top-level setting customer.yaml may have: what governance reads, the keys of defaults.yaml, and
+# Every top-level setting governance.yaml may have: what governance reads, the keys of defaults.yaml, and
 # parent_management_group_id, which the bootstrap reads. Anything else is refused: a mistyped key would
 # otherwise be ignored, and the default it meant to override used.
 SETTINGS = (
@@ -217,7 +220,7 @@ def validate(config: dict) -> None:
             )
             continue
         string_list(names, f"policy_assignments_to_remove.{archetype}", problems)
-    advanced.check("customer", "customer.yaml", config.get("advanced"), problems)
+    advanced.check("governance", FILE, config.get("advanced"), problems)
     if problems:
         raise RenderError("customer settings are not valid:\n  " + "\n  ".join(problems))
 
@@ -240,7 +243,7 @@ def normalize(config: dict) -> dict:
 def blocks(config: dict) -> dict:
     """advanced:, checked by validate() and without its nulls, only when it sets something: without it, config.json
     is as before. A key of its own here, so config.json never carries the block as given."""
-    checked = advanced.clean("customer", config.get("advanced"))
+    checked = advanced.clean("governance", config.get("advanced"))
     return {"advanced": checked} if checked else {}
 
 
@@ -405,14 +408,22 @@ def github_settings(bootstrap_file: Path | None) -> dict:
     return {**({"bypass_team": team} if team else {}), **({"plan": plan} if plan == "team" else {})}
 
 
-def render(customer_file: Path, defaults_file: Path, out: Path, bootstrap_file: Path | None = None) -> dict:
-    config = merge(load_yaml(defaults_file), load_yaml(customer_file))
+def renamed(folder: Path) -> str | None:
+    """The refusal for a folder that still has governance's settings under their name before v0.16.0; None otherwise."""
+    if not (folder / OLD_FILE).exists():
+        return None
+    return (f"{folder / OLD_FILE}: this file is called {FILE} now; rename it, in the governance repo and in the folder mlz install "
+            f"reads: git mv {OLD_FILE} {FILE} (docs/governance.md).")
+
+
+def render(governance_file: Path, defaults_file: Path, out: Path, bootstrap_file: Path | None = None) -> dict:
+    config = merge(load_yaml(defaults_file), load_yaml(governance_file))
     validate(config)
     root = config["root_id"]
 
     config = {**normalize(config), "github": github_settings(bootstrap_file)}
     tags = tag_assignments(config)
-    prepare_output(out, [customer_file, defaults_file, *([bootstrap_file] if bootstrap_file else [])])
+    prepare_output(out, [governance_file, defaults_file, *([bootstrap_file] if bootstrap_file else [])])
 
     write_json(out, "config.json", config)
     write_json(
@@ -422,7 +433,7 @@ def render(customer_file: Path, defaults_file: Path, out: Path, bootstrap_file: 
             "$schema": "https://raw.githubusercontent.com/Azure/Azure-Landing-Zones-Library/main/schemas/library_metadata.json",
             "name": f"{root}-customer",
             "display_name": f"{config['root_display_name']} (rendered)",
-            "description": "Rendered from customer.yaml by mlz-core (python3 -m mlz governance). Do not edit.",
+            "description": "Rendered from governance.yaml by mlz-core (python3 -m mlz governance). Do not edit.",
             "dependencies": [],
         },
     )

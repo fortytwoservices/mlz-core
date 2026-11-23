@@ -106,9 +106,19 @@ class CheckTest(unittest.TestCase):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("mlz check: bootstrap.yaml: github is not a mapping of the organization's settings", err)
 
+    def test_a_governance_repo_with_customer_yaml_is_refused_with_the_new_name_and_the_command(self):
+        # governance.yaml's name before v0.16.0, refused before anything renders (no compatibility code, decision D5).
+        repo = self.starter("governance")
+        (repo / "governance.yaml").rename(repo / "customer.yaml")
+        code, out, err = self.check(repo, "--json", actions=True)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn(f"::error::{repo / 'customer.yaml'}: this file is called governance.yaml now; rename it, in the governance repo and in "
+                      "the folder mlz install reads: git mv customer.yaml governance.yaml (docs/governance.md).", err)
+        self.assertNotIn("mlz governance:", err)
+
     def test_a_failed_check_fails_and_prints_no_stacks(self):
         repo = self.starter("governance")
-        (repo / "customer.yaml").write_text((repo / "customer.yaml").read_text() + "\nroot_id: NOT VALID\n")
+        (repo / "governance.yaml").write_text((repo / "governance.yaml").read_text() + "\nroot_id: NOT VALID\n")
         code, out, err = self.check(repo, "--json")
         self.assertEqual((code, out), (1, ""))
         self.assertIn("mlz governance:", err)

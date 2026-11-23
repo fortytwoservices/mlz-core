@@ -43,7 +43,7 @@ class SchemaTest(unittest.TestCase):
         rule = committed("firewall-rules.schema.json")["properties"]["outbound"]["items"]
         self.assertEqual(set(rule["properties"]), set(firewall.RULE_KEYS))
         rules = governance
-        customer = committed("customer.schema.json")["properties"]
+        customer = committed("governance.schema.json")["properties"]
         self.assertEqual(set(customer), set(rules.SETTINGS))
         self.assertEqual(set(customer["subscriptions"]["properties"]), set(rules.PLATFORM_ROLES))
         self.assertEqual(set(customer["management_groups"]["properties"]), set(rules.OPTIONAL_GROUPS))
@@ -72,7 +72,7 @@ class SchemaTest(unittest.TestCase):
     def test_each_starter_points_its_files_at_the_schemas_of_this_release(self):
         release = install.release()
         expected = {
-            "governance": {"customer.schema.json", "bootstrap.schema.json"},
+            "governance": {"governance.schema.json", "bootstrap.schema.json"},
             "platform": {"connectivity.schema.json", "network.schema.json", "firewall-rules.schema.json"},
             "vending": {"landing-zone.schema.json"},
         }
