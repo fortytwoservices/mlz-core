@@ -218,7 +218,7 @@ def github_plan(bootstrap: dict) -> str:
     """bootstrap.yaml's github.plan, enterprise unless set; ConfigError for another value, and for reviewers on Team."""
     github = bootstrap.get("github") or {}
     plan = github.get("plan", "enterprise")
-    if plan not in GITHUB_PLANS:
+    if not isinstance(plan, str) or plan not in GITHUB_PLANS:
         raise ConfigError(f"bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not {plan!r} (docs/bootstrap.md, GitHub plan).")
     if plan == "team" and github.get("reviewers") is not None:
         raise ConfigError("bootstrap.yaml: github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a private repo "
@@ -602,6 +602,8 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
     except ConfigError as error:
         mlz_app = None
         problems.append(str(error))
+    if mlz_app and wanted == "team":
+        problems += team_app_problems(mlz_app, out)
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -781,6 +783,26 @@ def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict
     return found
 
 
+# What the pipeline's tokens ask of the MLZ App on GitHub Team, beside what it needs on both plans (role.yml): the gate's
+# token, scoped to the repo, reads its runs, the pull request, the rule suites (Administration) and its contents; planned
+# mints one scoped to the repo (runs, pull request, contents) and one with Members alone, for the code owners' team.
+TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
+
+
+def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
+    """Whether the MLZ App asks for at least read of each permission the Team gate's tokens ask for, as GET /apps/<slug>
+    shows it. Whether an owner has accepted them on the installation only the App and the owners see: said."""
+    held = app.get("permissions") or {}
+    missing = [name for name in TEAM_APP_PERMISSIONS if held.get(name) not in ("read", "write", "admin")]
+    if missing:
+        return [f"the MLZ App {app['slug']} does not ask for {', '.join(f'{name} (read)' for name in missing)}, which the pipeline's gate on "
+                "GitHub Team reads with; an owner of the App adds them (its Settings, Permissions), and an owner of the organization "
+                "accepts them on its installation."]
+    out(f"the MLZ App {app['slug']} asks for what the gate on GitHub Team reads with ({', '.join(TEAM_APP_PERMISSIONS)}); whether an owner "
+        "accepted each on its installation only an owner sees")
+    return []
+
+
 def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[str], None]) -> list[str]:
     """Whether the repo's pipeline and its environment agree with github.plan, both ways: on Enterprise the pipeline
     passes no approval and the environment waits for a reviewer; on Team the pipeline passes approval: pull-request and
@@ -789,7 +811,9 @@ def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[st
     found, wanted = [], GITHUB_PLANS[plan]
     branch = github.default_branch(repo)
     workflow = github.file(repo, WORKFLOW, branch)[0]
-    if workflow is not None and approval_of(workflow) != wanted:
+    if workflow is None:
+        found.append(f"{repo}: no {WORKFLOW} on {branch}, so nothing deploys and no check runs; mlz install repos offers the starter's files.")
+    elif approval_of(workflow) != wanted:
         found.append(f"{repo}: its pipeline ({WORKFLOW}) passes approval: {approval_of(workflow)}, but bootstrap.yaml's github.plan is {plan}, "
                      f"whose approval is {wanted}. mlz install repos offers the change; a member of the bypass team merges it (docs/bootstrap.md, "
                      "Switching plans).")
@@ -814,8 +838,9 @@ def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[st
                      "pipeline still expects a reviewer. mlz install bootstrap sets it.")
     policy = environment.get("deployment_branch_policy") or {}
     allowed = github.branch_policies(repo, role) if policy.get("custom_branch_policies") else []
-    if policy.get("protected_branches") or sorted(allowed) != ["main"]:
-        accepts = "any protected branch" if policy.get("protected_branches") else ", ".join(allowed) if allowed else "any branch"
+    if policy.get("protected_branches") or allowed != [("main", "branch")]:
+        accepts = ("any protected branch" if policy.get("protected_branches") else
+                   ", ".join(f"{name}{' (a tag)' if kind == 'tag' else ''}" for name, kind in allowed) if allowed else "any branch")
         found.append(f"{repo}: its environment {role} is not limited to main (it accepts {accepts}), so a run on another branch could apply. "
                      "GitHub has branch policies on an environment in a private repo on Team and Enterprise; mlz install bootstrap sets main alone.")
     if not found:
@@ -1364,6 +1389,15 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": pinned}
+    if bootstrap is not None and github_plan(bootstrap) == "team":
+        # On Team GitHub may not keep the group's limit to role.yml, and then only each repo's push ruleset keeps another
+        # workflow off the runners: seen first, before the group is made or gains a repo.
+        guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
+        guards += [problem for repo in repos.values() for problem in other_workflows(github, repo)]
+        if guards:
+            raise ConfigError("\n  ".join([f"runners: on GitHub Team the runner group {RUNNER} may admit any workflow of the three repos, so "
+                                             f"each repo's push ruleset {PUSH_RULESET} must keep every other workflow out of it first, as only "
+                                             "the bypass team may pass it, and none may be there already. Nothing was changed:"] + guards))
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
             f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
@@ -1374,7 +1408,7 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     if made is None:
         made = github.create_runner_group(org, body)
         out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
-        workflows_kept(github, org, repos, pinned, bootstrap, out)
+        workflows_kept(github, org, pinned, bootstrap, out)
         return made
     if made.get("network_configuration_id"):
         raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
@@ -1389,31 +1423,45 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
         github.set_runner_group_repositories(org, made["id"], repo_ids)
     out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
-    workflows_kept(github, org, repos, pinned, bootstrap, out)
+    workflows_kept(github, org, workflows, bootstrap, out)
     return made
 
 
-def workflows_kept(github, org: str, repos: dict[str, str], pinned: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
-    """Whether GitHub kept the group's limit to role.yml at the pinned releases, read back. GitHub documents that limit
-    ("Changing which workflows can access a runner group") for Enterprise Cloud only, so on Team it may not hold: said,
-    and the step goes on, once each repo's push ruleset is seen to keep every other workflow out of it, as this step
-    can run without mlz install check. On Enterprise it holds, so a group without it is a failure."""
+def other_workflows(github, repo: str) -> list[str]:
+    """Workflows a repo already has besides its pipeline, which pipeline-files does not take away: on main, any file in
+    .github/workflows/ but mlz.yml; on any other branch, any change under .github/ since it left main (a branch pushed
+    before the ruleset keeps it). On Team, where a runner group may admit every workflow of the repo, each could reach
+    the runners."""
+    branch = github.default_branch(repo)
+    found = [f"{repo}: {path} on {branch} is a workflow besides the pipeline; remove it, or keep the runners off Team's fallback."
+             for path in github.folder(repo, ".github/workflows", branch) if path != WORKFLOW]
+    for other in github.branch_names(repo):
+        changed = [path for path in github.changed_paths(repo, branch, other) if path.startswith(".github/")] if other != branch else []
+        if changed:
+            found.append(f"{repo}: branch {other} changes {', '.join(changed)}, which a run from it would use; delete the branch if you do not "
+                         "know it, or merge its change through a reviewed pull request.")
+    return found
+
+
+def workflows_kept(github, org: str, requested: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
+    """Whether GitHub kept the group's limit to exactly the workflows requested (role.yml at the releases admitted), read
+    back. GitHub documents that limit ("Changing which workflows can access a runner group") for Enterprise Cloud only,
+    so on Team it may not hold: said, and the step goes on, since self_hosted_group saw each repo's push ruleset keep
+    every other workflow out first. On Enterprise it holds, so a group without it is a failure."""
     group = github.runner_group(org, RUNNER) or {}
-    if group.get("restricted_to_workflows") and set(pinned) <= set(group.get("selected_workflows") or []):
+    if group.get("restricted_to_workflows") and sorted(group.get("selected_workflows") or []) == sorted(requested):
         return
-    lost = f"{org}'s runner group {RUNNER} is not limited to {' and '.join(pinned)}: GitHub did not keep its limit to selected workflows"
+    kept = sorted(group.get("selected_workflows") or []) if group.get("restricted_to_workflows") else []
+    lost = (f"{org}'s runner group {RUNNER} is not limited to {' and '.join(requested)}: GitHub "
+            + (f"keeps it limited to {', '.join(kept)} instead" if kept else "did not keep its limit to selected workflows"))
     if bootstrap is not None and github_plan(bootstrap) == "team":
-        guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
-        if guards:
-            raise ConfigError("\n  ".join([f"{lost}, and on Team only each repo's push ruleset {PUSH_RULESET} keeps another workflow off the "
-                                             "runners, where the runner App's key is. Not until it does:"] + guards))
         out(f"runners: {lost}. GitHub documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the "
             f"three repos; the push ruleset {PUSH_RULESET}, which only the bypass team may pass, is what keeps any other workflow out of "
             "them (docs/bootstrap.md, private runners).")
         return
     raise ConfigError(f"{lost}, which GitHub Enterprise allows. Without it a job a pull request adds could run where the runner App's key "
                       f"is: set it in the organization's Settings, Actions, Runner groups, {RUNNER}, Workflow access (selected workflows: "
-                      f"{', '.join(pinned)}), then run this step again.")
+                      f"{', '.join(requested)}), then run this step again.")
 
 
 def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callable[[str], None], wait: Callable[[float], None]) -> None:

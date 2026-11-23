@@ -115,9 +115,13 @@ def approval_of(workflow: str) -> str:
     if found is None:
         return "environment"
     start, end, inline = found
-    text = inline if inline else "\n".join(lines[start + 1:end])
-    match = re.search(r"(^|[{,\s])approval:[ \t]*['\"]?(?P<approval>[\w-]+)", text, re.M)
-    return match["approval"] if match else "environment"
+    # Its keys without their comments: a comment that reads like an approval is not one.
+    keys = [inline] if inline else [re.sub(r"(^|\s)#.*$", "", line) for line in lines[start + 1:end]]
+    for key in keys:
+        match = re.search(r"(^\s*|[{,]\s*)approval:[ \t]*['\"]?(?P<approval>[\w-]+)", key)
+        if match:
+            return match["approval"]
+    return "environment"
 
 
 # The line a role repo's caller gets on GitHub Team, under its with:, after its role.
