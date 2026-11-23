@@ -41,8 +41,9 @@ PIN = re.compile(r"^[ \t]*uses:[ \t]*(?P<core>[\w.-]+/[\w.-]+)/\.github/workflow
 NAMING = re.compile(r"mlz-core\.git//modules/naming\?ref=(?P<ref>[^\"'\s&]+)")
 CODEOWNERS = ".github/CODEOWNERS"
 CHECK = "workload / plan"  # the caller's job (starter/mlz-workload), then workload.yml's: what main-checks requires
-# What main-checks requires besides CHECK on GitHub Team (workload.yml's gate pull request adds workload / planned here).
-TEAM_CHECKS: list[str] = []
+# What main-checks requires besides CHECK on GitHub Team: workload.yml's planned job, which passes once the pull
+# request's approval covers its plan (docs/pipelines.md).
+TEAM_CHECKS = ["workload / planned"]
 PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo's pipeline to its GitHub plan's way
 # GitHub Team's lines in a workload repo's pipeline, which belongs to mlz-core: the approval it passes, and actions: read
 # for workload.yml's gate job, which reads the pull request's run with the job's token (a workload repo holds no App

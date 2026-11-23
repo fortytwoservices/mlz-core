@@ -540,7 +540,7 @@ class TeamTest(SyncTest):
         self.assertEqual(guard["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}])
         self.assertEqual(guard["bypass_actors"], [{"actor_id": 99, "actor_type": "Integration", "bypass_mode": "always"},
                                                   {"actor_id": 7, "actor_type": "Team", "bypass_mode": "always"}])
-        self.assertEqual([c["context"] for c in checks["rules"][0]["parameters"]["required_status_checks"]], ["workload / plan", *workload.TEAM_CHECKS])
+        self.assertEqual([c["context"] for c in checks["rules"][0]["parameters"]["required_status_checks"]], ["workload / plan", "workload / planned"])
         self.assertIn(f"{self.REPO}: ruleset pipeline-files: changes under .github/ refused on every branch, but from the MLZ App and "
                       "acme-org/acme-admins", out)
         self.assertIsNone(workload.offer_plan(github, self.REPO, "team"))  # on its plan already: nothing offered
