@@ -205,8 +205,9 @@ showed, change for change and value for value (`tools/ci/approved.py`). Nothing 
 - the pull request's last run with plans marked as its own did not finish with success, or was run again after the merge,
   or there is none. Each plan job of a Team pull request's run marks its plans with the pull request's number. On the
   same commit, a run without plans (it planned nothing, or stopped before) and a run with another pull request's (into
-  another branch) are passed over, and the one before them counts. Such a newer run of its own leaves the required
-  `planned` failed, so the pull request could not have merged on it;
+  another branch) are passed over, and the one before them counts. A newer run of its own that failed before planning
+  leaves the required `planned` failed, so the pull request could not have merged on it. One that planned nothing
+  passes `planned`, and the gate still holds `main`'s plan to the earlier run's, which must match;
 - a stack's plan on `main` differs from the one the pull request's run showed: Azure or the state changed since, or an
   apply failed half way.
 
