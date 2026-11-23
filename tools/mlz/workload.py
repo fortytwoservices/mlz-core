@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from . import install, mirror
+from . import inputs, install, mirror
 from .merge import ConfigError
 from .upgrade import RELEASE_PLEASE_MARKER, _with, breaking_changes, demoted, plan_of, releases_between, takes_approval, version
 
@@ -50,9 +50,6 @@ PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo's pipeline
 # key). Enterprise's pipeline has neither, so it is the starter's byte for byte.
 TEAM_PERMISSION = "  actions: read # GitHub Team: workload.yml's gate reads the pull request's run (docs/vending.md)\n"
 TEAM_APPROVAL = "      approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/vending.md)\n"
-KEY = re.compile(r"^ {4}(\w+)\s*=\s*(?P<type>\S*)", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
-OBJECT = re.compile(r"^ {2}type\s*=\s*object\(\{(?P<keys>.*?)^ {2}\}\)", re.M | re.S)  # its type, not its validation blocks
-MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
 
 
 def caller(workflow: str, plan: str) -> str:
@@ -114,10 +111,14 @@ def plan_wanted(config: dict) -> str:
 
 def mlz_attributes(variables: str) -> dict[str, bool]:
     """The keys variable "mlz"'s object type declares in a variables.tf (not another variable's, nor a validation
-    block's), each with whether Terraform requires it: one declared optional(...) it does not."""
-    block = MLZ_VARIABLE.search(variables)
-    found = OBJECT.search(block["body"]) if block else None
-    return {key[1]: not key["type"].startswith("optional(") for key in KEY.finditer(found["keys"])} if found else {}
+    block's or a comment's), each with whether Terraform requires it: one declared optional(...) it does not. Read as
+    HCL with the input maps' reader (inputs.py), so a quoted key counts too; a file it cannot read gives none."""
+    try:
+        found = next((attributes for name, attributes in inputs.blocks(inputs.tokens(variables)) if name == "mlz"), None)
+        node = inputs.parse_type(found["type"])[0] if found and "type" in found else {}
+    except (ValueError, IndexError):
+        return {}
+    return {key: not attribute["optional"] for key, attribute in node.get("attributes", {}).items()}
 
 
 def mlz_keys(variables: str) -> set[str]:

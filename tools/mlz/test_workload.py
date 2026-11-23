@@ -335,6 +335,9 @@ class UpgradeTest(SyncTest):
         own = workload.starter()["variables.tf"].replace("  })\n}\n", "    location = optional(string) # ours\n  })\n" + validation + "}\n")
         self.assertEqual(workload.mlz_attributes(own)["location"], False)
         self.assertNotIn("condition", workload.mlz_keys(own))
+        # Read as HCL: a quoted key is a key, and one in a block comment is none.
+        quoted = workload.starter()["variables.tf"].replace("    region_code = string # nwe\n", '    "region_code" = string\n    /*\n    location = string\n    */\n')
+        self.assertEqual(workload.mlz_keys(quoted), workload.mlz_keys(workload.starter()["variables.tf"]))
         github = self.github(self.made_at(**{"variables.tf": own}))
         self.sync(github)
         body = github.pulls[self.REPO][0]["body"]
