@@ -145,9 +145,10 @@ resource "github_actions_variable" "workload" {
 
 # On GitHub Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one
 # refuses (workload.yml): a check against a switch done out of order and against mistakes, not the switch, which is the
-# pipeline's approval input (tools/mlz/workload.py). It names its environment, so it comes after the reviewer goes and
-# goes before the reviewer comes back, by the time between two calls; the other order would make it before the
-# environment of a new repo, which GitHub refuses (tested 23 November).
+# pipeline's approval input (tools/mlz/workload.py). It names its environment, so it is made after the environment
+# (GitHub refuses a variable on a new repo's environment that does not exist yet, 404) and, on the way to Team, after
+# the reviewer goes, by the time between two calls. Back on Enterprise, create_before_destroy has the reviewer come back
+# before the variable goes (tested with terraform_data, 23 November).
 resource "github_actions_environment_variable" "approval" {
   count = local.repo_made && local.team_plan ? 1 : 0
 
@@ -155,6 +156,10 @@ resource "github_actions_environment_variable" "approval" {
   environment   = github_repository_environment.apply[0].environment
   variable_name = "MLZ_APPROVAL"
   value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "github_actions_environment_variable" "deploy_identity" {
