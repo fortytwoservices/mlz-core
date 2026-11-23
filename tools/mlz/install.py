@@ -643,8 +643,10 @@ def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str
 
 
 # Paths under _generated/ a guard must refuse: every file written there, so that a rule on one of them alone counts as a
-# guard whose bypass must let the App through, and names nobody would list one by one.
-GENERATED_PROBES = (*(f"_generated/{name}" for name in stacks.WRITERS), "_generated/zz-mlz-probe.yaml", "_generated/zz-mlz-probe/x.yaml")
+# guard whose bypass must let the App through; and names nobody would list one by one, with each suffix the loaders read
+# (files.read_setting takes <name>.yml, or a folder of chunks, as well as <name>.yaml) and none.
+GENERATED_PROBES = (*(f"_generated/{name}" for name in stacks.WRITERS),
+                    *(f"_generated/zz-mlz-probe{suffix}" for suffix in (".yaml", ".yml", "", "/x.yaml", "/x.yml")))
 
 
 def lets_through(actors: list[dict], kind: str, actor_id) -> bool:

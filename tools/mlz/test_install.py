@@ -815,11 +815,14 @@ class InstallTest(unittest.TestCase):
         # One named file only, or every file but some: not the whole folder.
         one_file = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/governance.yaml"]}}]}
         self.assertIn("no active push ruleset refuses every change (not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, "
-                      "_generated/ip-plan.yaml, _generated/names.yaml, _generated/zz-mlz-probe.yaml, _generated/zz-mlz-probe/x.yaml) under _generated/",
-                      check(one_file))
+                      "_generated/ip-plan.yaml, _generated/names.yaml, _generated/zz-mlz-probe.yaml, _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, "
+                      "_generated/zz-mlz-probe/x.yaml, _generated/zz-mlz-probe/x.yml) under _generated/", check(one_file))
         some = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [
-            "_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe.yaml", "_generated/zz-mlz-probe/**/*"]}}]}
+            "_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe*", "_generated/zz-mlz-probe/**/*"]}}]}
         self.assertIn("(not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, _generated/names.yaml) under _generated/", check(some))
+        # .yaml files only: the loaders read <name>.yml too (files.read_setting), so a second definition could be added.
+        yaml_only = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/**/*.yaml"]}}]}
+        self.assertIn("(not _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, _generated/zz-mlz-probe/x.yml) under _generated/", check(yaml_only))
         # A second rule on one file there, beside the right one: it too must let the App through, or the allocator's commits stop.
         names_only = {**install.push_ruleset(99), "name": "names-file", "bypass_actors": guard["bypass_actors"][1:],
                       "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/names.yaml"]}}]}
