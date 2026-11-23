@@ -262,6 +262,14 @@ The same gate, with three differences:
 - **Switching between the plans:** for the time between two of GitHub's API calls inside the switch's apply, an
   environment has neither its reviewer nor the variable. Cancel any run waiting for a reviewer, and merge nothing, until
   the switch has applied ([bootstrap](bootstrap.md)).
+- **Old runs, once an environment has no reviewer:** GitHub lets anyone with write access re-run a run for 30 days, on
+  its commit and so with the pipeline it had. Two kinds of run would then apply with no person:
+  - in a role repo, a run whose apply was rejected or cancelled after the switch to Team merged. "Re-run failed jobs"
+    runs only the apply again, not the gate in `changed`, and the pull request's approval covered that plan;
+  - a run made on a release before v0.14.0, which has no `MLZ_APPROVAL` check.
+
+  The switch to Team deletes them first ([bootstrap](bootstrap.md#switching-plans), step 5). Derived from GitHub's
+  documentation ("Re-running workflows and jobs") and the pipeline's code, not tested.
 
 ## A plan that deletes a firewall policy is refused
 
