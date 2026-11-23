@@ -263,8 +263,13 @@ customer's GitHub organization, unless its `github.repo` names an existing one o
   code and history stay. The merge settings are set when the repo is made and then left to the team: GitHub shows
   them only to a token with Administration: write, and vending's plans read with a read-only one.
 - **Its team**: `github.team`, required for a repo vending makes, set once per workload in `workload-defaults.yaml`. The team
-  maintains the repo, and is the reviewer of its `apply` environment, which only `main` may use. Every apply in MLZ
-  waits for a reviewer, which GitHub allows in a private repo only on GitHub Enterprise (`docs/bootstrap.md`).
+  maintains the repo, and on GitHub Enterprise is the reviewer of its `apply` environment, which only `main` may use.
+  GitHub allows a reviewer on an environment in a private repo only on Enterprise, so on GitHub Team (`bootstrap.yaml`'s
+  `github.plan: team`, which governance's contract carries) the environment has none: the team approves each change as
+  the code owner of its pull request, and the run on `main` applies only the plan that pull request showed. There the
+  environment carries `MLZ_APPROVAL: pull-request`, a check against a switch done out of order, not a lock: the team,
+  with maintain, may change the `apply` environment's variables, though not its reviewers or branch policy (tested 23
+  November 2026); vending's daily plan shows any change as drift.
 - **Its identities**: a plan identity, `id-acme-pay-plan-pd-nwe-01`, Reader on the subscription, trusted for the
   repo's pull requests; the deploy identity, Contributor, trusted for its `apply` environment. Both trust GitHub's
   immutable subjects, `repo:<organization>@<id>/<repo>@<id>`, as the role repos' identities do, so a renamed or
@@ -352,17 +357,33 @@ changes in Azure.
   before any merge into `main`.
 - **Nobody but the MLZ App may bypass the check**, which vending uses only for its own commits of
   `mlz.auto.tfvars.json` and `.github/CODEOWNERS`, so that a landing zone's values keep reaching the repo without a
-  person. The run on `main` that such a commit starts still plans, and still waits for the team in `apply`. The App's
+  person. The run on `main` that such a commit starts still plans, and on Enterprise still waits for the team in `apply`. The App's
   key is a secret of the three role repos (governance, platform and vending), each behind its `pipeline-files` rule
   (`docs/pipelines.md`): whoever may change their pipelines can reach it, and so a workload repo's `main`.
 - The bypass team, `bootstrap.yaml`'s `github.bypass_team`, may merge a pull request without the code owner's
   approval, and only a pull request. It reaches vending through governance's contract (`github.bypass_team` in
   `_generated/governance.yaml`), and vending gives it write access to each repo, without which its bypass is no use.
-- No push rule on `.github/`, unlike the role repos: a workload repo holds no secret, only variables, and a pull
-  request's own workflow reaches only the plan identity, which trusts the repo's pull requests by design and reads
-  only its own landing zone. `main`'s workflow changes only through a reviewed pull request, like everything else.
-- A ruleset named `main` or `main-checks` that the repo has already is left as it is, and each run says so when it is
-  not the one vending makes.
+- On GitHub Enterprise, no push rule on `.github/`, unlike the role repos: a workload repo holds no secret, only
+  variables, and a pull request's own workflow reaches only the plan identity, which trusts the repo's pull requests by
+  design and reads only its own landing zone. `main`'s workflow changes only through a reviewed pull request, like
+  everything else.
+- **On GitHub Team, the push rule `pipeline-files` on `.github/`**, which only the MLZ App (it writes the pipeline) and
+  the bypass team may pass. There the pipeline passes the approval that makes the pull request's approval cover the
+  plan, and GitHub counts a skipped required check as passed, so a pipeline changed to skip the gate would turn it off.
+  It also means **a team's own workflows** (a lint or test workflow of its own) need the bypass team to add or change:
+  on Team any workflow on `main` can sign in from the `apply` environment, so one approved by the team could apply
+  outside the gate.
+- On GitHub Team `main-checks` also requires `workload / planned`, which passes once the pull request's approval covers
+  its plan ([pipelines](pipelines.md#workload-repos)).
+- **The MLZ App's commits of the values apply with no person on Team.** They come from a vending pull request the
+  platform team approved, and change only this landing zone; on Enterprise they still wait for the team in `apply`.
+- A ruleset named `main`, `main-checks` or `pipeline-files` of the repo's own is left as it is, and each run says so
+  when it is not the one vending makes. The ones vending made follow the plan: `main-checks` gains or loses
+  `workload / planned`, and `pipeline-files` goes when the repo is back on Enterprise.
+- **A repo the team already had** (`github.repo`) gets none of this from vending: neither the rule on `main` nor, on
+  Team, the push rule. On Team its gate is only as good as its own rules.
+- **When the plan changes** (`docs/bootstrap.md`, Switching plans), each repo is offered a pull request with its pipeline
+  the new plan's way (`mlz/github-plan`), which its team merges; an upgrade keeps the plan a repo's pipeline has.
 
 For a team that pushed straight to `main`: pushes are refused, and a change needs a pull request that another member of
 the team approves. A team of one needs a second member, or the bypass team. A pull request behind `main` needs

@@ -42,7 +42,7 @@ state_operators:                   # people who may run Terraform by hand, by En
 | Runners' vault | `kv-acme-mlz-pd-nwe-01`, for self-hosted runners: the runner App's private key and nothing else. Roles only, given to nobody but the runners' identity; purge protection; a firewall that admits no address, and a private endpoint in management's `snet-private-endpoints` (`pep-acme-mlz-vault-pd-nwe-01`) with its name in the hub's `privatelink.vaultcore.azure.net` zone. Made on the same run as the state account's endpoint; set `names.key_vault` for a name taken elsewhere. |
 | Self-hosted runners | `vmss-acme-mlz-pd-nwe-01` in management's `snet-runners`, with `id-acme-mlz-runners-pd-nwe-01` and `nsg-acme-mlz-runners-pd-nwe-01` ([az-tf-mlz-github-runners](https://github.com/fortytwoservices/az-tf-mlz-github-runners)): made once the runner App's key is in the vault ([private runners](#private-runners)). |
 | Connectivity subscription | The custom role `<root> hub peering`: read the hubs and create, change or delete peerings, nothing else. |
-| GitHub, per repo | The environment the role applies in, which waits for a reviewer and accepts only `main`; the repository variables the workflows read. |
+| GitHub, per repo | The environment the role applies in, which accepts only `main` and, on Enterprise, waits for a reviewer (on Team it carries `MLZ_APPROVAL: pull-request` instead); the repository variables the workflows read. |
 
 ## Names
 
@@ -139,7 +139,7 @@ and decides who approves an apply:
   organization on Free: GitHub refused the reviewer ("Please ensure the billing plan supports the required reviewers
   protection rule").
 - **`team`**: no environment has a reviewer, and the approval of the pull request covers the plan that is applied
-  (`docs/pipelines.md`). `github.reviewers` is refused, since nobody would wait for them. Each environment carries the
+  ([pipelines](pipelines.md#approval-on-github-team)). `github.reviewers` is refused, since nobody would wait for them. Each environment carries the
   variable `MLZ_APPROVAL: pull-request`, which makes an apply refuse whose pipeline still expects a reviewer: a check
   against a switch done out of order and against mistakes. It does not stop the owning team, which may change an
   environment's variables with maintain rights (tested 23 November 2026).
@@ -150,6 +150,126 @@ on: Team's way works there, which is how it is proved. On any other plan it refu
 owner and to a sign-in with the `admin:org` scope; for anyone else the check says so and goes on. It also compares each role
 repo's pipeline (the approval its `mlz.yml` passes) and its environment (the reviewer, `MLZ_APPROVAL`, `main` only)
 with `github.plan`, both ways, and says what to run.
+
+### What Team gives up
+
+GitHub Team has no reviewer on an environment in a private repo, so the approval of the pull request is the only
+human gate there. The pipeline makes it cover the plan that is applied ([pipelines](pipelines.md#approval-on-github-team)). What a Team customer gets
+is therefore not Enterprise's, and this is said to them as it is:
+
+- **Nobody approves the plan of the run on `main`.** A code owner approves the pull request after its plans; the run
+  on `main` applies only when its plan is the one the pull request's run showed, and refuses otherwise.
+- **A person approves each contract.** On Team the platform team owns `/_generated/` in `CODEOWNERS`, so a contract
+  pull request waits for a code owner ([pipelines](pipelines.md#contracts-and-the-bypass-team)), where on Enterprise it merges itself and its apply waits for the reviewer. Each
+  new landing zone costs one more approval in the platform repo, each governance change two.
+- **The MLZ App's commits of a landing zone's values** (`mlz.auto.tfvars.json`, which reach a workload repo's `main`
+  with no pull request) apply as vending wrote them, with no person. They come from a vending pull request the
+  platform team approved, and they change only that landing zone (`docs/vending.md`).
+- **The bypass team's merges** apply with nobody else's approval. In a role repo the run's page and a comment on the pull
+  request name a bypass when GitHub's record shows it, as best effort; a workload repo's run cannot read that record. So a
+  run without the note proves no approval: GitHub's own record, which is complete, is under the repo's Insights, Rules
+  ([pipelines](pipelines.md#contracts-and-the-bypass-team)).
+- **A manual run on `main` applies only a plan already approved**: the one the pull request that made `main`'s commit
+  showed (after an apply that stopped before changing anything, say). It cannot apply drift or the rest of a failed
+  apply, which need a new approval: change `replan.txt` at the repo's top, or add it if it is not there, with one line
+  saying why ([pipelines](pipelines.md#when-the-gate-refuses-replantxt)).
+- **Self-hosted runners only where GitHub keeps the runner group limited to `role.yml`,** which GitHub documents for
+  Enterprise Cloud only. Where it does not, `mlz install runners` stops and the pipelines run on GitHub-hosted runners
+  joined to management's network (`kind: github-hosted`), which GitHub documents for Team ([private runners](#private-runners)).
+- **Team synchronization** of a team with an Entra ID group needs SAML single sign-on; whether a Team organization has
+  it is not verified.
+
+**An organization that leaves Enterprise for Team must switch first.** On Team GitHub enforces no reviewer on an
+environment in a private repo, so a pipeline still on Enterprise's way would apply with no gate at all (what GitHub
+does with reviewers already set at the downgrade is not verified). Switch to `plan: team` while still on Enterprise,
+by the steps below.
+
+### Switching plans
+
+No migration code: steps a person follows, in an order that never leaves an apply without a gate. In between, both
+gates hold. Each settings change is the customer's (or Fortytwo's, on the customer's word).
+
+**While an environment changes** (steps 5 and 6 on the way to Team, 2 and 3 on the way back), hold the repos still:
+finish any apply under way, cancel any run waiting for a reviewer, and merge nothing, start no manual run and re-run
+nothing in the affected role and workload repos until the change has applied. A run started before a pipeline switched
+keeps its old pipeline, and inside one apply an environment has neither its reviewer nor `MLZ_APPROVAL` for a moment
+([pipelines](pipelines.md#what-it-does-not-catch)). If an apply stops between taking a reviewer away and setting
+`MLZ_APPROVAL`, give the environment its reviewer back before any run goes on.
+
+**Enterprise to Team**, while the organization is still on Enterprise:
+
+1. Bring every repo onto a release with Team's way: the three role repos (`mlz upgrade`), and each workload repo (merge
+   vending's upgrade pull request).
+2. In the checkout of the governance repo you run the installer from, set `plan: team` in `bootstrap.yaml` and remove
+   `reviewers`, but do not merge it yet: merged, it publishes the plan through governance's contract, and vending would
+   start on the workload repos. Steps 3 to 5 read this checkout (`--settings`).
+3. As a member of the bypass team, run `mlz install repos`. Each role repo is offered one pull request (`mlz/github-plan`)
+   that passes `approval: pull-request` in its pipeline and gives `/_generated/` to the platform team. A code owner
+   approves each; merge all three. Each environment still has its reviewer, so both gates hold.
+4. Add `<role> / planned` to each role repo's ruleset `main-checks` (Settings, Rules, Rulesets), from GitHub Actions;
+   `mlz install check` says which repo lacks it.
+5. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
+   seconds apart. It stops before Terraform, naming what is missing, unless Team's gate already holds in every role repo:
+   its pipeline passes `approval: pull-request`, the platform team owns `/_generated/` and can write, and `main` requires
+   a code owner's review and `<role> / planned`. So in those seconds every pipeline already gates its applies.
+6. Hold the workload repos still, and merge the `bootstrap.yaml` change of step 2 in the governance repo. Governance's
+   run publishes the plan in its contract. Vending's contract pull request now waits for a code owner (Team's way since
+   step 3): read its plan, approve it, and its run on `main` does the workload repos:
+   - each workload repo is offered a pull request with its pipeline Team's way, which its team merges; a repo still on a
+     release without Team's gate is offered its upgrade first, and the switch after it;
+   - each gets the push rule on `.github/`, and `workload / planned` in the `main-checks` vending made (one of the
+     repo's own is left as it is, and each run says so);
+   - each `apply` environment loses its reviewer and gets `MLZ_APPROVAL: pull-request`. Until a repo's team has merged
+     its switch, its applies refuse (its pipeline still expects a reviewer): merge the switches promptly.
+7. Run `mlz install check`: it passes when every role repo is Team's way.
+
+**Team to Enterprise**, the same in reverse, reviewers first:
+
+0. If the organization is on GitHub Team, it moves to GitHub Enterprise first, while `bootstrap.yaml` still says
+   `plan: team` (`mlz install check` allows that pairing): on Team GitHub refuses a reviewer on an environment in a private
+   repo, so the bootstrap could not give one back.
+1. In `bootstrap.yaml`, set `plan: enterprise` (or remove the line) and put `reviewers` back. Merge it.
+2. Run `mlz install bootstrap`. It gives each role environment its reviewer back first, and only then removes its
+   variable `MLZ_APPROVAL`, in that order.
+3. Governance's next run, then vending's: each workload `apply` environment gets its reviewer back first, and only then
+   loses its variable `MLZ_APPROVAL`; each workload repo is offered its pipeline Enterprise's way, which its team merges,
+   and vending takes `workload / planned` out of the `main-checks` it made and removes the push rule it made on
+   `.github/`.
+   Should an environment keep `MLZ_APPROVAL` after its reviewer is back (an apply that stopped half way), the pipeline
+   refuses every apply there whose pipeline is back in Enterprise's way (a role repo after step 4, a workload repo once
+   its switch is merged) until it is gone: give the environment its reviewer back first, and only then remove its
+   variable `MLZ_APPROVAL` by hand (Settings, Environments); remove a repository variable `MLZ_APPROVAL` too, if there
+   is one: it is never the switch.
+4. As a member of the bypass team, run `mlz install repos`, and merge the three pull requests it offers.
+5. Take `<role> / planned` out of each role repo's `main-checks`, if you like: on Enterprise the planned job is skipped,
+   which GitHub counts as passing.
+6. Run `mlz install check`.
+
+Both directions are proved on the test customer `abc` (an Enterprise organization in Team's way), and the order is
+written down there.
+
+### The first deployment on a Team organization
+
+Nothing in MLZ has run on an organization on GitHub Team: the first Team customer's install is its test. Watch these,
+in the order they happen, and stop at the first that does not hold:
+
+1. `mlz install check`: the organization's plan reads `team`, the name GitHub is expected to give it (not verified).
+2. `mlz install repos`: the push rulesets `pipeline-files` and `generated-files` are made (push rulesets are documented
+   for Team, in private repos), and `main` and `main-checks` with their bypass and `<role> / planned`.
+3. `mlz install bootstrap`: each environment is made with its branch policy (`main` only), no reviewer and
+   `MLZ_APPROVAL`; `mlz install check` passes.
+4. The MLZ App's permissions as the installation holds them: an owner accepts each change of the App's permissions on
+   the installation, and only an owner sees it.
+5. The first pull request in each role repo: `<role> / planned` reports and is required; after the merge, the run on
+   `main` applies only the plan the pull request showed.
+6. The first contract pull request waits for a code owner; once approved and merged, its run on `main` applies.
+7. `mlz install runners`, once the platform's first apply has made management's network and `mlz install bootstrap` has
+   run again for the state account's endpoint and the runners' vault ([private runners](#private-runners)): for
+   self-hosted runners, whether GitHub keeps the runner group's limit to `role.yml` (the step reads it back; without it,
+   it takes the repos out of the group and stops, and the customer moves to `kind: github-hosted`); for GitHub-hosted
+   ones, the network configuration (Azure private networking is documented for organization owners on Team).
+8. The first workload repo: vending writes its pipeline Team's way, its push rule and `workload / planned`; the App's
+   commit of its values applies with no person.
 
 ## Running it
 
