@@ -146,7 +146,7 @@ def caller(workflow: str, plan: str) -> str:
     either plan, so the installer, mlz upgrade and a switch of plans all write it alike. Only the with: of the job that
     calls role.yml changes; a with: written inline is refused, since that one line would be rewritten whole."""
     lines = workflow.splitlines(keepends=True)
-    found = _with([line.rstrip("\n") for line in lines])
+    found = _with([line.rstrip("\r\n") for line in lines])  # CRLF too
     if (found is None or found[2]) and plan == "enterprise" and approval_of(workflow) == "environment":
         return workflow  # nothing to take out
     if found is None or found[2]:
@@ -157,7 +157,8 @@ def caller(workflow: str, plan: str) -> str:
     if plan == "team":
         at = next((n + 1 for n, line in enumerate(block) if re.match(r"^[ \t]+role:", line)), len(block))
         indent = re.match(r"^[ \t]*", block[at - 1] if at else lines[start])[0] if at else re.match(r"^[ \t]*", lines[start])[0] + "  "
-        block[at:at] = [f"{indent}{TEAM_APPROVAL}\n"]
+        eol = "\r\n" if "\r\n" in workflow else "\n"  # the file's own line ending
+        block[at:at] = [f"{indent}{TEAM_APPROVAL}{eol}"]
     return "".join(lines[:start + 1] + block + lines[end:])
 
 

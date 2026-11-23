@@ -408,15 +408,22 @@ def offer_plan(github, repo: str, branch: str, org: str, team: str, plan: str, o
                 "yet; move it to a release with GitHub Team's gate first (mlz upgrade), then run this step again.")
             return
         changes[WORKFLOW] = caller(workflow, plan)
-    # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/).
+    # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/): the installer's, with the
+    # plan's rule for /_generated/, whenever that rule is not it (another owner, or none, included).
     location = next((path for path in owners.LOCATIONS if github.file(repo, path, branch)[0] is not None), None)
-    owned = owners.generated_owned(github.file(repo, location, branch)[0]) if location else None
-    if owned is not None and owned != (plan == "team"):  # a file without the installer's rule for _generated/ is the check's to name
+    if location and generated_rule_problems(repo, github.file(repo, location, branch)[0], org, team, plan):
         changes[location] = owners.render(org, team, plan)
-    if not changes:
-        return
     title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
     url = github.open_pull(repo, PLAN_BRANCH)
+    # An open switch from an earlier run counts only if its branch holds exactly this plan's files: one for the other plan,
+    # or with a file this plan leaves as main has it, is closed, and offered again when there is anything to offer.
+    if url and any(github.file(repo, path, PLAN_BRANCH)[0] != changes.get(path, github.file(repo, path, branch)[0])
+                   for path in {WORKFLOW, *([location] if location else []), *changes}):
+        github.close_pulls(repo, PLAN_BRANCH, f"Closed by mlz install repos: bootstrap.yaml's github.plan is {plan} now, and this pull request "
+                                              "no longer holds that plan's files.")
+        url = None
+    if not changes:
+        return
     if not url:
         refuse_if_pushes_refused(github, repo, changes)
         github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, branch), changes, title)
@@ -793,19 +800,17 @@ TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents"
 
 
 def team_gate_problems(github, bootstrap: dict, role: str, repo: str) -> list[str]:
-    """What a role repo lacks of GitHub Team's gate: its pipeline passing approval: pull-request, the platform team owning
-    _generated/, a code owner's review and <role> / planned required on main. Each is what makes the pull request's
-    approval stand in for the environment's reviewer."""
-    org, team = platform_team(bootstrap)
+    """What a role repo lacks of GitHub Team's gate on main, the branch it deploys from: its pipeline passing approval:
+    pull-request; code owners who decide (the platform team able to write, CODEOWNERS as GitHub reads it, with the
+    platform team owning _generated/, and a code owner's review required); and <role> / planned required. Each is what
+    makes the pull request's approval stand in for the environment's reviewer."""
     branch = github.default_branch(repo)
+    if branch != "main":
+        return [f"{repo}: its default branch is {branch}, but MLZ deploys from main; rename it to main first."]
     found = []
     if approval_of(github.file(repo, WORKFLOW, branch)[0] or "") != "pull-request":
         found.append(f"{repo}: its pipeline does not pass approval: pull-request yet; merge the pull request mlz install repos offers.")
-    codeowners = next((github.file(repo, location, branch)[0] for location in owners.LOCATIONS if github.file(repo, location, branch)[0] is not None), None)
-    found += generated_rule_problems(repo, codeowners or "", org, team, "team")
-    if not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")
-               for rule in github.branch_rules(repo, branch)):
-        found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}; turn it on in its ruleset main.")
+    found += code_owner_problems(github, bootstrap, repo, lambda _: None)
     for check in team_checks(role):
         found += required_check_problems(github, role, repo, lambda _: None, check)
     return found

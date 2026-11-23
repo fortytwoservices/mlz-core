@@ -202,6 +202,11 @@ class UpgradeTest(unittest.TestCase):
         elsewhere = enterprise.replace("permissions:\n", "env:\n  approval: keep-me\npermissions:\n", 1)
         self.assertIn("  approval: keep-me\n", module.caller(module.caller(elsewhere, "team"), "enterprise"))
         self.assertEqual(module.caller(module.caller(elsewhere, "team"), "enterprise"), elsewhere)
+        # A pipeline with CRLF line endings switches too, and keeps them.
+        crlf = enterprise.replace("\n", "\r\n")
+        self.assertEqual(module.approval_of(module.caller(crlf, "team")), "pull-request")
+        self.assertNotIn("\n", module.caller(crlf, "team").replace("\r\n", ""))
+        self.assertEqual(module.caller(module.caller(crlf, "team"), "enterprise"), crlf)
         # A quoted approval key goes too, switched either way, and is never doubled.
         quoted = module.caller(enterprise, "team").replace("      approval: pull-request", '      "approval": pull-request')
         self.assertEqual(module.caller(quoted, "enterprise"), enterprise)
