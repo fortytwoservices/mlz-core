@@ -377,8 +377,9 @@ changes in Azure.
   its plan ([pipelines](pipelines.md#workload-repos)).
 - **The MLZ App's commits of the values apply with no person on Team.** They come from a vending pull request the
   platform team approved, and change only this landing zone; on Enterprise they still wait for the team in `apply`.
-- A ruleset named `main`, `main-checks` or `pipeline-files` that the repo has already is left as it is, and each run says so
-  when it is not the one vending makes.
+- A ruleset named `main`, `main-checks` or `pipeline-files` of the repo's own is left as it is, and each run says so
+  when it is not the one vending makes. The ones vending made follow the plan: `main-checks` gains or loses
+  `workload / planned`, and `pipeline-files` goes when the repo is back on Enterprise.
 - **A repo the team already had** (`github.repo`) gets none of this from vending: neither the rule on `main` nor, on
   Team, the push rule. On Team its gate is only as good as its own rules.
 - **When the plan changes** (`docs/bootstrap.md`, Switching plans), each repo is offered a pull request with its pipeline

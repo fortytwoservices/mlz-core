@@ -197,8 +197,9 @@ gates hold. Each settings change is the customer's (or Fortytwo's, on the custom
 4. Add `<role> / planned` to each role repo's ruleset `main-checks` (Settings, Rules, Rulesets), from GitHub Actions;
    `mlz install check` says which repo lacks it.
 5. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
-   seconds apart, and stops before Terraform if any role repo's pipeline does not pass `approval: pull-request` yet: so in
-   those seconds every pipeline already gates its applies.
+   seconds apart. It stops before Terraform, naming what is missing, unless Team's gate already holds in every role repo:
+   its pipeline passes `approval: pull-request`, the platform team owns `/_generated/` and can write, and `main` requires
+   a code owner's review and `<role> / planned`. So in those seconds every pipeline already gates its applies.
 6. Governance's next run publishes the plan in its contract, and vending's next run on `main` does the workload repos:
    - each workload repo is offered a pull request with its pipeline Team's way, which its team merges; a repo still on a
      release without Team's gate is offered its upgrade first, and the switch after it;
