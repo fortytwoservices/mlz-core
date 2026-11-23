@@ -34,11 +34,16 @@ def work() -> Path:
 
 
 class Pipeline:
+    def __init__(self, token: str | None = None):
+        """With a token, gh uses it instead of GH_TOKEN: the Team gate reads as the MLZ App and comments as the job."""
+        self._env = {**os.environ, "GH_TOKEN": token} if token else None
+
     def _api(self, path: str, method: str = "GET", body: dict | None = None, missing_ok: bool = False, timeout: float | None = None):
         """gh api, with a JSON body; None for HTTP 404 where missing_ok; a ConfigError with gh's answer otherwise. With a
         timeout, subprocess.TimeoutExpired once it passes."""
         command = ["gh", "api", "-X", method, path] + (["--input", "-"] if body is not None else [])
-        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True, timeout=timeout)
+        run = subprocess.run(command, input=json.dumps(body) if body is not None else None, capture_output=True, text=True, timeout=timeout,
+                             env=self._env)
         if run.returncode:
             if missing_ok and "HTTP 404" in run.stderr:
                 return None
@@ -84,7 +89,7 @@ class Pipeline:
     def raw(self, repo: str, path: str, ref: str) -> str | None:
         """A file's bytes as text, read raw (no size limit), or None for HTTP 404; any other failure raises."""
         run = subprocess.run(["gh", "api", "-H", "Accept: application/vnd.github.raw", f"repos/{repo}/contents/{path}?ref={ref}"],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, env=self._env)
         if run.returncode:
             if "HTTP 404" in run.stderr:
                 return None
@@ -111,6 +116,66 @@ class Pipeline:
     def commit_pulls(self, repo: str, sha: str, timeout: float | None = None) -> list[dict]:
         """The pull requests a commit belongs to: for a merge's commit on main, the one it merged."""
         return self._api(f"repos/{repo}/commits/{sha}/pulls", timeout=timeout) or []
+
+    # The Team gate's reads (tools/ci/approved.py).
+
+    def pull_runs(self, repo: str, workflow: str, head_sha: str) -> list[dict]:
+        """The caller workflow's pull request runs on a commit, newest first. A run's pull_requests is empty once its pull
+        request is merged (seen 23 November 2026), so which pull request a run was for comes from its plans' stamp."""
+        found = self._api(f"repos/{repo}/actions/workflows/{workflow}/runs?event=pull_request&head_sha={head_sha}&per_page=100") or {}
+        return sorted(found.get("workflow_runs") or [], key=lambda run: run.get("run_number", 0), reverse=True)
+
+    def workflow_run(self, repo: str, run_id: int) -> dict:
+        """A run as it is now: its latest attempt (run_attempt), when that started (run_started_at), status and conclusion."""
+        return self._api(f"repos/{repo}/actions/runs/{run_id}")
+
+    def run_jobs(self, repo: str, run_id: int, attempt: int) -> list[dict]:
+        """An attempt's jobs ({name, status, conclusion, completed_at}); a job a re-run did not run again keeps its time."""
+        found, page = [], 1
+        while True:
+            batch = (self._api(f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100&page={page}") or {}).get("jobs") or []
+            found += batch
+            if len(batch) < 100:
+                return found
+            page += 1
+
+    def download_artifacts(self, repo: str, run_id: int, pattern: str, folder: Path) -> bool:
+        """A run's artifacts whose names match the pattern, each into a folder of its own under folder; False when it has
+        none, and a ConfigError for any other failure."""
+        run = subprocess.run(["gh", "run", "download", str(run_id), "--repo", repo, "--pattern", pattern, "--dir", str(folder)],
+                             capture_output=True, text=True, env=self._env)
+        if run.returncode:
+            if "no valid artifacts" in run.stderr or "no artifact matches" in run.stderr:
+                return False
+            raise ConfigError(f"gh run download {run_id}: {run.stderr.strip() or run.stdout.strip()}")
+        return any(folder.rglob("*"))
+
+    def reviews(self, repo: str, number: int) -> list[dict]:
+        """A pull request's reviews, oldest first ({user, state, submitted_at, commit_id})."""
+        return self._pages(f"repos/{repo}/pulls/{number}/reviews")
+
+    def team_member(self, org: str, team: str, login: str) -> bool:
+        """Whether the user is an active member of the organization's team (Members: read)."""
+        found = self._api(f"orgs/{org}/teams/{team}/memberships/{login}", missing_ok=True)
+        return bool(found) and found.get("state") == "active"
+
+    def permission(self, repo: str, login: str) -> str:
+        """The user's permission on the repo: admin, maintain, write, triage, read or none (Metadata: read)."""
+        found = self._api(f"repos/{repo}/collaborators/{login}/permission", missing_ok=True) or {}
+        return found.get("role_name") or found.get("permission") or "none"
+
+    def branch_rules(self, repo: str, branch: str) -> list[dict]:
+        """The rules of the repo's active rulesets that apply to the branch ({type, parameters, ...}), with the metadata
+        every token reads."""
+        return self._pages(f"repos/{repo}/rules/branches/{branch}")
+
+    def commit(self, repo: str, sha: str) -> dict:
+        """A commit: its parents and the files it changes."""
+        return self._api(f"repos/{repo}/commits/{sha}")
+
+    def bypasses(self, repo: str, branch: str) -> list[dict]:
+        """The past day's pushes to the branch that bypassed a ruleset ({after_sha, actor_name, ...}; Administration: read)."""
+        return self._api(f"repos/{repo}/rulesets/rule-suites?ref=refs/heads/{branch}&time_period=day&rule_suite_result=bypass&per_page=100") or []
 
     def close_pull(self, repo: str, number: int, comment: str) -> None:
         """Closes a pull request with a comment, and deletes its branch, as gh pr close --delete-branch does."""
