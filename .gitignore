@@ -7,5 +7,5 @@ __pycache__/
 .rendered/
 *_override.tf
 .alzlib/
-# JetBrains IDE
-.idea/
+# JetBrains settings at the repo's root (the starters keep their own .idea/jsonSchemas.xml)
+/.idea/
