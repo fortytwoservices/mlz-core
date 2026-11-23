@@ -12,11 +12,11 @@ from mlz.merge import ConfigError, combine_chunks, layer
 
 class LayerTest(unittest.TestCase):
     def test_mappings_merge_and_the_later_layer_wins(self):
-        base = {"budget": {"monthly": 500, "contacts": ["a@x.example"]}, "location": "norwayeast"}
-        later = {"budget": {"monthly": 2000}, "location": "swedencentral"}
+        base = {"budget": {"monthly": 500, "contacts": ["a@x.example"]}, "region": "norwayeast"}
+        later = {"budget": {"monthly": 2000}, "region": "swedencentral"}
         self.assertEqual(
             layer(base, later),
-            {"budget": {"monthly": 2000, "contacts": ["a@x.example"]}, "location": "swedencentral"},
+            {"budget": {"monthly": 2000, "contacts": ["a@x.example"]}, "region": "swedencentral"},
         )
 
     def test_lists_are_replaced_not_appended(self):

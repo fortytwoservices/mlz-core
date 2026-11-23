@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 from typing import Callable
 
-from . import install, mirror
+from . import inputs, install, mirror
 from .merge import ConfigError
 from .upgrade import RELEASE_PLEASE_MARKER, _with, breaking_changes, demoted, plan_of, releases_between, takes_approval, version
 
@@ -50,8 +50,6 @@ PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo's pipeline
 # key). Enterprise's pipeline has neither, so it is the starter's byte for byte.
 TEAM_PERMISSION = "  actions: read # GitHub Team: workload.yml's gate reads the pull request's run (docs/vending.md)\n"
 TEAM_APPROVAL = "      approval: pull-request # GitHub Team: the pull request's approval covers the plan applied (docs/vending.md)\n"
-KEY = re.compile(r"^ {4}(\w+)\s*=", re.M)  # a key of variable "mlz"'s object type, as terraform fmt indents them
-MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S)  # that block alone, to its closing brace
 
 
 def caller(workflow: str, plan: str) -> str:
@@ -111,10 +109,21 @@ def plan_wanted(config: dict) -> str:
     return "team" if config.get("approval") == "pull-request" else "enterprise"
 
 
+def mlz_attributes(variables: str) -> dict[str, bool]:
+    """The keys variable "mlz"'s object type declares in a variables.tf (not another variable's, nor a validation
+    block's or a comment's), each with whether Terraform requires it: one declared optional(...) it does not. Read as
+    HCL with the input maps' reader (inputs.py), so a quoted key counts too; a file it cannot read gives none."""
+    try:
+        found = next((attributes for name, attributes in inputs.blocks(inputs.tokens(variables)) if name == "mlz"), None)
+        node = inputs.parse_type(found["type"])[0] if found and "type" in found else {}
+    except (ValueError, IndexError):
+        return {}
+    return {key: not attribute["optional"] for key, attribute in node.get("attributes", {}).items()}
+
+
 def mlz_keys(variables: str) -> set[str]:
-    """The keys variable "mlz" declares in a variables.tf, not another variable's."""
-    block = MLZ_VARIABLE.search(variables)
-    return set(KEY.findall(block["body"])) if block else set()
+    """The keys variable "mlz" declares in a variables.tf."""
+    return set(mlz_attributes(variables))
 
 
 def starter() -> dict[str, str]:
@@ -426,16 +435,23 @@ def upgrade_body(current: str, target: str, releases: dict[str, str], changes: d
     if kept or naming:
         lines += ["", "**Left as they are**, since they are this repo's own now:"]
     for name, text in sorted(kept.items()):
-        gained = sorted(mlz_keys(starter()[name]) - mlz_keys(text)) if name == "variables.tf" else []
-        if gained:
+        ours, theirs = (mlz_keys(starter()[name]), mlz_attributes(text)) if name == "variables.tf" else (set(), {})
+        gained, lost = sorted(ours - set(theirs)), sorted(key for key, required in theirs.items() if required and key not in ours)
+        if lost:
+            # Terraform requires each attribute a type declares (checked with Terraform 1.17.0): such a key stops the plan.
+            lines += [f"- `{name}`: its `variable \"mlz\"` declares {', '.join(f'`{key}`' for key in lost)}, which the values vending writes "
+                      f"at `{target}` do not carry, so this repo's plan fails on it until you take the block from mlz-core's "
+                      f"`starter/mlz-workload/variables.tf` at `{target}` (and change what reads it: see the breaking changes below)."]
+        elif gained:
             lines += [f"- `{name}`: `{target}`'s `variable \"mlz\"` also declares {', '.join(f'`{key}`' for key in gained)}. Terraform "
                       f"drops the values a type does not declare, so nothing breaks; take the block from mlz-core's "
                       f"`starter/mlz-workload/variables.tf` at `{target}` when you want them."]
         else:
             lines += [f"- `{name}`: `{target}`'s starter has another version (mlz-core's `starter/mlz-workload/{name}`)."]
     if naming:
-        lines += [f"- mlz-core's naming module at another release: {', '.join(naming)}. Moving it to `{target}` may "
-                  "rename resources, which the plan of that change shows, so it is left to you."]
+        lines += [f"- mlz-core's naming module at another release: {', '.join(naming)}. One before `v0.15.0` reads the region's code "
+                  "from `region`, which is the region's name in the values vending writes now, so it stops at its check until it moves. "
+                  f"Moving it to `{target}` may also rename resources, which the plan of that change shows, so it is left to you."]
     lines += ["", "## Before you merge", ""]
     if breaking:
         lines += ["- **Breaking changes in these releases:**"]

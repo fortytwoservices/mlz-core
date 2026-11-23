@@ -427,7 +427,7 @@ def vending_contract(zones: dict, plan: dict) -> dict:
     live = {key: zone for key, zone in zones.items() if zone["settings"].get("decommission") is not True}
     contract = {
         "landing_zones": {
-            key: {"region": zone["settings"]["location"], "range": str(plan[key]["range"])}
+            key: {"region": zone["settings"]["region"], "range": str(plan[key]["range"])}
             for key, zone in sorted(live.items()) if key in plan
         }
     }

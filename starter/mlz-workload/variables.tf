@@ -2,15 +2,15 @@
 variable "mlz" {
   type = object({
     landing_zone = string # payments-prod
-    location     = string # norwayeast
+    region       = string # norwayeast
     # Naming, for mlz-core's helper (modules/naming): the customer's code, the workload's short name, the codes of
     # the environment and the region, and the template.
-    org       = string
-    app       = string
-    env       = string
-    region    = string
-    template  = string
-    templates = map(string)
+    org         = string
+    app         = string
+    env         = string
+    region_code = string # nwe
+    template    = string
+    templates   = map(string)
     # The landing zone's network, which vending owns: put network interfaces and private endpoints in its subnets,
     # change nothing else in it. By names: build an ID from the subscription the pipeline signs in to (main.tf).
     network = object({

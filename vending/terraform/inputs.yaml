@@ -8,7 +8,7 @@ route_table:
   inputs:
     name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: route_table, config: names.route_table}
     parent_id: {class: derived, by: "the landing zone's network resource group"}
-    location: {class: setting, key: location, config: location}
+    location: {class: setting, key: region, config: location}
     bgp_route_propagation_enabled: {class: fixed, value: false, why: "a route learned from a gateway would go round the firewall"}
     routes: {class: derived, by: "the routes the hub module gives its region's spokes, from the platform contract", config: network.routes}
     tags: {class: setting, key: tags, by: "with Owner (owner), CostCenter (cost_center), Environment and Workload (the file's place) and ManagedBy", config: tags}
@@ -30,7 +30,7 @@ vending:
     budgets: one, monthly, when budget.monthly is set
     budgets.notifications: two, at 80 % actual and 100 % forecast
   inputs:
-    location: {class: setting, key: location, config: location}
+    location: {class: setting, key: region, config: location}
     enable_telemetry: {class: fixed, value: false, why: "no module mlz-core calls sends telemetry"}
     subscription_alias_enabled: {class: fixed, value: false, why: "vending makes a subscription with one alias PUT of its own, which no plan reads back: reading an alias needs aliases/write, which the plan identity has not"}
     subscription_alias_name: {class: fixed, why: "unused: the module's alias is off"}
@@ -47,7 +47,7 @@ vending:
     wait_for_subscription_before_subscription_operations: open
     network_security_group_enabled: {class: derived, by: "on, until decommission is true"}
     network_security_groups.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: network_security_groups, config: names.network_security_groups}
-    network_security_groups.location: {class: setting, key: location, config: location}
+    network_security_groups.location: {class: setting, key: region, config: location}
     network_security_groups.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     network_security_groups.resource_group_name_existing: {class: derived, by: "the landing zone's network resource group"}
     network_security_groups.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
@@ -63,7 +63,7 @@ vending:
     user_managed_identities.name: {class: derived, by: "the naming template, kept in _generated/names.yaml", names: [plan_identity, deploy_identity]}
     user_managed_identities.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     user_managed_identities.resource_group_name_existing: {class: derived, by: "the landing zone's identity resource group"}
-    user_managed_identities.location: {class: setting, key: location, config: location}
+    user_managed_identities.location: {class: setting, key: region, config: location}
     user_managed_identities.tags: {class: setting, key: tags, by: "with Owner, CostCenter, Environment, Workload and ManagedBy", config: tags}
     user_managed_identities.role_assignments: {class: fixed, value: {}, why: "vending gives the identities their roles itself (identity_role: plan Reader, deploy Contributor, on the landing zone's subscription, decision D2), named from each identity's resource ID: sub-vending names its from the principal ID, which a tag change leaves unknown until the apply, and would replace them"}
     user_managed_identities.federated_credentials_advanced: {class: derived, by: "the workload repo's GitHub subjects, by ID: its pull requests and main for plan, its apply environment for deploy"}
@@ -75,7 +75,7 @@ vending:
     virtual_networks.ipam_pools: {class: closed, why: "addresses come from the IP allocator"}
     virtual_networks.resource_group_key: {class: fixed, why: "vending makes the landing zone's resource groups itself"}
     virtual_networks.resource_group_name_existing: {class: derived, by: "the landing zone's network resource group"}
-    virtual_networks.location: {class: setting, key: location, config: location}
+    virtual_networks.location: {class: setting, key: region, config: location}
     virtual_networks.dns_servers: {class: derived, by: "the region's DNS servers, from the platform contract", config: network.dns_servers}
     virtual_networks.flow_timeout_in_minutes: open
     virtual_networks.ddos_protection_enabled: open

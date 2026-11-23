@@ -12,7 +12,7 @@
 #   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
 #   name      = module.app_group_name.name
 #   parent_id = "/subscriptions/${data.azapi_client_config.current.subscription_id}"
-#   location  = var.mlz.location
+#   location  = var.mlz.region
 # }
 #
 # The landing zone's subscription is the one the pipeline signs in to (the repo's AZURE_SUBSCRIPTION_ID):
@@ -29,9 +29,9 @@
 #
 # module "app_vm" {
 #   source         = "git::https://github.com/fortytwoservices/az-tf-mlz-virtual-machine.git?ref=v0.1.0"
-#   name           = "vm-${var.mlz.org}-${var.mlz.app}-app-${var.mlz.env}-${var.mlz.region}-01" # the naming helper has no VM type yet
+#   name           = "vm-${var.mlz.org}-${var.mlz.app}-app-${var.mlz.env}-${var.mlz.region_code}-01" # the naming helper has no VM type yet
 #   parent_id      = azapi_resource.app_group.id
-#   location       = var.mlz.location
+#   location       = var.mlz.region
 #   tags           = var.mlz.tags
 #   os_type        = "Linux"
 #   size           = "Standard_D2s_v5"

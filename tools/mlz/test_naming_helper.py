@@ -41,10 +41,10 @@ def apply(cases: dict[str, dict]) -> tuple[subprocess.CompletedProcess, dict | N
         return _apply(Path(tmp), cases)
 
 
-def _apply(folder: Path, cases: dict[str, dict]) -> tuple[subprocess.CompletedProcess, dict | None]:
+def _apply(folder: Path, cases: dict[str, dict], module: Path = MODULE) -> tuple[subprocess.CompletedProcess, dict | None]:
     (folder / "main.tf").write_text(
         'variable "cases" { type = map(object({ mlz = any, type = string, purpose = string, nn = number })) }\n'
-        f'module "name" {{\n  for_each = var.cases\n  source   = "{MODULE}"\n'
+        f'module "name" {{\n  for_each = var.cases\n  source   = "{module}"\n'
         "  mlz      = each.value.mlz\n  type     = each.value.type\n  purpose  = each.value.purpose\n  nn       = each.value.nn\n}\n"
         'output "names" { value = { for key, found in module.name : key => found.name } }\n')
     (folder / "cases.auto.tfvars.json").write_text(json.dumps({"cases": cases}))
@@ -80,19 +80,38 @@ class HelperTest(unittest.TestCase):
                 naming.settings({"naming": {"org": "acme", "template": template}}, "mlz")
             # As the default template, and as a type's own.
             for mlz in ({"template": template, "templates": {}}, {"template": naming.TEMPLATE, "templates": {"application_gateway": template}}):
-                result, _ = apply({"case": {"mlz": {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", **mlz}, "type": "application_gateway", "purpose": None, "nn": 1}})
+                result, _ = apply({"case": {"mlz": {"org": "acme", "app": "pay", "env": "pd", "region_code": "nwe", **mlz}, "type": "application_gateway", "purpose": None, "nn": 1}})
                 self.assertNotEqual(result.returncode, 0, template)
                 self.assertIn(message, " ".join(result.stderr.split()), template)
 
     def test_codes_python_refuses_the_helper_refuses(self):
-        good = {"org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": naming.TEMPLATE, "templates": {}}
+        good = {"org": "acme", "app": "pay", "env": "pd", "region_code": "nwe", "template": naming.TEMPLATE, "templates": {}}
         settings = naming.settings({"naming": {"org": "acme"}}, "mlz")
         with self.assertRaisesRegex(naming.ConfigError, "app is ''"):
             naming.render(settings, "application_gateway", app="", env="prod", region="norwayeast")
-        for code, wrong in (("app", ""), ("app", "payments"), ("org", "a"), ("org", "ACME"), ("env", ""), ("env", "prod1"), ("region", "n")):
+        for code, wrong in (("app", ""), ("app", "payments"), ("org", "a"), ("org", "ACME"), ("env", ""), ("env", "prod1"), ("region_code", "n")):
             result, _ = apply({"case": {"mlz": {**good, code: wrong}, "type": "application_gateway", "purpose": None, "nn": 1}})
             self.assertNotEqual(result.returncode, 0, f"{code}={wrong!r}")
             self.assertIn("The codes are lower-case letters and digits", " ".join(result.stderr.split()), f"{code}={wrong!r}")
+
+    def test_a_module_from_before_region_code_stops_at_its_check_on_the_values_vending_writes_now(self):
+        # Before v0.15.0 the module read the region's code from region; vending now writes the region's name there and the
+        # code in region_code. A team's pin of the older module must fail, not build a name with norwayeast in it: no
+        # Azure region's name fits a code's 2 to 5 characters (region-codes.json).
+        self.assertFalse([name for name in naming.REGION_CODES if 2 <= len(name) <= 5])
+        settings = naming.settings({"naming": {"org": "acme"}}, "mlz")
+        written = {"landing_zone": "payments-prod", "region": "norwayeast", **values(settings, "prod", "norwayeast"), "app": "pay"}
+        with tempfile.TemporaryDirectory() as tmp:
+            older = Path(tmp) / "naming"
+            older.mkdir()
+            for path in MODULE.iterdir():
+                text = path.read_text()
+                (older / path.name).write_text(text.replace("region_code", "region") if path.suffix == ".tf" else text)
+            root = Path(tmp) / "root"
+            root.mkdir()
+            result, names = _apply(root, {"case": {"mlz": written, "type": "resource_group", "purpose": "app", "nn": 1}}, older)
+        self.assertNotEqual(result.returncode, 0, names)
+        self.assertIn("The codes are lower-case letters and digits", " ".join(result.stderr.split()))
 
     def test_a_name_azure_would_not_take_is_refused_not_cut(self):
         settings = naming.settings({"naming": {"org": "acme"}}, "mlz")

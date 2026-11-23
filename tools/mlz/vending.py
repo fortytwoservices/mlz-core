@@ -31,7 +31,7 @@ TAKEN_ENVIRONMENTS = (ALL_DEFAULTS.removesuffix("-defaults"), WORKLOAD_DEFAULTS)
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names", "advanced"}
+KEYS = {"owner", "cost_center", "archetype", "region", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names", "advanced"}
 # Where a subscription vending makes is billed (docs/vending.md): an EA enrollment account, or an MCA invoice section.
 # An MPA customer's (CSP) is Fortytwo's Partner Center's to make, not the customer's identities'.
 BILLING_ACCOUNT = r"/providers/Microsoft\.Billing/billingAccounts/[^/]+"
@@ -185,6 +185,12 @@ def name_problems(key: str, lz: dict) -> list[str]:
     return [f"{lz['where']}: folder and file names are up to 24 lower-case letters, digits and hyphens (the key {key!r} is used in names)."]
 
 
+def renamed(lz: dict) -> list[str]:
+    """The key's name before v0.15.0, refused with the one it became (no compatibility code, decision D5)."""
+    s = lz["settings"]
+    return [f"{origin(lz, 'location')}: location is called region now: write region: {s['location']} (docs/vending.md)."] if "location" in s else []
+
+
 def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[str]) -> None:
     """Everything but the network, which wanted_network checks. Each problem names the file to fix."""
     s, where = lz["settings"], lz["where"]
@@ -193,7 +199,8 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
         return origin(lz, *path)
 
     problems += name_problems(key, lz)
-    problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
+    problems += renamed(lz)
+    problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS - {"location"}, key=str)]
     # Sub-vending inputs mlz-core leaves at their defaults (tools/mlz/advanced.py), in any layer, merged as the rest
     # are; its maps' entries by the keys vending/terraform gives them.
     subnets = list((wanted_network(lz, []) or (0, {}))[1])
@@ -228,14 +235,14 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if makes_subscription(lz) and len(subscription_alias(governance["root"], key)) > ALIAS_LENGTH:
         problems.append(f"{where}: the alias vending makes its subscription by, {subscription_alias(governance['root'], key)}, is more than "
                         f"Azure's {ALIAS_LENGTH} characters; give the workload or the environment a shorter name, or hand a subscription over.")
-    for single in ("owner", "archetype", "location", "subscription"):
+    for single in ("owner", "archetype", "region", "subscription"):
         if s.get(single) is not None and not isinstance(s[single], str):
             problems.append(f"{at(single)}: {single} is one value, not {s[single]!r}.")
     if s.get("cost_center") is not None and (isinstance(s["cost_center"], bool) or not isinstance(s["cost_center"], (str, int))):
         problems.append(f"{at('cost_center')}: cost_center is one value, not {s['cost_center']!r}.")
     elif len(str(s.get("cost_center", ""))) > TAG_VALUE_LENGTH:
         problems.append(f"{at('cost_center')}: cost_center becomes a tag, so it is at most {TAG_VALUE_LENGTH} characters.")
-    owner, archetype, subscription, location = (s.get(k) if isinstance(s.get(k), str) else None for k in ("owner", "archetype", "subscription", "location"))
+    owner, archetype, subscription, region = (s.get(k) if isinstance(s.get(k), str) else None for k in ("owner", "archetype", "subscription", "region"))
     if owner and (not EMAIL.fullmatch(owner) or len(owner) > TAG_VALUE_LENGTH):
         problems.append(f"{at('owner')}: owner {owner!r} should be the owning team's email address.")
     archetypes = governance["archetypes"]
@@ -245,10 +252,10 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
         problems.append(f"{at('subscription')}: subscription must be a subscription ID.")
     if subscription and subscription.lower() in {v.lower() for v in governance["platform_subscriptions"].values()}:
         problems.append(f"{at('subscription')}: subscription {subscription} is a platform subscription.")
-    if location and location not in governance["allowed_regions"]:
-        problems.append(f"{at('location')}: location {location} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
-    if location and location not in platform["regions"]:
-        problems.append(f"{at('location')}: location {location} has no hub to connect to.")
+    if region and region not in governance["allowed_regions"]:
+        problems.append(f"{at('region')}: region {region} is not one of the allowed regions ({', '.join(governance['allowed_regions'])}).")
+    if region and region not in platform["regions"]:
+        problems.append(f"{at('region')}: region {region} has no hub to connect to.")
 
     tags = {} if s.get("tags") is None else s["tags"]
     if not isinstance(tags, dict):
@@ -382,11 +389,11 @@ def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list
         problems += [f"{IP_PLAN}: {key}'s subnets {a} and {b} overlap." for (a, x), (b, y) in zip(blocks, blocks[1:]) if x.overlaps(y)]
         if key not in zones:
             continue
-        location = zones[key]["settings"].get("location")
-        region = platform["regions"].get(location) if isinstance(location, str) else None
+        region_name = zones[key]["settings"].get("region")
+        region = platform["regions"].get(region_name) if isinstance(region_name, str) else None
         pools = [IPv4Network(p) for p in region["landing_zone_ranges"]] if region else []
         if region and not any(given.subnet_of(p) for p in pools):
-            problems.append(f"{key}: its range {given} is outside {location}'s landing zone ranges ({', '.join(map(str, pools))}); a range never moves.")
+            problems.append(f"{key}: its range {given} is outside {region_name}'s landing zone ranges ({', '.join(map(str, pools))}); a range never moves.")
         if wanted.get(key) is not None:
             problems += size_problems(key, plan[key], wanted[key])
     return problems
@@ -434,9 +441,11 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
     wanted = {key: wanted_network(lz, problems) for key, lz in zones.items()}
     for key, lz in zones.items():
         problems += name_problems(key, lz)
-        location = lz["settings"].get("location")
-        if not isinstance(location, str) or location not in platform["regions"]:
-            problems.append(f"{lz['where']}: location {location!r} has no hub, so it has no ranges to take from.")
+        region = lz["settings"].get("region")
+        if renamed(lz):
+            problems += renamed(lz)
+        elif not isinstance(region, str) or region not in platform["regions"]:
+            problems.append(f"{lz['where']}: region {region!r} has no hub, so it has no ranges to take from.")
         for name, block in plan.get(key, {}).get("removed_subnets", {}).items():
             length = (wanted[key] or (0, {}))[1].get(name)
             if length is not None and length != block.prefixlen:
@@ -454,7 +463,7 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         size, subnets = wanted[key]
         entry = plan.get(key)
         if entry is None:
-            pools = [IPv4Network(p) for p in platform["regions"][zones[key]["settings"]["location"]]["landing_zone_ranges"]]
+            pools = [IPv4Network(p) for p in platform["regions"][zones[key]["settings"]["region"]]["landing_zone_ranges"]]
             block = place(pools, size, taken)
             if block is None:
                 problems.append(f"{key}: no free /{size} left in {', '.join(map(str, pools))}.")
@@ -581,11 +590,12 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
             problems.append(f"_generated/governance.yaml: {error}")
     workloads = {}
     for key, lz in zones.items():
-        if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("location"), str):
+        if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("region"), str):
             try:
+                # region is the region's name, region_code its short code in names (modules/naming).
                 workloads[key] = {"landing_zone": key,
-                                  "location": lz["settings"]["location"], "app": short_name(lz),
-                                  **naming.helper_values(settings, lz["environment"], lz["settings"]["location"])}
+                                  "region": lz["settings"]["region"], "app": short_name(lz),
+                                  **naming.helper_values(settings, lz["environment"], lz["settings"]["region"])}
             except ConfigError as error:
                 problems.append(f"{lz['where']}: its workload repo's values: {error}")
     subscriptions = [str(z["settings"].get("subscription") or "").lower() for z in zones.values()]
@@ -596,7 +606,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
     configs = {}
     for key, lz in zones.items():
         s = lz["settings"]
-        region = platform["regions"][s["location"]]
+        region = platform["regions"][s["region"]]
         budget, github = s.get("budget") or {}, s.get("github") or {}
         tags = {
             **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
@@ -615,7 +625,7 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                              "name": names[key][SUBSCRIPTION]} if makes_subscription(lz) else None,
             # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
             "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
-            "location": s["location"],
+            "location": s["region"],  # Azure's word for it, in the config vending/terraform reads
             "tags": tags,
             # Budget alerts go to the owner unless contacts are given.
             "budget": {"monthly": budget.get("monthly"), "contacts": budget.get("contacts") or [s["owner"]]},
@@ -677,7 +687,7 @@ def required_problems(lz: dict) -> list[str]:
     """The settings every landing zone needs, which the layers alone decide: a subscription handed over, or a
     billing_scope for vending to make one (docs/vending.md)."""
     where, s = lz["where"], lz["settings"]
-    found = [f"{where}: {k} is required (set it here or in a layer above)." for k in ("owner", "cost_center", "archetype", "location")
+    found = [f"{where}: {k} is required (set it here or in a layer above)." for k in ("owner", "cost_center", "archetype", "region")
              if s.get(k) in (None, "")]
     if s.get("subscription") in (None, "") and s.get("billing_scope") in (None, ""):
         found.append(f"{where}: subscription is required, or billing_scope for vending to make one (set either here or in a layer above).")
@@ -752,8 +762,8 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
         nsgs = {}
     problems += [f"{where}: names.network_security_groups.{k} is not one of its subnets ({', '.join(subnets)})." for k in sorted(set(nsgs) - set(subnets), key=str)]
     app, env = short_name(lz), lz["environment"]
-    # check() says what the short name or the location must be: no name is right without them.
-    fits = isinstance(app, str) and naming.SHORT.fullmatch(app) is not None and 2 <= len(app) <= 5 and isinstance(s.get("location"), str)
+    # check() says what the short name or the region must be: no name is right without them.
+    fits = isinstance(app, str) and naming.SHORT.fullmatch(app) is not None and 2 <= len(app) <= 5 and isinstance(s.get("region"), str)
     template = settings is not None and fits
     entry: dict = {}
 
@@ -770,11 +780,11 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
             elif template and kind == REPOSITORY:  # a GitHub repo: long names, from naming.repository
                 return naming.repository_name(settings, lz["workload"], env)
             elif template:
-                return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose, number=number)
+                return naming.render(settings, kind, app=app, env=env, region=s["region"], purpose=purpose, number=number)
             elif settings is None and fits:
                 problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (./mlz allocate --repo .).")
             elif settings is not None:  # the template needs both; check() says the same, so the messages are one
-                problems.extend(short_name_problems(lz) or [f"{where}: location is required (set it here or in a layer above)."])
+                problems.extend(short_name_problems(lz) or [f"{where}: region is required (set it here or in a layer above)."])
             return None
         except ConfigError as error:
             problems.append(f"{where}: {error}")
@@ -804,7 +814,7 @@ def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, setti
     for subnet in subnets:
         number = 1
         if template and subnet not in nsgs and subnet not in held and naming.counts(settings, "network_security_group"):
-            number = next((n for n in range(1, 100) if nsg_name(settings, app, env, s["location"], n).lower() not in taken), 100)
+            number = next((n for n in range(1, 100) if nsg_name(settings, app, env, s["region"], n).lower() not in taken), 100)
         names["network_security_groups"][subnet] = one(subnet, "network_security_group", subnet, nsgs, held, number)
         if names["network_security_groups"][subnet] is not None:
             taken.add(names["network_security_groups"][subnet].lower())

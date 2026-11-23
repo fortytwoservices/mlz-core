@@ -15,6 +15,10 @@ module "gateway_name" {
 # module.gateway_name.name: agw-acme-pay-web-pd-nwe-01
 ```
 
+- **`mlz`** is the workload repo's `var.mlz`. The module reads `org`, `app`, `env`, `region_code` (`nwe`) and the
+  templates; `region`, the region's name, it does not. Pinned at a release before v0.15.0, the module read the code
+  from `region`, and on the values vending writes from v0.15.0 it stops at its check: it never builds a name with
+  `norwayeast` in it (`tools/mlz/test_naming_helper.py`).
 - **`type`** is one of `name-rules.json`'s types.
 - **`purpose`** is optional, up to 20 lower-case letters, digits and inner hyphens. An empty one drops out of the name
   with one dash.

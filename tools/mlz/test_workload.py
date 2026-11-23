@@ -13,8 +13,8 @@ from pathlib import Path
 from mlz import install, workload
 from mlz.merge import ConfigError
 
-WORKLOAD = {"landing_zone": "payments-prod", "location": "norwayeast",
-            "org": "acme", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}", "templates": {}}
+WORKLOAD = {"landing_zone": "payments-prod", "region": "norwayeast",
+            "org": "acme", "app": "pay", "env": "pd", "region_code": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}", "templates": {}}
 
 
 DESCRIPTION = "Workload repo of landing zone payments-prod, made by mlz-core's vending."
@@ -205,11 +205,11 @@ class SyncTest(unittest.TestCase):
         self.sync(github)
         github.repos["acme-org/payments-prod"]["main.tf"] = "# the team's now\n"
         github.repos["acme-org/payments-prod"].pop(".github/workflows/mlz.yml")  # even one the team removed stays removed
-        self.config("payments-prod", workload={**WORKLOAD, "location": "swedencentral"})
+        self.config("payments-prod", workload={**WORKLOAD, "region": "swedencentral"})
         self.sync(github)
         [_, (_, _, head, files, message)] = github.commits
         self.assertEqual(set(files), {"mlz.auto.tfvars.json"})
-        self.assertEqual(json.loads(files["mlz.auto.tfvars.json"])["mlz"]["location"], "swedencentral")
+        self.assertEqual(json.loads(files["mlz.auto.tfvars.json"])["mlz"]["region"], "swedencentral")
         self.assertEqual((head, message), ("head-1", "chore: the landing zone's values, from vending"))
 
     def test_only_repos_vending_makes_once_they_exist(self):
@@ -311,7 +311,38 @@ class UpgradeTest(SyncTest):
         body = github.pulls[self.REPO][0]["body"]
         self.assertIn(f"- `variables.tf`: `{TARGET}`'s `variable \"mlz\"` also declares `network`. Terraform drops", body)
         self.assertIn(f"- `main.tf`: `{TARGET}`'s starter has another version", body)
-        self.assertIn("naming module at another release: `app.tf` line 1 (`v0.9.0`, commented out), `main.tf` line 2 (`v0.10.1`)", body)
+        self.assertIn("naming module at another release: `app.tf` line 1 (`v0.9.0`, commented out), `main.tf` line 2 (`v0.10.1`). One before "
+                      "`v0.15.0` reads the region's code from `region`", body)
+
+    def test_a_team_s_variables_tf_with_a_key_the_values_no_longer_carry_is_named_as_what_stops_the_plan(self):
+        # v0.14.0's starter: location for the region's name and region for its code, which v0.15.0's values carry as region
+        # and region_code. A repo whose team changed the file keeps it, and Terraform requires every key it declares.
+        own = (workload.starter()["variables.tf"].replace("    region       = string # norwayeast\n", "    location     = string # norwayeast\n")
+               .replace("    region_code = string # nwe\n", "    region      = string # nwe\n").replace("# payments-prod", "# our landing zone"))
+        self.assertEqual(workload.mlz_keys(workload.starter()["variables.tf"]) - workload.mlz_keys(own), {"region_code"})
+        github = self.github(self.made_at(**{"variables.tf": own}))
+        self.sync(github)
+        body = github.pulls[self.REPO][0]["body"]
+        self.assertIn(f"- `variables.tf`: its `variable \"mlz\"` declares `location`, which the values vending writes at `{TARGET}` do not carry, "
+                      "so this repo's plan fails on it until you take the block", body)
+        self.assertNotIn("Terraform drops", body)
+
+    def test_a_validation_block_or_an_optional_key_is_not_named_as_what_stops_the_plan(self):
+        # A validation block's condition and error_message are no keys of the type; and an optional(...) key the values do
+        # not carry is one Terraform fills with its default, so the plan goes on.
+        validation = ('  validation {\n    condition     = length(var.mlz.landing_zone) > 0\n'
+                      '    error_message = "The landing zone has a key."\n  }\n')
+        own = workload.starter()["variables.tf"].replace("  })\n}\n", "    location = optional(string) # ours\n  })\n" + validation + "}\n")
+        self.assertEqual(workload.mlz_attributes(own)["location"], False)
+        self.assertNotIn("condition", workload.mlz_keys(own))
+        # Read as HCL: a quoted key is a key, and one in a block comment is none.
+        quoted = workload.starter()["variables.tf"].replace("    region_code = string # nwe\n", '    "region_code" = string\n    /*\n    location = string\n    */\n')
+        self.assertEqual(workload.mlz_keys(quoted), workload.mlz_keys(workload.starter()["variables.tf"]))
+        github = self.github(self.made_at(**{"variables.tf": own}))
+        self.sync(github)
+        body = github.pulls[self.REPO][0]["body"]
+        self.assertIn(f"- `variables.tf`: `{TARGET}`'s starter has another version", body)
+        self.assertNotIn("plan fails", body)
 
     def test_a_file_new_in_the_release_is_added_and_one_the_team_removed_stays_removed(self):
         made = self.made_at()

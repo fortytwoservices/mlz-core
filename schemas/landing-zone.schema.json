@@ -28,7 +28,7 @@
         "local"
       ]
     },
-    "location": {
+    "region": {
       "type": "string",
       "description": "The Azure region, one of governance's allowed regions with a hub, for example norwayeast.",
       "pattern": "^[a-z0-9]+$",

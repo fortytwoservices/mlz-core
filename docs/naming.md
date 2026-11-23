@@ -134,7 +134,7 @@ template, codes and rules, so its resources read like the landing zone's own:
 ```hcl
 module "gateway_name" {
   source  = "git::https://github.com/fortytwoservices/mlz-core.git//modules/naming?ref=vX.Y.Z"
-  mlz     = var.mlz # the landing zone's naming values: org, app, env, region, template, templates
+  mlz     = var.mlz # the landing zone's naming values: org, app, env, region_code, template, templates
   type    = "application_gateway"
   purpose = "web"
 }

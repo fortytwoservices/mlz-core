@@ -225,7 +225,7 @@ class LandingZoneTest(unittest.TestCase):
         return (self.repo / relative).read_text()
 
     def test_no_budget_no_budget_inputs(self):
-        self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\n")
+        self.write("defaults/landing-zone-defaults.yaml", "region: norwayeast\n")
         self.prod = self.prod.replace("budget:\n  monthly: 2000\n", "")
         self.assertEqual(self.problems("  budgets:\n    monthly:\n      notifications:\n        actual_80:\n          locale: en-gb\n"), [
             "landing-zones/payments/prod: advanced.budgets.monthly: there is no such monthly here (none)."])
