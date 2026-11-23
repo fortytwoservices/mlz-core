@@ -1773,7 +1773,11 @@ class InstallTest(unittest.TestCase):
         extra = Unlimited()
         extra.files[("acme/mlz-platform", ".github/workflows/lint.yml")] = ("on: push\n", "sha")
         # A branch with its own mlz.yml; one that kept a workflow main removed since; one like main.
-        extra.other_branches = {"acme/mlz-vending": ["old-work", "fine"], "acme/mlz-governance": ["kept"]}
+        extra.other_branches = {"acme/mlz-vending": ["old-work", "fine", "older"], "acme/mlz-governance": ["kept"], "acme/mlz-platform": ["foreign", "branch"]}
+        # One job calling role.yml: in the copy at an older release is fine; in another repo, or at a branch, is not.
+        extra.files[("acme/mlz-vending", WORKFLOW, "older")] = ("jobs:\n  vending:\n    uses: acme/mlz-core/.github/workflows/role.yml@v0.1.0\n", "sha-older")
+        extra.files[("acme/mlz-platform", WORKFLOW, "foreign")] = ("jobs:\n  platform:\n    uses: acme/untrusted/.github/workflows/role.yml@v0.1.0\n", "sha-f")
+        extra.files[("acme/mlz-platform", WORKFLOW, "branch")] = ("jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@main\n", "sha-b")
         extra.files[("acme/mlz-vending", WORKFLOW, "old-work")] = ("jobs:\n  x:\n    runs-on: mlz\n", "sha-old")
         extra.files[("acme/mlz-governance", ".github/workflows/gone.yml", "kept")] = ("on: push\n", "sha-gone")
         # And a pipeline on main with a job of its own beside the call of role.yml.
@@ -1783,10 +1787,14 @@ class InstallTest(unittest.TestCase):
             install.self_hosted_group(extra, "acme", REPOS, CORE_COPY, self.out, team)
         found = str(caught.exception)
         self.assertIn("acme/mlz-platform: .github/workflows/lint.yml on main is a workflow besides the pipeline", found)
-        self.assertIn("acme/mlz-governance: its .github/workflows/mlz.yml on main has check, mine jobs, not the one that calls mlz-core's role.yml alone", found)
+        self.assertIn("acme/mlz-governance: its .github/workflows/mlz.yml on main is not one job calling acme/mlz-core's role.yml at a release "
+                      "(it has check, mine jobs)", found)
         self.assertIn("acme/mlz-vending: branch old-work has another .github/workflows/mlz.yml than main", found)
         self.assertIn("acme/mlz-governance: branch kept has another .github/workflows/gone.yml than main", found)
         self.assertNotIn("branch fine", found)
+        self.assertNotIn("branch older", found)
+        self.assertIn("acme/mlz-platform: branch foreign has another .github/workflows/mlz.yml than main", found)
+        self.assertIn("acme/mlz-platform: branch branch has another .github/workflows/mlz.yml than main", found)
         self.assertEqual((extra.groups, extra.calls), ([], []))
 
         # GitHub keeping another workflow beside role.yml is no limit either: exactly what was asked, or not kept.
