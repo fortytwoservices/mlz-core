@@ -219,9 +219,12 @@ keeps its old pipeline, and inside one apply an environment has neither its revi
      `MLZ_APPROVAL` check, so "Re-run all jobs" would plan again and apply where no reviewer waits. Instead of deleting
      these, you may wait until the newest of them is 30 days old.
 
-   `gh run list -R <owner>/<repo> --workflow mlz.yml --branch main --limit 1000` lists the runs, with their dates and
-   results; `gh run delete -R <owner>/<repo> <run-id>` deletes one (keep a log you want first: `gh run view <run-id>
-   --log`). Derived from GitHub's documentation and the pipeline's code, not tested.
+   `gh run list -R <owner>/<repo> --workflow mlz.yml --branch main --created ">=<date 30 days ago>" --limit 1000` lists
+   the runs that can still be re-run, with their dates and results. GitHub gives at most 1,000 runs for one such query
+   (REST API, "List workflow runs for a repository"): if it lists 1,000, split the dates (`--created
+   "2026-11-01..2026-11-10"`) until no range reaches it. `gh run delete -R <owner>/<repo> <run-id>` deletes one; keep a
+   log you want first, from the same repo: `gh run view -R <owner>/<repo> <run-id> --log`. Derived from GitHub's
+   documentation and the pipeline's code, not tested.
 6. Run `mlz install bootstrap`. It removes the role environments' reviewers and then sets `MLZ_APPROVAL: pull-request`,
    seconds apart. It stops before Terraform, naming what is missing, unless Team's gate already holds in every role repo:
    its pipeline passes `approval: pull-request`, the platform team owns `/_generated/` and can write, and `main` requires
