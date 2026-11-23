@@ -15,13 +15,15 @@
 # check  every run: checks the YAML and works out what the roots read.
 # plan   pull requests, main and the daily drift check: read-only, against a copy of the state. Its summary
 #        goes on the pull request and on the run page, where the reviewer approves the apply.
-# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply.
+# changed main: the stacks whose plan changes something; only those wait for a reviewer and apply. On GitHub Team
+#        nothing waits: they apply only if their plan is the one the merged pull request's run showed (the gate).
 # apply  main: in the role's environment, after a reviewer approves. Applies only if its plan makes
 #        exactly the reviewed changes.
 # publish main: offers the role's contract to the repos that read it, as a pull request each.
 # merge  a contract pull request: merges it once check and plan have passed on it. Not on GitHub Team, where a
 #        person approves each contract pull request like any other.
-# planned GitHub Team only, pull requests: one check that every plan finished, which main-checks requires there.
+# planned GitHub Team only, pull requests: one check that every plan finished and that the last code owner's approval
+#        covers the plan, which main-checks requires there.
 # drift  the daily check: one issue in the repo while a stack differs from main or its plan did not finish.
 # decommission  vending, main: the pull requests that delete a decommissioned landing zone's files.
 #
@@ -388,11 +390,12 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python3 .mlz-core/tools/ci/drift.py
 
-  # GitHub Team: one check that every plan of this pull request finished, which the ruleset main-checks requires there
-  # beside check, so that nobody approves or merges a pull request before its plan is on it. A required check whose job
-  # is skipped counts as passed (GitHub's "Troubleshooting required status checks", and a test on 23 November 2026),
-  # so this one runs whatever happened before it, a failure or a cancellation included, and fails unless check succeeded
-  # and every plan job succeeded, or none was needed (a change that plans no stack).
+  # GitHub Team: one check that every plan of this pull request finished and that the last code owner's approval covers
+  # it, which the ruleset main-checks requires there beside check, so that nothing merges whose plan nobody approved: an
+  # approval given before this plan was on the pull request covers it only if it saw the same plan (tools/ci/approved.py,
+  # covers). A required check whose job is skipped counts as passed (GitHub's "Troubleshooting required status checks",
+  # and a test on 23 November 2026), so this one runs whatever happened before it, a failure or a cancellation included,
+  # and fails unless check succeeded and every plan job succeeded, or none was needed (a change that plans no stack).
   planned:
     if: inputs.approval == 'pull-request' && always() && github.event_name == 'pull_request'
     needs: [check, plan]
@@ -411,6 +414,58 @@ jobs:
           fi
           echo "::error::Not every plan of this pull request finished (check: $CHECK, plan: $PLAN), so there is no plan to approve, and it cannot merge. The failed job's log says why; once that is fixed, re-run the failed jobs. A run cancelled by a newer push leaves that push's run to say."
           exit 1
+
+      # The organization's copy of mlz-core is private (tools/mlz/mirror.py): read as the MLZ App. mlz-core's own,
+      # which a repo set up before the copy calls, is public and needs no token.
+      - id: core-reader
+        if: startsWith(needs.check.outputs.core-repository, format('{0}/', github.repository_owner))
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ needs.check.outputs.core-name }}
+          permission-contents: read
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.check.outputs.core-repository }}
+          ref: ${{ needs.check.outputs.core-ref }}
+          path: .mlz-core
+          token: ${{ steps.core-reader.outputs.token || github.token }}
+          persist-credentials: false
+
+      # This run's plans, which the last code owner's approval must cover (tools/ci/approved.py).
+      - if: needs.plan.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mlz-${{ inputs.role }}-plan-*
+          path: .mlz/planned/
+
+      # The pull request's reviews, CODEOWNERS on its base, the code owner team's members and the run that an approval saw,
+      # read as the MLZ App, scoped to this repo and to reading.
+      - id: reader
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-pull-requests: read
+          permission-contents: read
+          permission-members: read
+
+      # The last code owner's approval must have come after these plans, or have seen the same plans; otherwise a code owner
+      # approves again before the merge (tools/ci/approved.py, covers).
+      - name: The approval covers this plan
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.base_ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: python3 .mlz-core/tools/ci/approved.py covers "$ROLE"
 
   # The stacks whose reviewed plan changes something, in the order check gave. Only those wait for a
   # reviewer and apply; a stack with nothing to change asks for no approval. Its output is one apply job
@@ -453,21 +508,34 @@ jobs:
           token: ${{ steps.core-reader.outputs.token || github.token }}
           persist-credentials: false
 
-      # GitHub Team: no environment waits for a reviewer, so nothing may apply until mlz-core's gate is in place.
-      - name: Match the plans with their pull request's
+      # GitHub Team: the gate reads the merged pull request's run, its plans, main's head and the bypass record as the MLZ App,
+      # scoped to this repo and to reading (tools/ci/approved.py). Not with the job's token: asking it for Actions: read would
+      # stop every caller that does not grant that, on Enterprise too, before the run starts (tested 23 November 2026).
+      - id: gate-reader
         if: inputs.approval == 'pull-request'
-        run: |
-          echo "::error::This mlz-core release has no gate for GitHub Team yet, so nothing is applied. Move to the release that has it."
-          exit 1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-actions: read
+          permission-pull-requests: read
+          permission-contents: read
+          permission-administration: read # GitHub's record of a ruleset's bypass (rule suites)
 
       # With something to apply, the run waits for a reviewer, and every later run on main behind it: changed.py says
-      # why on the run's page, and on the merged pull request when a person opened it (finding 11).
+      # why on the run's page, and on the merged pull request when a person opened it (finding 11). On GitHub Team nothing
+      # waits: the gate decides here, before any stack is handed to apply.
       - id: changed
         env:
           STACKS: ${{ needs.check.outputs.stacks }}
           BATCHES: ${{ needs.check.outputs.batches }}
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          APPROVAL: ${{ inputs.approval }}
+          GATE_TOKEN: ${{ steps.gate-reader.outputs.token }} # GitHub Team only; empty on Enterprise
+          WORKFLOW_REF: ${{ github.workflow_ref }} # the caller's workflow, whose pull request runs showed the plans
         run: python3 .mlz-core/tools/ci/changed.py
 
   apply:
@@ -568,6 +636,8 @@ jobs:
         env:
           STACKS: ${{ matrix.stack }} # one stack, or the platform's changed stacks in order
           MLZ_MAIN: ${{ inputs.role == 'vending' && '.mlz-main' || '' }} # main's latest commit (above)
+          APPROVAL: ${{ inputs.approval }}
+          MLZ_APPROVAL: ${{ vars.MLZ_APPROVAL }} # pull-request on a GitHub Team environment, which has no reviewer (apply_guard.py)
           GITHUB_TOKEN: ${{ steps.github-writer.outputs.token }} # vending's GitHub provider; empty for the others
           GITHUB_OWNER: ${{ github.repository_owner }} # its owner when a landing zone has no repo (providers.tf)
         run: |

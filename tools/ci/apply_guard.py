@@ -2,11 +2,12 @@
 reviewer did not see; apply.py is the Terraform around them. Each returns GO, REFUSE or, from before alone, STAND_DOWN
 (nothing applied, no failure):
 
-    before(role, stack)    before planning: a reviewed plan of this run, and for vending a change main still says
+    before(role, stack)    before planning: a gate in place, a reviewed plan of this run, and for vending a change main still says
     state(stack, version)  the state's version now must be the one the reviewed plan started from
     matches(stack)         this plan's changes must be the reviewed plan's
 
-Reads .mlz/reviewed/ (the plan job's files of this run), .mlz/vending/ and, for vending, MLZ_MAIN and GITHUB_SHA.
+Reads .mlz/reviewed/ (the plan job's files of this run), .mlz/vending/ and, for vending, MLZ_MAIN and GITHUB_SHA; APPROVAL (the
+caller's input) and MLZ_APPROVAL (the environment's variable).
 """
 
 from __future__ import annotations
@@ -20,6 +21,14 @@ from pathlib import Path
 from ci.run_mlz import mlz  # tools/ is on the path: apply.py puts it there
 
 GO, REFUSE, STAND_DOWN = 0, 1, 2
+# On GitHub Team the bootstrap and vending set the variable MLZ_APPROVAL: pull-request on the environment, which has no reviewer
+# there. An apply whose caller does not ask for the pull request's approval would then pass no gate at all. A check against a
+# switch done out of order and against mistakes, not proof against a writer or maintainer, who may change an environment's
+# variables (docs/pipelines.md, Approval on GitHub Team).
+UNGATED = ("::error::This apply's environment says MLZ_APPROVAL: pull-request (GitHub Team, no reviewer), and this repo's pipeline does not "
+           "pass approval: pull-request (.github/workflows/mlz.yml): nothing would gate this apply. Nothing is applied. On Team, the pipeline "
+           "must pass it (mlz upgrade writes it). On Enterprise, delete the repository variable MLZ_APPROVAL: it belongs on the environment, "
+           "and only on Team.")
 
 
 def work() -> Path:
@@ -27,6 +36,9 @@ def work() -> Path:
 
 
 def before(role: str, stack: str, say=print) -> int:
+    if os.environ.get("APPROVAL", "environment") != "pull-request" and os.environ.get("MLZ_APPROVAL") == "pull-request":
+        say(UNGATED)
+        return REFUSE
     if not (work() / "reviewed" / f"changes-{stack}.txt").is_file():
         say(f"::error::No reviewed plan for {stack} in this run; nothing is applied.")
         return REFUSE

@@ -152,25 +152,27 @@ class EnterpriseGuardTest(unittest.TestCase):
         for name, job in workflow("role.yml")["jobs"].items():
             self.assertIn("permissions", job, f"role.yml: {name} must declare its permissions")
 
-    def test_the_workload_gate_alone_takes_the_caller_s_grant_and_signs_in_nowhere(self):
+    def test_only_the_workload_gate_s_jobs_take_the_caller_s_grant_and_they_sign_in_nowhere(self):
         data = workflow("workload.yml")
-        # Without a top-level permissions key, a job with none of its own gets the caller's grant: only the gate may.
+        # Without a top-level permissions key, a job with none of its own gets the caller's grant: only the gate's two may.
         self.assertNotIn("permissions", data)
-        for name, job in data["jobs"].items():
-            if name == "gate":
-                continue
-            self.assertIn("permissions", job, f"workload.yml: {name} must declare its permissions")
-        gate = data["jobs"]["gate"]
-        self.assertNotIn("permissions", gate)
-        self.assertTrue(team_only(gate["if"]))
-        self.assertNotIn("environment", gate)
-        self.assertNotIn("env", gate)
-        for item in gate["steps"]:
-            self.assertNotIn("azure/login", item.get("uses", ""), "the gate signs in to nothing")
-            if item.get("uses", "").startswith("actions/checkout@"):
-                # mlz-core's own code only, never the repo's checkout, which a pull request controls.
-                self.assertEqual(item["with"]["path"], ".mlz-core")
-                self.assertIn("needs.plan.outputs.core-ref", item["with"]["ref"])
+        open_jobs = {name for name, job in data["jobs"].items() if "permissions" not in job}
+        self.assertEqual(open_jobs, {"gate", "planned"}, "every other workload job must declare its permissions")
+        for name in sorted(open_jobs):
+            job = data["jobs"][name]
+            with self.subTest(job=name):
+                self.assertTrue(team_only(job["if"]))
+                self.assertNotIn("environment", job)
+                self.assertNotIn("env", job)
+                for item in job["steps"]:
+                    self.assertNotIn("azure/login", item.get("uses", ""), "it signs in to nothing")
+                    self.assertNotIn("ARM_CLIENT_ID", item.get("env", {}))
+                    if item.get("uses", "").startswith("actions/checkout@"):
+                        # mlz-core's own code only, never the repo's checkout, which a pull request controls.
+                        self.assertEqual(item["with"]["path"], ".mlz-core")
+                        self.assertIn("needs.plan.outputs.core-ref", item["with"]["ref"])
+                    if "run" in item:
+                        self.assertNotIn("./", item["run"].replace(".mlz-core/tools/ci/", ""), "it runs only mlz-core's scripts")
 
 
 class ApprovalInputTest(unittest.TestCase):
@@ -241,18 +243,58 @@ class StampTest(unittest.TestCase):
 
 
 class TeamJobsTest(unittest.TestCase):
-    def test_a_role_apply_is_refused_on_team_until_the_gate_is_built(self):
-        steps = workflow("role.yml")["jobs"]["changed"]["steps"]
-        names = [item.get("name") or item.get("id") for item in steps]
-        refusal = steps[names.index("Match the plans with their pull request's")]
-        self.assertLess(names.index("Match the plans with their pull request's"), names.index("changed"))
-        self.assertTrue(team_only(refusal["if"]))
-        done = run_step(refusal["run"], {})
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("::error::This mlz-core release has no gate for GitHub Team yet", done.stdout)
-        # apply and publish follow only a changed job that succeeded.
+    def test_a_role_repo_s_gate_reads_as_the_mlz_app_in_team_mode_only(self):
         role = workflow("role.yml")["jobs"]
+        steps = role["changed"]["steps"]
+        names = [item.get("name") or item.get("id") for item in steps]
+        reader = steps[names.index("gate-reader")]
+        self.assertLess(names.index("gate-reader"), names.index("changed"))
+        self.assertTrue(team_only(reader["if"]))
+        self.assertTrue(reader["uses"].startswith("actions/create-github-app-token@"))
+        granted = {key: value for key, value in reader["with"].items() if key.startswith("permission-")}
+        self.assertEqual(granted, {"permission-actions": "read", "permission-pull-requests": "read", "permission-contents": "read",
+                                   "permission-administration": "read"})
+        self.assertEqual(reader["with"]["repositories"], "${{ github.event.repository.name }}")  # this repo only
+        changed_env = steps[names.index("changed")]["env"]
+        self.assertEqual((changed_env["APPROVAL"], changed_env["GATE_TOKEN"], changed_env["WORKFLOW_REF"]),
+                         ("${{ inputs.approval }}", "${{ steps.gate-reader.outputs.token }}", "${{ github.workflow_ref }}"))
+        # apply and publish follow only a changed job that succeeded: a refusal applies nothing.
         self.assertIn("needs.changed.result == 'success'", role["apply"]["if"])
+        self.assertIn("contains(fromJSON('[\"success\", \"skipped\"]'), needs.changed.result)", role["publish"]["if"])
+
+    def test_planned_checks_that_the_approval_covers_the_plan(self):
+        for name, reader in (("role.yml", "${{ steps.reader.outputs.token }}"), ("workload.yml", "${{ github.token }}")):
+            with self.subTest(workflow=name):
+                steps = workflow(name)["jobs"]["planned"]["steps"]
+                covers = step(workflow(name), "planned", "The approval covers this plan")
+                self.assertEqual(covers["env"]["GH_TOKEN"], reader)
+                self.assertTrue(covers["run"].startswith("python3 .mlz-core/tools/ci/approved.py covers "))
+                for key in ("PR_NUMBER", "PR_AUTHOR", "BASE_REF", "WORKFLOW_REF"):
+                    self.assertIn(key, covers["env"])
+                downloads = [item for item in steps if item.get("uses", "").startswith("actions/download-artifact@")]
+                self.assertEqual([item["with"]["path"] for item in downloads], [".mlz/planned/"])
+        reader = step(workflow("role.yml"), "planned", "reader")
+        self.assertEqual({key: value for key, value in reader["with"].items() if key.startswith("permission-")},
+                         {"permission-actions": "read", "permission-pull-requests": "read", "permission-contents": "read",
+                          "permission-members": "read"})
+        self.assertEqual(reader["with"]["repositories"], "${{ github.event.repository.name }}")
+
+    def test_a_workload_planned_never_skips_and_fails_on_a_failed_plan(self):
+        planned = workflow("workload.yml")["jobs"]["planned"]
+        self.assertTrue(team_only(planned["if"]))
+        self.assertIn("always()", planned["if"])
+        self.assertEqual(planned["needs"], "plan")
+        script = step(workflow("workload.yml"), "planned", "The plan of this pull request finished")["run"]
+        for plan, passes in (("success", True), ("failure", False), ("cancelled", False), ("skipped", False)):
+            with self.subTest(plan=plan):
+                done = run_step(script, {"PLAN": plan})
+                self.assertEqual(done.returncode == 0, passes, done.stdout)
+
+    def test_every_apply_reads_the_mode_and_its_environment_s_variable(self):
+        for name in NAMES:
+            with self.subTest(workflow=name):
+                apply = step(workflow(name), "apply", "Apply")
+                self.assertEqual((apply["env"]["APPROVAL"], apply["env"]["MLZ_APPROVAL"]), ("${{ inputs.approval }}", "${{ vars.MLZ_APPROVAL }}"))
 
     def test_contracts_do_not_merge_themselves_on_team(self):
         merge = workflow("role.yml")["jobs"]["merge"]["if"]
@@ -271,12 +313,14 @@ class TeamJobsTest(unittest.TestCase):
                      "needs.plan.outputs.status == '2'"):
             self.assertIn(part, condition)
 
-    def test_the_gate_refuses_until_it_is_built(self):
+    def test_the_workload_gate_compares_main_s_plan_with_its_pull_request_s(self):
         gate = workflow("workload.yml")["jobs"]["gate"]
-        done = run_step(step(workflow("workload.yml"), "gate", "Match the plan with its pull request's")["run"], {})
-        self.assertEqual(done.returncode, 1)
-        self.assertIn("::error::This mlz-core release has no gate for GitHub Team yet", done.stdout)
         self.assertEqual(gate["needs"], "plan")
+        download = next(item for item in gate["steps"] if item.get("uses", "").startswith("actions/download-artifact@"))
+        self.assertEqual((download["with"]["name"], download["with"]["path"]), ("mlz-workload-plan", ".mlz/reviewed/"))
+        match = step(workflow("workload.yml"), "gate", "Match the plan with its pull request's")
+        self.assertEqual(match["run"], "python3 .mlz-core/tools/ci/approved.py gate workload workload")
+        self.assertEqual((match["env"]["GH_TOKEN"], match["env"]["WORKFLOW_REF"]), ("${{ github.token }}", "${{ github.workflow_ref }}"))
 
 
 if __name__ == "__main__":
