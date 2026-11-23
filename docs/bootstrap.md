@@ -200,7 +200,9 @@ keeps its old pipeline, and inside one apply an environment has neither its revi
 
 1. Bring every repo onto a release with Team's way: the three role repos (`mlz upgrade`), and each workload repo (merge
    vending's upgrade pull request).
-2. In the governance repo's `bootstrap.yaml`, set `plan: team` and remove `reviewers`. Merge it.
+2. In the checkout of the governance repo you run the installer from, set `plan: team` in `bootstrap.yaml` and remove
+   `reviewers`, but do not merge it yet: merged, it publishes the plan through governance's contract, and vending would
+   start on the workload repos. Steps 3 to 5 read this checkout (`--settings`).
 3. As a member of the bypass team, run `mlz install repos`. Each role repo is offered one pull request (`mlz/github-plan`)
    that passes `approval: pull-request` in its pipeline and gives `/_generated/` to the platform team. A code owner
    approves each; merge all three. Each environment still has its reviewer, so both gates hold.
@@ -210,7 +212,9 @@ keeps its old pipeline, and inside one apply an environment has neither its revi
    seconds apart. It stops before Terraform, naming what is missing, unless Team's gate already holds in every role repo:
    its pipeline passes `approval: pull-request`, the platform team owns `/_generated/` and can write, and `main` requires
    a code owner's review and `<role> / planned`. So in those seconds every pipeline already gates its applies.
-6. Governance's next run publishes the plan in its contract, and vending's next run on `main` does the workload repos:
+6. Hold the workload repos still, and merge the `bootstrap.yaml` change of step 2 in the governance repo. Governance's
+   run publishes the plan in its contract. Vending's contract pull request now waits for a code owner (Team's way since
+   step 3): read its plan, approve it, and its run on `main` does the workload repos:
    - each workload repo is offered a pull request with its pipeline Team's way, which its team merges; a repo still on a
      release without Team's gate is offered its upgrade first, and the switch after it;
    - each gets the push rule on `.github/`, and `workload / planned` in the `main-checks` vending made (one of the
@@ -254,15 +258,16 @@ in the order they happen, and stop at the first that does not hold:
    for Team, in private repos), and `main` and `main-checks` with their bypass and `<role> / planned`.
 3. `mlz install bootstrap`: each environment is made with its branch policy (`main` only), no reviewer and
    `MLZ_APPROVAL`; `mlz install check` passes.
-4. `mlz install runners`: for self-hosted runners, whether GitHub keeps the runner group's limit to `role.yml` (the step
-   reads it back; without it, it takes the repos out of the group and stops, and the customer moves to
-   `kind: github-hosted`); for GitHub-hosted ones, the network configuration (Azure private networking is documented for
-   organization owners on Team).
-5. The MLZ App's permissions as the installation holds them: an owner accepts each change of the App's permissions on
+4. The MLZ App's permissions as the installation holds them: an owner accepts each change of the App's permissions on
    the installation, and only an owner sees it.
-6. The first pull request in each role repo: `<role> / planned` reports and is required; after the merge, the run on
+5. The first pull request in each role repo: `<role> / planned` reports and is required; after the merge, the run on
    `main` applies only the plan the pull request showed.
-7. The first contract pull request waits for a code owner; once approved and merged, its run on `main` applies.
+6. The first contract pull request waits for a code owner; once approved and merged, its run on `main` applies.
+7. `mlz install runners`, once the platform's first apply has made management's network and `mlz install bootstrap` has
+   run again for the state account's endpoint and the runners' vault ([private runners](#private-runners)): for
+   self-hosted runners, whether GitHub keeps the runner group's limit to `role.yml` (the step reads it back; without it,
+   it takes the repos out of the group and stops, and the customer moves to `kind: github-hosted`); for GitHub-hosted
+   ones, the network configuration (Azure private networking is documented for organization owners on Team).
 8. The first workload repo: vending writes its pipeline Team's way, its push rule and `workload / planned`; the App's
    commit of its values applies with no person.
 
