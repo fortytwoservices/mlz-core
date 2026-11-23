@@ -100,14 +100,11 @@ class FakeGitHub:
         # Each repo's environment, named after its role, as the bootstrap makes it on Enterprise: a reviewer, main only.
         self.environments = {repo: ENTERPRISE_ENVIRONMENT for repo in REPOS.values()} if environments is None else environments
         self.environment_variables = environment_variables or {}  # (repo, environment, name): value
-        self.other_branches = {}  # repo: its branches besides main
 
     def folder(self, repo, path, ref):
         # A file on every branch is keyed (repo, path); one on a single branch (repo, path, ref).
         return sorted({k[1] for k in self.files if k[0] == repo and k[1].startswith(path + "/") and (len(k) == 2 or k[2] == ref)})
 
-    def branch_names(self, repo):
-        return ["main", *self.other_branches.get(repo, [])]
 
     def environment(self, repo, name):
         return self.environments.get(repo)
@@ -388,6 +385,7 @@ class RunnersGitHub(FakeGitHub):
 
     def set_runner_group_repositories(self, org, group, repositories):
         self.calls.append(("group repositories", repositories))
+        self.group_repositories[group] = set(repositories)  # as GitHub keeps it
 
     def hosted_runner(self, org, name):
         return next((r for r in self.runners if r["name"] == name), None)
@@ -1074,6 +1072,9 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(approval_of(block + "      # approval: pull-request\n      role: platform\n"), "environment")
         self.assertEqual(approval_of(block + "      role: platform # approval: pull-request\n"), "environment")
         self.assertEqual(approval_of(block + "      # approval: environment\n      approval: pull-request\n"), "pull-request")
+        # A quoted key, in either form.
+        self.assertEqual(approval_of(block + "      \"approval\": pull-request\n"), "pull-request")
+        self.assertEqual(approval_of(block.replace("    with:\n", "    with: {'approval': pull-request}\n")), "pull-request")
         # A flow mapping over several lines.
         self.assertEqual(approval_of(block.replace("    with:\n", "    with: {\n") + "      role: platform,\n      approval: pull-request\n    }\n"),
                          "pull-request")
@@ -1795,7 +1796,7 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "runner group mlz is for GitHub-hosted runners"):
             self.run_self_hosted(github, SelfHostedAzure(), key)
 
-    def test_a_group_github_did_not_limit_to_role_yml_is_said_on_team_and_refused_on_enterprise(self):
+    def test_a_group_github_did_not_limit_to_role_yml_is_left_with_no_repo_on_team_and_on_enterprise(self):
         class Unlimited(RunnersGitHub):
             """An organization where GitHub does not keep a runner group's limit to selected workflows."""
             def create_runner_group(self, org, body):
@@ -1804,59 +1805,31 @@ class InstallTest(unittest.TestCase):
             def update_runner_group(self, org, group, body):
                 super().update_runner_group(org, group, {**body, "restricted_to_workflows": False, "selected_workflows": []})
         role = mirror.workflow(CORE_COPY, install.release())
-        # On Team: said, and the step goes on, since pipeline-files keeps any other workflow out of the three repos.
+        # On Team: no self-hosted runners without the limit (the user's decision of 23 November). The group GitHub made
+        # keeps no repo, and the step names GitHub-hosted runners, Team's private way.
         self.team()
         _, team = install.settings(self.folder)
-        made = install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out, team)
-        self.assertEqual(made["id"], 7)
-        self.assertIn(f"runners: acme's runner group mlz is not limited to {role}: GitHub did not keep its limit to selected workflows. GitHub "
-                      "documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the three repos; the push "
-                      "ruleset pipeline-files, which only the bypass team may pass, is what keeps any other workflow out of them", "\n".join(self.printed))
-        # On Enterprise it holds, so a group without it stops the step, for a group made now and for one that was there.
+        github = Unlimited()
+        with self.assertRaisesRegex(ConfigError, f"acme's runner group mlz is not limited to {role}: GitHub did not keep its limit to selected "
+                                                 "workflows, which GitHub documents for Enterprise Cloud only. Without it any workflow of the three "
+                                                 "repos could reach the runners and the runner App's key, so no repo may use the group now, and no "
+                                                 "self-hosted runner is made. On GitHub Team, set github.runners.kind: github-hosted"):
+            install.self_hosted_group(github, "acme", REPOS, CORE_COPY, self.out, team)
+        self.assertEqual(github.group_repositories[7], set())
+        # On Enterprise it holds, so a group without it stops the step too, for a group made now and for one that was there.
+        github = Unlimited()
         with self.assertRaisesRegex(ConfigError, "GitHub did not keep its limit to selected workflows, which GitHub Enterprise allows"):
-            install.self_hosted_group(Unlimited(), "acme", REPOS, CORE_COPY, self.out)
+            install.self_hosted_group(github, "acme", REPOS, CORE_COPY, self.out)
+        self.assertEqual(github.group_repositories[7], set())
         widened = Unlimited(groups=[{"name": "mlz", "id": 7, "visibility": "all", "restricted_to_workflows": False}])
+        widened.group_repositories[7] = {101, 102, 103}
         with self.assertRaisesRegex(ConfigError, "Runner groups, mlz, Workflow access"):
             install.self_hosted_group(widened, "acme", REPOS, CORE_COPY, self.out)
-        # Where GitHub keeps it, nothing more is said.
+        self.assertEqual(widened.group_repositories[7], set())
+        # Where GitHub keeps it, on Team too, nothing more is said.
         self.printed.clear()
         install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, team)
         self.assertEqual(self.printed, [f"runners: runner group mlz made, for the three repos and {role} only"])
-        # On Team, not without the push ruleset that keeps every other workflow out of the repos: seen before anything changes.
-        unguarded = Unlimited(push_guard=False)
-        with self.assertRaisesRegex(ConfigError, "on GitHub Team the runner group mlz may admit any workflow of the three repos, so each repo's "
-                                                 "push ruleset pipeline-files must keep every other workflow out of it first, as only the bypass "
-                                                 "team may pass it, and none may be there already. Nothing was changed:\n  acme/mlz-governance: "
-                                                 "no active push ruleset"):
-            install.self_hosted_group(unguarded, "acme", REPOS, CORE_COPY, self.out, team)
-        self.assertEqual((unguarded.groups, unguarded.calls), ([], []))
-        # Nor with a workflow there already that the push ruleset does not take away: on main, or on a branch.
-        extra = Unlimited()
-        extra.files[("acme/mlz-platform", ".github/workflows/lint.yml")] = ("on: push\n", "sha")
-        # A branch with its own mlz.yml; one that kept a workflow main removed since; one like main.
-        extra.other_branches = {"acme/mlz-vending": ["old-work", "fine", "older"], "acme/mlz-governance": ["kept"], "acme/mlz-platform": ["foreign", "branch"]}
-        # One job calling role.yml: in the copy at an older release is fine; in another repo, or at a branch, is not.
-        extra.files[("acme/mlz-vending", WORKFLOW, "older")] = ("jobs:\n  vending:\n    uses: acme/mlz-core/.github/workflows/role.yml@v0.1.0\n", "sha-older")
-        extra.files[("acme/mlz-platform", WORKFLOW, "foreign")] = ("jobs:\n  platform:\n    uses: acme/untrusted/.github/workflows/role.yml@v0.1.0\n", "sha-f")
-        extra.files[("acme/mlz-platform", WORKFLOW, "branch")] = ("jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@main\n", "sha-b")
-        extra.files[("acme/mlz-vending", WORKFLOW, "old-work")] = ("jobs:\n  x:\n    runs-on: mlz\n", "sha-old")
-        extra.files[("acme/mlz-governance", ".github/workflows/gone.yml", "kept")] = ("on: push\n", "sha-gone")
-        # And a pipeline on main with a job of its own beside the call of role.yml.
-        pipeline = extra.files[("acme/mlz-governance", WORKFLOW)][0]
-        extra.files[("acme/mlz-governance", WORKFLOW)] = (pipeline + "  mine:\n    runs-on: mlz\n    steps: []\n", "sha")
-        with self.assertRaises(ConfigError) as caught:
-            install.self_hosted_group(extra, "acme", REPOS, CORE_COPY, self.out, team)
-        found = str(caught.exception)
-        self.assertIn("acme/mlz-platform: .github/workflows/lint.yml on main is a workflow besides the pipeline", found)
-        self.assertIn("acme/mlz-governance: its .github/workflows/mlz.yml on main is not one job calling acme/mlz-core's role.yml at a release "
-                      "(it has check, mine jobs)", found)
-        self.assertIn("acme/mlz-vending: branch old-work has another .github/workflows/mlz.yml than main", found)
-        self.assertIn("acme/mlz-governance: branch kept has another .github/workflows/gone.yml than main", found)
-        self.assertNotIn("branch fine", found)
-        self.assertNotIn("branch older", found)
-        self.assertIn("acme/mlz-platform: branch foreign has another .github/workflows/mlz.yml than main", found)
-        self.assertIn("acme/mlz-platform: branch branch has another .github/workflows/mlz.yml than main", found)
-        self.assertEqual((extra.groups, extra.calls), ([], []))
 
         # GitHub keeping another workflow beside role.yml is no limit either: exactly what was asked, or not kept.
         class Wider(RunnersGitHub):
@@ -1958,6 +1931,19 @@ class PagedGitHub(GitHub):
 
 
 class GitHubTest(unittest.TestCase):
+    def test_a_ref_is_encoded_so_a_branch_name_never_reads_another(self):
+        asked = []
+
+        class Recorded(GitHub):
+            def _api(self, path, method="GET", body=None, missing_ok=False, accept=None):
+                asked.append(path)
+                return []
+        github = Recorded()
+        github.file("acme/mlz-platform", ".github/workflows/mlz.yml", "main&probe=x")
+        github.folder("acme/mlz-platform", ".github", "feature/a b")
+        self.assertEqual(asked, ["repos/acme/mlz-platform/contents/.github/workflows/mlz.yml?ref=main%26probe%3Dx",
+                                 "repos/acme/mlz-platform/contents/.github?ref=feature%2Fa%20b"])
+
     def test_a_ruleset_past_the_first_page_is_found_and_not_made_again(self):
         rulesets = [{"name": f"other-{n}"} for n in range(120)] + [{"name": "main"}]
         github = PagedGitHub({"repos/acme/mlz-platform/rulesets": rulesets})

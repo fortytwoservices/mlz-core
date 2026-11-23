@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import subprocess
+from urllib.parse import quote
 
 from .merge import ConfigError
 
@@ -85,9 +86,6 @@ class GitHub:
             raise
         return None if found is None else found.get("status")
 
-    def branch_names(self, repo: str) -> list[str]:
-        return [branch["name"] for branch in self._pages(f"repos/{repo}/branches")]
-
     def actions_access(self, repo: str) -> str | None:
         """Which other repos may call this one's reusable workflows: none, organization or enterprise."""
         found = self._api(f"repos/{repo}/actions/permissions/access", missing_ok=True)
@@ -100,14 +98,15 @@ class GitHub:
         self._api(f"repos/{repo}/branches/{branch}/rename", "POST", {"new_name": name})
 
     def file(self, repo: str, path: str, ref: str) -> tuple[str, str] | tuple[None, None]:
-        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        # The ref encoded: a branch named main&x=y would otherwise read main.
+        found = self._api(f"repos/{repo}/contents/{path}?ref={quote(ref, safe='')}", missing_ok=True)
         if not found:
             return None, None
         return base64.b64decode(found["content"]).decode(), found["sha"]
 
     def folder(self, repo: str, path: str, ref: str) -> list[str]:
         """The paths of the files in a folder and below it; [] when there is no such folder."""
-        found = self._api(f"repos/{repo}/contents/{path}?ref={ref}", missing_ok=True)
+        found = self._api(f"repos/{repo}/contents/{path}?ref={quote(ref, safe='')}", missing_ok=True)
         if not isinstance(found, list):
             return []
         return sorted(p for item in found for p in ([item["path"]] if item["type"] == "file" else self.folder(repo, item["path"], ref)))

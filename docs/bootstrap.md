@@ -295,9 +295,11 @@ App**, and reads the App's private key from the runners' vault with an identity 
      A repo pinned to anything else, `fortytwoservices/mlz-core` included, stops the step: an organization's
      runner group cannot admit another organization's workflow (GitHub's docs, "Changing which workflows can
      access a runner group").
-     GitHub documents that limit to selected workflows for Enterprise Cloud only. The step reads the group back: on
-     Team, if GitHub did not keep the limit, it says so and goes on, since `pipeline-files` keeps every other workflow
-     out of the three repos; on Enterprise that stops the step.
+     GitHub documents that limit to selected workflows for Enterprise Cloud only. The step reads the group back, and
+     where GitHub did not keep the limit it takes every repo out of the group and stops, on Team as on Enterprise:
+     without it any workflow of the three repos could reach the runners and the runner App's key, and nothing in the
+     repos can show there is none (an old run can be re-run with the workflow it had). On Team, use GitHub-hosted runners
+     then (`kind: github-hosted`, below), which GitHub joins to management's network there too.
      A pull request that adds a job of its own to `mlz.yml`, or points it at another `role.yml`, gets no runner
      (decided 2026-11-16; the first customer install is the first test of it). Run by anyone but an owner, the
      step changes nothing and prints the command for one. A group `mlz` made for GitHub-hosted runners is not

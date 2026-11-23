@@ -120,7 +120,7 @@ def approval_of(workflow: str) -> str:
     block = [re.sub(r"(^|\s)#.*$", "", line) for line in lines[start + 1:end]]
     keys = [" ".join([inline, *block]) if inline.startswith("{") and "}" not in inline else inline] if inline else block
     for key in keys:
-        match = re.search(r"(^\s*|[{,]\s*)approval:[ \t]*['\"]?(?P<approval>[\w-]+)", key)
+        match = re.search(r"(^\s*|[{,]\s*)(['\"]?)approval\2[ \t]*:[ \t]*['\"]?(?P<approval>[\w-]+)", key)
         if match:
             return match["approval"]
     return "environment"
