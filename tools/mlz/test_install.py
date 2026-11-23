@@ -75,7 +75,9 @@ class FakeGitHub:
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
         self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
         # And its CODEOWNERS, unless it was set up before code owners (owned=False).
-        self.files.update({(repo, ".github/CODEOWNERS"): ("* @acme/platform\n", "sha") for repo in existing if owned and repo not in half_made})
+        self.files.update({(repo, ".github/CODEOWNERS"): (install.owners.render("acme", "platform"), "sha") for repo in existing if owned and repo not in half_made})
+        # role.yml in the organization's copy, at any release: this release's, which takes the approval input.
+        self.files[(CORE_COPY, ".github/workflows/role.yml")] = ((install.CORE / ".github/workflows/role.yml").read_text(), "sha")
         self.files.update(files or {})
         self.renamed, self.empty = [], set(empty)
         self.existing_rulesets = set(rulesets)
@@ -992,7 +994,8 @@ class InstallTest(unittest.TestCase):
                      secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         if plan == "team":
             given.update(required_check=lambda role: [{"context": f"{role} / {job}", "integration_id": 15368} for job in ("check", "planned")],
-                         files={(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()},
+                         files={**{(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()},
+                                **{(r, ".github/CODEOWNERS"): (install.owners.render("acme", "platform", "team"), "sha") for r in REPOS.values()}},
                          environments={r: TEAM_ENVIRONMENT for r in REPOS.values()},
                          environment_variables={(r, role, "MLZ_APPROVAL"): "pull-request" for role, r in REPOS.items()})
         return {**given, **more}
@@ -1033,6 +1036,32 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(changed[".github/CODEOWNERS"], install.owners.render("acme", "platform", "team"))
         self.assertIn("acme/mlz-governance: GitHub Team's way is offered in https://github.com/acme/mlz-governance/pull/1", self.printed)
         self.assertEqual(github.pulls[0][3], "chore: GitHub Team's way: each apply approved on its pull request")
+        # /_generated/ with another owner, on a Team caller: the installer's file is offered, Team's rule in it.
+        other = {**files, **{(r, WORKFLOW): (install.caller(role_caller, "team"), "sha") for r in REPOS.values()},
+                 **{(r, ".github/CODEOWNERS"): ("* @acme/platform\n/_generated/ @acme/other\n", "sha") for r in REPOS.values()}}
+        github = FakeGitHub(existing=REPOS.values(), files=other)
+        install.step_repos(github, self.folder, self.out)
+        offered = [f for _, b, _, f, _ in github.commits if b == "mlz/github-plan"]
+        self.assertEqual(offered[0], {".github/CODEOWNERS": install.owners.render("acme", "platform", "team")})
+
+        # An open switch that no longer holds this plan's files is closed; with nothing left to switch, nothing new is opened.
+        class Open(FakeGitHub):
+            def open_pull(self, repo, branch):
+                return f"https://github.com/{repo}/pull/9" if branch == "mlz/github-plan" else None
+        done = {**{(r, WORKFLOW): (install.caller(role_caller, "team"), "sha") for r in REPOS.values()},
+                **{(r, ".github/CODEOWNERS"): (install.owners.render("acme", "platform", "team"), "sha") for r in REPOS.values()},
+                **{(r, ".github/CODEOWNERS", "mlz/github-plan"): (install.owners.render("acme", "platform"), "sha") for r in REPOS.values()}}
+        github = Open(existing=REPOS.values(), files=done, open_pull="https://github.com/acme/x/pull/9")
+        install.step_repos(github, self.folder, self.out)
+        self.assertIn("no longer holds that plan's files", github.closed[0][2])
+        self.assertFalse([b for _, b, _, _, _ in github.commits if b == "mlz/github-plan"])
+        # A repo pinned to a release whose role.yml takes no approval input is told to upgrade first, and offered nothing.
+        older = FakeGitHub(existing=REPOS.values(), files=files)
+        older.files[(CORE_COPY, ".github/workflows/role.yml")] = ("on:\n  workflow_call:\n    inputs:\n      role:\n        type: string\njobs: {}\n", "sha")
+        install.step_repos(older, self.folder, self.out)
+        self.assertFalse([b for _, b, _, _, _ in older.commits if b == "mlz/github-plan"])
+        self.assertIn("which has no approval input, so it cannot take GitHub Team's way yet; move it to a release with GitHub Team's gate first "
+                      "(mlz upgrade), then run this step again.", "\n".join(self.printed))
         # Back on Enterprise, a repo on Enterprise's way is offered nothing.
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
         github = FakeGitHub(existing=REPOS.values(), files=files)
@@ -1045,18 +1074,60 @@ class InstallTest(unittest.TestCase):
             install.step_repos(github, self.folder, self.out)
         self.assertEqual((github.commits, github.branches), ([], []))
 
-    def test_on_team_the_bootstrap_waits_until_every_pipeline_passes_the_approval(self):
+    def test_on_team_code_owners_are_offered_team_s_way_wherever_github_reads_them(self):
+        self.team()
+        role_caller = install.starter_text((install.CORE / "starter/mlz-platform" / WORKFLOW).read_text(), CORE_COPY)
+        team_caller = install.caller(role_caller, "team")
+        # An adopted repo's own CODEOWNERS at the top: switched there, not added in .github/.
+        files = {(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()}
+        files.update({(r, "CODEOWNERS"): (install.owners.render("acme", "platform"), "sha") for r in REPOS.values()})
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files=files)
+        install.step_repos(github, self.folder, self.out)
+        offered = [files for _, branch, _, files, _ in github.commits if branch == "mlz/github-plan"]
+        self.assertEqual([set(f) for f in offered], [{"CODEOWNERS"}] * 3)
+        self.assertIn("/_generated/  @acme/platform", offered[0]["CODEOWNERS"])
+        # A repo with no CODEOWNERS at all is offered Team's, not Enterprise's.
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files={(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()})
+        install.step_repos(github, self.folder, self.out)
+        added = [files for _, branch, _, files, _ in github.commits if branch == "mlz/code-owners"]
+        self.assertEqual(added[0][".github/CODEOWNERS"], install.owners.render("acme", "platform", "team"))
+        self.assertIn("and `_generated/` too, on GitHub Team, so a person approves each contract", github.pulls[0][4])
+
+    def test_on_team_the_bootstrap_waits_until_team_s_gate_holds_in_every_role_repo(self):
         self.team()
         (self.work).mkdir(parents=True)
+        ready = self.ready("team")
         enterprise_caller = TEAM_CALLER.replace("      approval: pull-request\n", "")
-        behind = FakeGitHub(**self.ready("team", files={("acme/mlz-platform", WORKFLOW): (enterprise_caller, "sha"),
-                                                        **{(r, WORKFLOW): (TEAM_CALLER, "sha") for r in ("acme/mlz-governance", "acme/mlz-vending")}}))
-        terraform = FakeTerraform(self.work)
-        with self.assertRaisesRegex(ConfigError, "the pipeline of acme/mlz-platform does not pass approval: pull-request yet, and this apply "
-                                                 "would take its environment's reviewer away"):
-            install.step_bootstrap(behind, terraform, self.folder, yes=True, out=self.out, wait=lambda _: None)
-        self.assertEqual(terraform.calls, [])  # stopped before Terraform
-        install.step_bootstrap(FakeGitHub(**self.ready("team")), FakeTerraform(self.work), self.folder, yes=True, out=self.out, wait=lambda _: None)
+
+        def refused(github):
+            terraform = FakeTerraform(self.work)
+            with self.assertRaises(ConfigError) as caught:
+                install.step_bootstrap(github, terraform, self.folder, yes=True, out=self.out, wait=lambda _: None)
+            self.assertEqual(terraform.calls, [])  # stopped before Terraform
+            self.assertIn("this apply would take each role environment's reviewer away; Team's gate must hold first in every role repo",
+                          str(caught.exception))
+            return str(caught.exception)
+        # A pipeline not yet passing the approval.
+        files = {**ready["files"], ("acme/mlz-platform", WORKFLOW): (enterprise_caller, "sha")}
+        self.assertIn("acme/mlz-platform: its pipeline does not pass approval: pull-request yet", refused(FakeGitHub(**{**ready, "files": files})))
+        # _generated/ still without an owner, or another team's.
+        files = {**ready["files"], ("acme/mlz-vending", ".github/CODEOWNERS"): (install.owners.render("acme", "platform"), "sha"),
+                 ("acme/mlz-governance", ".github/CODEOWNERS"): ("* @acme/platform\n/_generated/ @acme/other\n", "sha")}
+        found = refused(FakeGitHub(**{**ready, "files": files}))
+        self.assertIn("acme/mlz-vending: its CODEOWNERS has `/_generated/`, but on GitHub Team /_generated/ has @acme/platform as owner", found)
+        self.assertIn("acme/mlz-governance: its CODEOWNERS has `/_generated/ @acme/other`", found)
+        # No code owner's review required, or no planned check.
+        self.assertIn("no active ruleset requires a code owner's review on main", refused(FakeGitHub(**{**ready, "ruleset_review": False})))
+        self.assertIn("no active ruleset requires platform / planned to pass on main", refused(FakeGitHub(**{**ready, "required_check": True})))
+        # The platform team without write access, or GitHub unable to read CODEOWNERS: no code owner would decide.
+        self.assertIn("acme/platform cannot write to it, so it cannot be its code owner", refused(FakeGitHub(**{**ready, "writers": ()})))
+        unknown = {r: [{"kind": "Unknown owner", "line": 4, "message": "Unknown owner on line 4"}] for r in REPOS.values()}
+        self.assertIn("line 4: Unknown owner on line 4", refused(FakeGitHub(**{**ready, "owner_errors": unknown})))
+        # A default branch other than main, from which nothing deploys.
+        self.assertIn("its default branch is develop, but MLZ deploys from main", refused(FakeGitHub(**{**ready, "existing_branch": "develop"})))
+        # Every gate in place: the apply goes on.
+        install.step_bootstrap(FakeGitHub(**ready), FakeTerraform(self.work), self.folder, yes=True, out=self.out, wait=lambda _: None)
+
     def test_the_approval_is_read_from_the_with_of_the_job_that_calls_mlz_core(self):
         approval_of = install.approval_of
         self.assertEqual(approval_of(TEAM_CALLER), "pull-request")

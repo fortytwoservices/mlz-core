@@ -164,6 +164,8 @@ class UpgradeTest(unittest.TestCase):
         from mlz import upgrade as module
         team = module.caller(caller("governance", "v0.1.6"), "team")
         github = FakeGitHub(team, {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        role_yml = (STARTERS.parent / ".github/workflows/role.yml").read_text()  # this release's, with the approval input
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.7")] = (role_yml, "sha")
         self.run_upgrade(github)
         written = github.writes[1][4][WORKFLOW]
         self.assertEqual(pin_of(written), (CORE, "v0.1.7"))
@@ -173,6 +175,15 @@ class UpgradeTest(unittest.TestCase):
         self.run_upgrade(github)
         self.assertEqual(module.approval_of(github.writes[1][4][WORKFLOW]), "environment")
         self.assertNotIn("approval", github.writes[1][4][WORKFLOW].split("with:")[1].split("secrets:")[0])
+
+    def test_a_repo_on_github_team_is_not_moved_to_a_release_without_team_s_gate(self):
+        from mlz import upgrade as module
+        team = module.caller(caller("governance", "v0.1.7"), "team")
+        github = FakeGitHub(team, {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.6")] = ("on:\n  workflow_call:\n    inputs:\n      role:\n        type: string\njobs: {}\n", "sha")
+        with self.assertRaisesRegex(ConfigError, "is on GitHub Team's way, and v0.1.6's role.yml has no approval input, so its pipeline could not run there"):
+            self.run_upgrade(github, "v0.1.6")
+        self.assertEqual(github.writes, [])  # nothing pushed
 
     def test_the_caller_for_each_plan_comes_and_goes_byte_for_byte(self):
         from mlz import upgrade as module
@@ -191,6 +202,15 @@ class UpgradeTest(unittest.TestCase):
         elsewhere = enterprise.replace("permissions:\n", "env:\n  approval: keep-me\npermissions:\n", 1)
         self.assertIn("  approval: keep-me\n", module.caller(module.caller(elsewhere, "team"), "enterprise"))
         self.assertEqual(module.caller(module.caller(elsewhere, "team"), "enterprise"), elsewhere)
+        # A pipeline with CRLF line endings switches too, and keeps them.
+        crlf = enterprise.replace("\n", "\r\n")
+        self.assertEqual(module.approval_of(module.caller(crlf, "team")), "pull-request")
+        self.assertNotIn("\n", module.caller(crlf, "team").replace("\r\n", ""))
+        self.assertEqual(module.caller(module.caller(crlf, "team"), "enterprise"), crlf)
+        # A quoted approval key goes too, switched either way, and is never doubled.
+        quoted = module.caller(enterprise, "team").replace("      approval: pull-request", '      "approval": pull-request')
+        self.assertEqual(module.caller(quoted, "enterprise"), enterprise)
+        self.assertEqual(module.caller(quoted, "team").count("approval"), module.caller(enterprise, "team").count("approval"))
         inline = "jobs:\n  platform:\n    uses: o/mlz-core/.github/workflows/role.yml@v1\n    with: {role: platform}\n"
         with self.assertRaisesRegex(ConfigError, "has no with: block"):
             module.caller(inline, "team")
@@ -359,6 +379,19 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
         self.assertEqual(github.writes, [])
         self.assertIn("already open", printed)
+
+    def test_an_open_upgrade_from_before_a_switch_of_plans_is_made_again(self):
+        from mlz import upgrade as module
+        # The repo moved to Team's way after its upgrade was opened, Enterprise's way: the branch is made again.
+        github = FakeGitHub(module.caller(caller("governance", "v0.1.6"), "team"), {"v0.1.6": "", "v0.1.7": ""},
+                            open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.7")] = ((STARTERS.parent / ".github/workflows/role.yml").read_text(), "sha")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
+        url, printed = self.run_upgrade(github)
+        written = [w for w in github.writes if w[0] == "files"]
+        self.assertTrue(written, github.writes)
+        self.assertEqual(module.approval_of(written[0][4][WORKFLOW]), "pull-request")
+        self.assertNotIn("already open", printed)
 
     def test_an_open_upgrade_with_the_wrapper_gets_its_mode_on_a_rerun(self):
         # A run that stopped after the files and before the mode: the rerun finds the pull request and gives the mode.

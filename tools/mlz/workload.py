@@ -27,7 +27,7 @@ from typing import Callable
 
 from . import install, mirror
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER, _with, breaking_changes, demoted, plan_of, releases_between, version
+from .upgrade import RELEASE_PLEASE_MARKER, _with, breaking_changes, demoted, plan_of, releases_between, takes_approval, version
 
 CORE = Path(__file__).resolve().parents[2]
 STARTER = CORE / "starter" / "mlz-workload"
@@ -56,23 +56,43 @@ MLZ_VARIABLE = re.compile(r'^variable\s+"mlz"\s*\{(?P<body>.*?)^\}', re.M | re.S
 
 def caller(workflow: str, plan: str) -> str:
     """A workload repo's pipeline written for the plan: on Team it grants actions: read and passes approval:
-    pull-request; on Enterprise neither. The same text from either plan."""
-    text = workflow.replace(f"    with:\n{TEAM_APPROVAL}", "").replace(TEAM_APPROVAL, "").replace(TEAM_PERMISSION, "")
+    pull-request; on Enterprise neither. The same text from either plan. The pipeline belongs to mlz-core, so any
+    approval input in the calling job's with: (quoted or not, any value) and any actions permission are taken out
+    first, and a with: left empty goes with them."""
+    eol = "\r\n" if "\r\n" in workflow else "\n"
+    lines = workflow.splitlines(keepends=True)
+    permissions = next((n for n, line in enumerate(lines) if re.match(r"^permissions:[ \t]*(#.*)?\r?$", line.rstrip("\n"))), None)
+    if permissions is not None:  # its keys: the indented lines below it, blank lines between them included
+        end = permissions + 1
+        while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
+            end += 1
+        lines[permissions + 1:end] = [line for line in lines[permissions + 1:end] if not re.match(r"^[ \t]+(['\"]?)actions\1[ \t]*:", line)]
+    found = _with([line.rstrip("\r\n") for line in lines])
+    if found and found[2]:
+        raise ConfigError(f"{WORKFLOW} has its with: inline in the job that calls workload.yml; write it as a block, as the starter does, "
+                          "so its approval can be set.")
+    if found:
+        start, end, _ = found
+        block = [line for line in lines[start + 1:end] if not re.match(r"^[ \t]+(['\"]?)approval\1[ \t]*:", line)]
+        lines[start:end] = ([lines[start], *block] if any(line.strip() and not line.lstrip().startswith("#") for line in block) else block)
+    text = "".join(lines)
     if plan == "enterprise":
         return text
-    permissions = re.search(r"^permissions:[ \t]*(#[^\n]*)?\n(?:[ \t]+[^\n]*\n)*", text, re.M)
+    permissions = re.search(r"^permissions:[ \t]*(#[^\n]*)?\r?\n(?:[ \t]+[^\n]*\n)*", text, re.M)
     call = PIN.search(text)
-    found = _with(text.splitlines())
-    if not permissions or not call or (found and found[2]):
+    if not permissions or not call:
         raise ConfigError(f"{WORKFLOW} is not mlz-core's workload pipeline as its starter has it (a permissions: block, the job that calls "
-                          "workload.yml, with: on its own line), so GitHub Team's lines cannot be written into it.")
+                          "workload.yml), so GitHub Team's lines cannot be written into it.")
+    found = _with([line.rstrip("\r\n") for line in text.splitlines(keepends=True)])
     if found:  # a with: of the repo's own: the approval goes into it
-        at = sum(len(line) + 1 for line in text.splitlines()[:found[0] + 1])
-        text = text[:at] + TEAM_APPROVAL + text[at:]
+        at = sum(len(line) for line in text.splitlines(keepends=True)[:found[0] + 1])
+        text = text[:at] + TEAM_APPROVAL.replace("\n", eol) + text[at:]
     else:
+        if "\n" not in text[call.end():]:  # the call is the file's last line, without its line ending
+            text += eol
         at = text.index("\n", call.end()) + 1
-        text = text[:at] + "    with:\n" + TEAM_APPROVAL + text[at:]
-    return text[:permissions.end()] + TEAM_PERMISSION + text[permissions.end():]
+        text = text[:at] + "    with:" + eol + TEAM_APPROVAL.replace("\n", eol) + text[at:]
+    return text[:permissions.end()] + TEAM_PERMISSION.replace("\n", eol) + text[permissions.end():]
 
 
 def plan_wanted(config: dict) -> str:
@@ -219,6 +239,13 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
         # own workflows there need the bypass team too (docs/vending.md).
         wanted.append(install.push_ruleset(team["id"] if team else None, app_id))
     found = {ruleset["name"]: ruleset for ruleset in github.rulesets(repo) if ruleset.get("source_type") == "Repository"}
+    leftover = found.get(install.PUSH_RULESET)
+    if not team_plan and leftover is not None and leftover.get("id") is not None \
+            and same_ruleset(leftover, install.push_ruleset(team["id"] if team else None, app_id)):
+        # Vending's push rule from GitHub Team's way, back on Enterprise: gone, so the team may change .github/ again. One
+        # of the repo's own stays.
+        github.delete_ruleset(repo, leftover["id"])
+        out(f"{repo}: ruleset {install.PUSH_RULESET} removed: on GitHub Enterprise the team may change .github/ again")
     for ruleset in wanted:
         if ruleset["name"] not in found:
             github.add_ruleset(repo, ruleset)
@@ -231,7 +258,15 @@ def protect(github, repo: str, config: dict, app_id: int | None, out: Callable[[
                                "to date with main, before any merge into main; nobody but the MLZ App may bypass it, for its commits of the landing "
                                "zone's values"))
         elif not same_ruleset(found[ruleset["name"]], ruleset):
-            out(f"{repo}: has a ruleset named {ruleset['name']} that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)")
+            # main-checks as vending made it for the other plan moves to this plan's (decision 2: workload / planned on Team);
+            # any other ruleset of that name is the repo's own, and stays.
+            other = install.checks_ruleset("workload", app_id, CHECK, None if team_plan else TEAM_CHECKS)
+            if ruleset["name"] == install.CHECKS_RULESET and same_ruleset(found[ruleset["name"]], other) and found[ruleset["name"]].get("id") is not None:
+                github.update_ruleset(repo, found[ruleset["name"]]["id"], ruleset)
+                out(f"{repo}: ruleset {install.CHECKS_RULESET} now requires {' and '.join([CHECK, *(TEAM_CHECKS if team_plan else [])])}, "
+                    f"GitHub {plan_wanted(config).capitalize()}'s checks")
+            else:
+                out(f"{repo}: has a ruleset named {ruleset['name']} that is not the one vending makes; left as it is (docs/vending.md, Its rule on main)")
 
 
 def same_ruleset(found: dict, wanted: dict) -> bool:
@@ -296,14 +331,25 @@ def offer_plan(github, repo: str, plan: str, out: Callable[[str], None] = print)
     the push rule on .github/ lets through."""
     head = github.head(repo, BRANCH)
     workflow, _ = github.file(repo, WORKFLOW, head)
-    if workflow is None or not PIN.search(workflow) or caller(workflow, plan) == workflow:
-        return None
     latest = github.latest_pull(repo, PLAN_BRANCH)
+    wanted = caller(workflow, plan) if workflow is not None and PIN.search(workflow) else None
     if latest and latest["state"] == "open":
-        out(f"::notice::{repo}: its pipeline waits for its team to merge GitHub {plan.capitalize()}'s way: {latest['html_url']}")
-        return latest["html_url"]
+        if wanted not in (None, workflow) and github.file(repo, WORKFLOW, latest["head"]["sha"])[0] == wanted:
+            out(f"::notice::{repo}: its pipeline waits for its team to merge GitHub {plan.capitalize()}'s way: {latest['html_url']}")
+            return latest["html_url"]
+        # An earlier proposal for another pipeline (the plan changed since, or main did): closed, and offered again below if needed.
+        github.close_pulls(repo, PLAN_BRANCH, f"Closed by mlz-core's vending: the organization's GitHub plan is {plan} now, and this pull "
+                                              "request no longer holds that plan's pipeline.")
+    if wanted in (None, workflow):
+        return None
+    pinned = PIN.search(workflow)
+    if plan == "team" and not takes_approval(github.file(pinned["core"], ".github/workflows/workload.yml", pinned["ref"])[0]):
+        # Its pipeline would not start with approval: the upgrade pull request comes first.
+        out(f"::notice::{repo}: its pipeline calls workload.yml at {pinned['ref']}, which takes no approval input, so GitHub Team's way waits "
+            "until its team merges the upgrade to a release that has it.")
+        return None
     title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
-    github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, BRANCH, at=head), {WORKFLOW: caller(workflow, plan)}, title)
+    github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, BRANCH, at=head), {WORKFLOW: wanted}, title)
     url = github.create_pull(repo, PLAN_BRANCH, BRANCH, title,
                              f"From mlz-core's vending: the organization's GitHub plan is `{plan}` (governance's contract), and this repo's pipeline "
                              f"is the other plan's. This writes `{WORKFLOW}` {plan}'s way" + (": it passes `approval: pull-request`, so the approval "
