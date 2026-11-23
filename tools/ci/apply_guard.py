@@ -27,8 +27,9 @@ GO, REFUSE, STAND_DOWN = 0, 1, 2
 # variables (docs/pipelines.md, Approval on GitHub Team).
 UNGATED = ("::error::This apply's environment says MLZ_APPROVAL: pull-request (GitHub Team, no reviewer), and this repo's pipeline does not "
            "pass approval: pull-request (.github/workflows/mlz.yml): nothing would gate this apply. Nothing is applied. On Team, the pipeline "
-           "must pass it (mlz upgrade writes it). On Enterprise, delete the repository variable MLZ_APPROVAL: it belongs on the environment, "
-           "and only on Team.")
+           "must pass it (mlz upgrade writes it). On Enterprise, give the environment its reviewer back first, and only then remove its variable "
+           "MLZ_APPROVAL (docs/bootstrap.md, Switching plans); remove a repository variable MLZ_APPROVAL too, if there is one: it is never the "
+           "switch.")
 
 
 def work() -> Path:
