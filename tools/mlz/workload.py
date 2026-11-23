@@ -101,6 +101,8 @@ def caller(workflow: str, plan: str) -> str:
             text += eol
         at = text.index("\n", call.end()) + 1
         text = text[:at] + uses_indent + "with:" + eol + uses_indent + step + TEAM_APPROVAL.strip() + eol + text[at:]
+    # Found again in the text as it is now: permissions: may come after jobs:, below the lines just added.
+    permissions = re.search(r"^permissions:[ \t]*(#[^\n]*)?\r?\n(?:[ \t]+[^\n]*\n)*", text, re.M)
     return text[:permissions.end()] + step + TEAM_PERMISSION.strip() + eol + text[permissions.end():]
 
 
