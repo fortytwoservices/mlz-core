@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.0](https://github.com/fortytwoservices/mlz-core/compare/v0.14.0...v0.15.0) (2026-11-23)
+
+
+### ⚠ BREAKING CHANGES
+
+* **vending:** a landing zone's region is region, not location, as every other region setting is; location is refused with the new name. An existing deployment renames location: to region: in its vending repo (defaults/landing-zone-defaults.yaml, and any workload-defaults.yaml or landing zone file that sets it), on the pull request that upgrades it to this release, since this release refuses location and the one before refused region; nothing in Azure changes. In a workload repo var.mlz.location becomes var.mlz.region (the region's name, norwayeast) and var.mlz.region becomes var.mlz.region_code (its code, nwe). Vending writes the new values at once, so a workload repo's plan fails until its team merges the upgrade pull request vending offers, which moves variables.tf; the team also changes its own Terraform that reads those keys, and moves any pin of mlz-core's naming module to this release (an older one stops at its check). A name a team built from var.mlz.region gets the region's full name after the upgrade, and Terraform plans to replace that resource: build it from var.mlz.region_code.
+
+### Features
+
+* **vending:** region, not location, in a landing zone's settings ([#146](https://github.com/fortytwoservices/mlz-core/issues/146)) ([caa5803](https://github.com/fortytwoservices/mlz-core/commit/caa5803ea4d67539ae57d4d704cff52213df7545))
+
 ## [0.14.0](https://github.com/fortytwoservices/mlz-core/compare/v0.13.0...v0.14.0) (2026-11-23)
 
 
