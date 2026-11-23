@@ -15,7 +15,7 @@
     },
     "root_display_name": {
       "type": "string",
-      "description": "The top management group's display name."
+      "description": "The top management group's display name. mlz install bootstrap applies it, not the pipeline: after a change, run the bootstrap again (docs/bootstrap.md, Running it again); the pipeline's plan shows only the ALZ module's time_sleep."
     },
     "primary_region": {
       "type": "string",
@@ -29,7 +29,7 @@
     },
     "parent_management_group_id": {
       "type": "string",
-      "description": "An existing management group to build the tree below, instead of the tenant root."
+      "description": "An existing management group to build the tree below, instead of the tenant root. mlz install bootstrap applies it, not the pipeline: after a change, run the bootstrap again (docs/bootstrap.md, Running it again); the pipeline's plan shows only the ALZ module's time_sleep."
     },
     "subscriptions": {
       "description": "The platform subscriptions, each moved into the management group of the same name. management and connectivity are required.",

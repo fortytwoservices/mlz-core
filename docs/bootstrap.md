@@ -533,6 +533,12 @@ It makes the networks' resource groups, registers `Microsoft.Network` in their s
 platform's identities their rights there. Without it, the platform's `management` or `identity` apply fails
 for lack of rights.
 
+Run it again, too, after `root_display_name` or `parent_management_group_id` changed in `governance.yaml`. The top
+group is the bootstrap's, so its plan renames or moves it, and nothing else does. Governance marks the top group as
+existing, and the ALZ module leaves an existing group as it is. Governance's plan of the change therefore shows only
+`module.alz.time_sleep.after_management_groups` replaced, a wait whose trigger is a hash of the groups and their
+names, and Azure keeps the old name or place until the bootstrap runs.
+
 Run it again after the platform's first apply, too, for the state account's private endpoint: it needs
 management's network and the hub's blob zone, which that apply builds. The step says which it found: the
 endpoint in place, or still waiting. The private runners reach the state only through it.

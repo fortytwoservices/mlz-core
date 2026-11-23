@@ -20,7 +20,10 @@ library and a per-customer rendering step.
    dependency of `governance/lib`), Fortytwo's (`governance/lib`), and the rendered one. It calls the ALZ
    module with telemetry off.
 4. The top group, `<root>`, comes from the bootstrap (`docs/bootstrap.md`); governance marks it as
-   existing and builds everything below it, so its pipeline never needs rights at the tenant root.
+   existing and builds everything below it, so its pipeline never needs rights at the tenant root. Its display name
+   and its place (`root_display_name`, `parent_management_group_id`) therefore change only when `mlz install
+   bootstrap` runs again ([bootstrap](bootstrap.md#running-it-again)); the pipeline's plan of such a change shows only
+   the ALZ module's `time_sleep`.
 
 ## Where a value comes from
 
