@@ -53,12 +53,12 @@ def rules(text: str) -> list[list[str]]:
     return [rule for rule in found if rule]
 
 
-def offline_problems(folder: Path, org: str | None = None, team: str | None = None, plan: str | None = None) -> list[str]:
+def offline_problems(folder: Path, org: str | None = None, team: str | None = None) -> list[str]:
     """What makes the repo's CODEOWNERS other than the installer's: one owner, a team, for everything, and _generated/
     with no owner (Enterprise) or that same team (Team). The file GitHub reads, the first of LOCATIONS there, so an
     adopted repo's own CODEOWNERS at the top or in docs/ is checked too. With org and team (in the governance repo,
-    from bootstrap.yaml), that team, and with plan its form of _generated/; without, either form. A repo without one
-    has none: mlz install repos offers it, and mlz install check says so."""
+    from bootstrap.yaml), that team. Either form of _generated/ passes here: the plan's is mlz install check's to
+    enforce. A repo without one has none: mlz install repos offers it, and mlz install check says so."""
     path = next((folder / location for location in LOCATIONS if (folder / location).is_file()), None)
     if path is None:
         return []
@@ -73,10 +73,6 @@ def offline_problems(folder: Path, org: str | None = None, team: str | None = No
                 + " Its rules: " + "; ".join(f"`{' '.join(rule)}`" for rule in found)]
     if org and team and owner.lower() != f"@{org}/{team}".lower():
         return [f"{path.relative_to(folder)} names {owner} as the owner, but bootstrap.yaml's platform team is @{org}/{team}."]
-    if plan and (len(found[1]) > 1) != (plan == "team"):
-        return [f"{path.relative_to(folder)} gives `/_generated/` {'an owner' if len(found[1]) > 1 else 'no owner'}, but bootstrap.yaml's github.plan is "
-                f"{plan}, where it has {'the platform team, so a person approves each contract' if plan == 'team' else 'none'}. "
-                "mlz install repos offers the change (docs/bootstrap.md, Switching plans)."]
     return []
 
 

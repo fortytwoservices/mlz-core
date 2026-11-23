@@ -148,7 +148,7 @@ def caller(workflow: str, plan: str) -> str:
         raise ConfigError(f"{WORKFLOW} has no with: block in the job that calls mlz-core's role.yml, so its approval cannot be set; "
                           "write it as the starter has it (with: on its own line, role: under it).")
     start, end, _ = found
-    block = [line for line in lines[start + 1:end] if not re.match(r"^[ \t]+approval:", line)]
+    block = [line for line in lines[start + 1:end] if not re.match(r"^[ \t]+(['\"]?)approval\1[ \t]*:", line)]
     if plan == "team":
         at = next((n + 1 for n, line in enumerate(block) if re.match(r"^[ \t]+role:", line)), len(block))
         indent = re.match(r"^[ \t]*", block[at - 1] if at else lines[start])[0] if at else re.match(r"^[ \t]*", lines[start])[0] + "  "
@@ -352,6 +352,14 @@ def upgrade(github, repo: str, target: str | None = None, dry_run: bool = False,
         raise ConfigError(f"{target} cannot run from {core}: releases before {mirror.FIRST_RELEASE} read mlz-core's code without a token, "
                           f"so not from a private copy. Choose {mirror.FIRST_RELEASE} or later, or move the repo back onto mlz-core "
                           f"itself with --core {mirror.UPSTREAM}.")
+    if plan_of(current_text) == "team":
+        # A repo on GitHub Team passes approval: pull-request, which a release from before Team's gate does not take: its
+        # call would fail at the start of every run, so nothing would be checked or applied.
+        role_yml = github.file(source, ".github/workflows/role.yml", target)[0] or ""
+        if not re.search(r"^[ \t]+approval:", role_yml.split("\njobs:", 1)[0], re.M):
+            raise ConfigError(f"{repo} is on GitHub Team's way, and {target}'s role.yml has no approval input, so its pipeline could not run "
+                              "there. Choose a release with GitHub Team's gate, or move the repo to Enterprise's way first "
+                              "(docs/bootstrap.md, Switching plans).")
     if current == target and called == core:
         # A repo on its release already: the copy is still made to hold it, which a tag that never arrived would
         # keep the runner group from admitting.

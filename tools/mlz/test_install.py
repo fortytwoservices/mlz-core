@@ -1045,6 +1045,25 @@ class InstallTest(unittest.TestCase):
             install.step_repos(github, self.folder, self.out)
         self.assertEqual((github.commits, github.branches), ([], []))
 
+    def test_on_team_code_owners_are_offered_team_s_way_wherever_github_reads_them(self):
+        self.team()
+        role_caller = install.starter_text((install.CORE / "starter/mlz-platform" / WORKFLOW).read_text(), CORE_COPY)
+        team_caller = install.caller(role_caller, "team")
+        # An adopted repo's own CODEOWNERS at the top: switched there, not added in .github/.
+        files = {(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()}
+        files.update({(r, "CODEOWNERS"): (install.owners.render("acme", "platform"), "sha") for r in REPOS.values()})
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files=files)
+        install.step_repos(github, self.folder, self.out)
+        offered = [files for _, branch, _, files, _ in github.commits if branch == "mlz/github-plan"]
+        self.assertEqual([set(f) for f in offered], [{"CODEOWNERS"}] * 3)
+        self.assertIn("/_generated/  @acme/platform", offered[0]["CODEOWNERS"])
+        # A repo with no CODEOWNERS at all is offered Team's, not Enterprise's.
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files={(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()})
+        install.step_repos(github, self.folder, self.out)
+        added = [files for _, branch, _, files, _ in github.commits if branch == "mlz/code-owners"]
+        self.assertEqual(added[0][".github/CODEOWNERS"], install.owners.render("acme", "platform", "team"))
+        self.assertIn("and `_generated/` too, on GitHub Team, so a person approves each contract", github.pulls[0][4])
+
     def test_on_team_the_bootstrap_waits_until_every_pipeline_passes_the_approval(self):
         self.team()
         (self.work).mkdir(parents=True)

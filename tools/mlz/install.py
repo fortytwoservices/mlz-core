@@ -402,10 +402,11 @@ def offer_plan(github, repo: str, branch: str, org: str, team: str, plan: str, o
     workflow = github.file(repo, WORKFLOW, branch)[0]
     if workflow is not None and caller(workflow, plan) != workflow:
         changes[WORKFLOW] = caller(workflow, plan)
+    # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/).
     location = next((path for path in owners.LOCATIONS if github.file(repo, path, branch)[0] is not None), None)
-    owned = owners.generated_owned(github.file(repo, location, branch)[0]) if location == owners.PATH else None
+    owned = owners.generated_owned(github.file(repo, location, branch)[0]) if location else None
     if owned is not None and owned != (plan == "team"):  # a file without the installer's rule for _generated/ is the check's to name
-        changes[owners.PATH] = owners.render(org, team, plan)
+        changes[location] = owners.render(org, team, plan)
     if not changes:
         return
     title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
@@ -524,11 +525,13 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
                 url = github.open_pull(repo, CODE_OWNERS_BRANCH)
                 if not url:
                     refuse_if_pushes_refused(github, repo, [owners.PATH])
+                    plan = github_plan(bootstrap)
                     github.commit_files(repo, CODE_OWNERS_BRANCH, github.reset_branch(repo, CODE_OWNERS_BRANCH, branch),
-                                        {owners.PATH: owners.render(org, team)}, "chore: the platform team as code owner")
+                                        {owners.PATH: owners.render(org, team, plan)}, "chore: the platform team as code owner")
                     url = github.create_pull(repo, CODE_OWNERS_BRANCH, branch, "chore: the platform team as code owner",
-                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` none "
-                                             "(docs/pipelines.md in mlz-core, Code owners).\n")
+                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` "
+                                             + ("none" if plan == "enterprise" else "too, on GitHub Team, so a person approves each contract")
+                                             + " (docs/pipelines.md in mlz-core, Code owners).\n")
                 out(f"{repo}: {owners.PATH} is offered in {url}")
         # A code owner needs write access; one with more (maintain, admin) keeps it.
         if github.team_can_write(org, team, repo):
