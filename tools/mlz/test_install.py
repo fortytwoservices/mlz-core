@@ -106,7 +106,7 @@ class FakeGitHub:
         return self.environment_variables.get((repo, environment, name))
 
     def branch_policies(self, repo, environment):
-        return ["main"] if (self.environments.get(repo) or {}).get("deployment_branch_policy", {}).get("custom_branch_policies") else []
+        return [("main", "branch")] if ((self.environments.get(repo) or {}).get("deployment_branch_policy") or {}).get("custom_branch_policies") else []
 
     def app(self, slug):
         return self.apps.get(slug)
@@ -998,6 +998,11 @@ class InstallTest(unittest.TestCase):
                      "  platform:\n    # approval: pull-request\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n      role: platform\n"
                      "    secrets:\n      approval: pull-request\n")
         self.assertEqual(approval_of(elsewhere), "environment")
+        # A comment inside the with: is not an input, on a line of its own or after a key, and does not hide one after it.
+        block = "jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n"
+        self.assertEqual(approval_of(block + "      # approval: pull-request\n      role: platform\n"), "environment")
+        self.assertEqual(approval_of(block + "      role: platform # approval: pull-request\n"), "environment")
+        self.assertEqual(approval_of(block + "      # approval: environment\n      approval: pull-request\n"), "pull-request")
         self.assertEqual(approval_of("on: push\n"), "environment")
         # The with: may come before uses:, and a workload caller calls workload.yml.
         self.assertEqual(approval_of("jobs:\n  workload:\n    with:\n      approval: pull-request\n    uses: o/mlz-core/.github/workflows/workload.yml@v1\n"),
@@ -1062,10 +1067,21 @@ class InstallTest(unittest.TestCase):
 
         class Wider(FakeGitHub):
             def branch_policies(self, repo, environment):
-                return ["main", "feature/*"]
+                return [("feature/*", "branch"), ("main", "branch")]
         with self.assertRaises(ConfigError) as caught:
             install.step_check(Wider(**self.ready()), self.folder, self.out)
-        self.assertIn("acme/mlz-platform: its environment platform is not limited to main (it accepts main, feature/*)", str(caught.exception))
+        self.assertIn("acme/mlz-platform: its environment platform is not limited to main (it accepts feature/*, main)", str(caught.exception))
+
+        # A tag named main is not the branch main: deployments from main would be refused.
+        class Tag(FakeGitHub):
+            def branch_policies(self, repo, environment):
+                return [("main", "tag")]
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(Tag(**self.ready()), self.folder, self.out)
+        self.assertIn("is not limited to main (it accepts main (a tag))", str(caught.exception))
+        # No pipeline at all: nothing deploys and no check runs, so not ready.
+        self.assertIn("acme/mlz-vending: no .github/workflows/mlz.yml on main, so nothing deploys and no check runs; mlz install repos "
+                      "offers the starter's files", found(half_made=REPOS.values()))
         protected = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}
         self.assertIn("is not limited to main (it accepts any protected branch)", found(environments={r: protected for r in REPOS.values()}))
         # Before the bootstrap there is no environment: said, not refused.
@@ -1714,10 +1730,20 @@ class InstallTest(unittest.TestCase):
         self.printed.clear()
         install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, team)
         self.assertEqual(self.printed, [f"runners: runner group mlz made, for the three repos and {role} only"])
-        # On Team, not without the push ruleset that keeps every other workflow out of the repos.
-        with self.assertRaisesRegex(ConfigError, "on Team only each repo's push ruleset pipeline-files keeps another workflow off the runners, "
-                                                 "where the runner App's key is. Not until it does:\n  acme/mlz-governance: no active push ruleset"):
-            install.self_hosted_group(Unlimited(push_guard=False), "acme", REPOS, CORE_COPY, self.out, team)
+        # On Team, not without the push ruleset that keeps every other workflow out of the repos: seen before anything changes.
+        unguarded = Unlimited(push_guard=False)
+        with self.assertRaisesRegex(ConfigError, "on GitHub Team the runner group mlz may admit any workflow of the three repos, so each repo's "
+                                                 "push ruleset pipeline-files must keep every other workflow out of it first, as only the bypass "
+                                                 "team may pass it. Nothing was changed:\n  acme/mlz-governance: no active push ruleset"):
+            install.self_hosted_group(unguarded, "acme", REPOS, CORE_COPY, self.out, team)
+        self.assertEqual((unguarded.groups, unguarded.calls), ([], []))
+
+        # GitHub keeping another workflow beside role.yml is no limit either: exactly what was asked, or not kept.
+        class Wider(RunnersGitHub):
+            def create_runner_group(self, org, body):
+                return super().create_runner_group(org, {**body, "selected_workflows": [*body["selected_workflows"], "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]})
+        with self.assertRaisesRegex(ConfigError, f"is not limited to {role}: GitHub keeps it limited to .*mlz.yml@refs/heads/main instead"):
+            install.self_hosted_group(Wider(), "acme", REPOS, CORE_COPY, self.out)
 
     def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
         self.self_hosted()
