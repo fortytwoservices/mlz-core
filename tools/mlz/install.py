@@ -1393,7 +1393,7 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
         # On Team GitHub may not keep the group's limit to role.yml, and then only each repo's push ruleset keeps another
         # workflow off the runners: seen first, before the group is made or gains a repo.
         guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
-        guards += [problem for repo in repos.values() for problem in other_workflows(github, repo)]
+        guards += [problem for repo in repos.values() for problem in other_workflows(github, repo, core)]
         if guards:
             raise ConfigError("\n  ".join([f"runners: on GitHub Team the runner group {RUNNER} may admit any workflow of the three repos, so "
                                              f"each repo's push ruleset {PUSH_RULESET} must keep every other workflow out of it first, as only "
@@ -1427,37 +1427,43 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     return made
 
 
-def calls_role_alone(pipeline: str | None) -> list[str] | None:
-    """A pipeline's jobs when they are other than one job calling mlz-core's role.yml; None when that is all it has.
-    The keys of its jobs: mapping, at two spaces, up to the next key at the top."""
+def calls_role_alone(pipeline: str | None, core: str) -> list[str] | None:
+    """A pipeline's jobs when they are other than one job calling role.yml in core, the organization's copy of mlz-core,
+    at a release; None when that is all it has. The keys of its jobs: mapping, at two spaces, up to the next key at the
+    top."""
     start = re.search(r"^jobs:[ \t]*(#[^\n]*)?$", pipeline or "", re.M)
     body = re.split(r"^\S", (pipeline or "")[start.end():], maxsplit=1, flags=re.M)[0] if start else ""
     jobs = re.findall(r"^  ([\w-]+):", body, re.M)
-    return None if len(jobs) == 1 and any(CALL.match(line) for line in body.splitlines()) else jobs
+    calls = [line for line in body.splitlines() if CALL.match(line)]
+    try:
+        called, ref = pin_of(calls[0]) if len(calls) == 1 else ("", "")
+    except ConfigError:
+        called, ref = "", ""
+    return None if len(jobs) == 1 and called == core and version(ref) is not None else jobs
 
 
-def other_workflows(github, repo: str) -> list[str]:
+def other_workflows(github, repo: str, core: str) -> list[str]:
     """Workflows a repo has besides its pipeline's one call of role.yml, which pipeline-files does not take away: on the
     default branch, any file in .github/workflows/ but mlz.yml, and any job in mlz.yml but the one that calls role.yml;
     on any other branch, a .github/ that is not the default branch's, file for file (a branch pushed before the ruleset
-    keeps what it had, a workflow main removed since included), but an mlz.yml that only calls role.yml at another
-    release, as a branch from before an upgrade has. On Team, where a runner group may admit every workflow of the repo,
+    keeps what it had, a workflow main removed since included), but an mlz.yml that only calls role.yml in core, the
+    organization's copy of mlz-core, at another release, as a branch from before an upgrade has. On Team, where a runner group may admit every workflow of the repo,
     each could reach the runners."""
     branch = github.default_branch(repo)
     found = [f"{repo}: {path} on {branch} is a workflow besides the pipeline; remove it, or keep the runners off Team's fallback."
              for path in github.folder(repo, ".github/workflows", branch) if path != WORKFLOW]
     pipeline = github.file(repo, WORKFLOW, branch)[0]
-    jobs = calls_role_alone(pipeline) if pipeline is not None else None
+    jobs = calls_role_alone(pipeline, core) if pipeline is not None else None
     if jobs is not None:
-        found.append(f"{repo}: its {WORKFLOW} on {branch} has {', '.join(jobs) or 'no'} job{'s' if len(jobs) != 1 else ''}, not the one that calls "
-                     "mlz-core's role.yml alone; mlz upgrade writes it as it should be.")
+        found.append(f"{repo}: its {WORKFLOW} on {branch} is not one job calling {core}'s role.yml at a release (it has "
+                     f"{', '.join(jobs) or 'no'} job{'s' if len(jobs) != 1 else ''}); mlz upgrade writes it as it should be.")
     tree = {path: github.file(repo, path, branch)[1] for path in github.folder(repo, ".github", branch)}
     for other in github.branch_names(repo):
         if other == branch:
             continue
         theirs = {path: github.file(repo, path, other)[1] for path in github.folder(repo, ".github", other)}
         differ = sorted(path for path in set(tree) | set(theirs) if tree.get(path) != theirs.get(path)
-                        and not (path == WORKFLOW and path in theirs and calls_role_alone(github.file(repo, path, other)[0]) is None))
+                        and not (path == WORKFLOW and path in theirs and calls_role_alone(github.file(repo, path, other)[0], core) is None))
         if differ:
             found.append(f"{repo}: branch {other} has another {', '.join(differ)} than {branch}, which a run from it would use; delete the "
                          "branch if you do not know it, or bring its change through a reviewed pull request.")

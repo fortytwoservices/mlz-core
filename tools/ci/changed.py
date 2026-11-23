@@ -12,6 +12,10 @@ behind it (finding 11). GitHub tells the reviewers itself; this says why, where 
 Reads, for that, GITHUB_EVENT_NAME, GITHUB_SHA, GITHUB_REPOSITORY, GITHUB_RUN_ATTEMPT, RUN_URL, GITHUB_ACTOR,
 GITHUB_EVENT_PATH (the push's head commit, for its first line) and GH_TOKEN (pull-requests: write). None of it can stop
 the apply: the outputs are written first, and any failure after them is a notice.
+
+On GitHub Team (APPROVAL=pull-request) nothing waits: the gate decides before any output is written (approved.py's
+gate, reading with GATE_TOKEN, the MLZ App's), and a refusal fails the job, so nothing applies. A merge that used a
+ruleset's bypass is said on the run's page and, once, on its pull request.
 """
 
 from __future__ import annotations
@@ -24,7 +28,8 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
 
-from ci.gh import Pipeline  # noqa: E402
+from ci import approved  # noqa: E402
+from ci.gh import ConfigError, Pipeline  # noqa: E402
 
 # A contract pull request, by its branch (publish.py, and mlz install publish for the bootstrap's, opened with an
 # engineer's own login). Its merge may be the merge job's or a person's, where a ruleset asks for a review.
@@ -110,15 +115,57 @@ def waiting(role: str, stacks: list[str], github: Pipeline | None = None, say=pr
         say(f"::notice::Could not comment on #{pull['number']} ({error}); the run's page says why it waits.")
 
 
-def main(github: Pipeline | None = None, say=print) -> None:
+def bypassed(verdict: approved.Verdict, github: Pipeline | None, say=print) -> None:
+    """GitHub Team: a merge that used a ruleset's bypass applies with nobody else's approval (decided 23 November 2026); the
+    run's page says so, and one comment on the pull request, on the run's first attempt."""
+    pull, run = verdict.pull or {}, verdict.run or {}
+    note = (f"#{pull.get('number')} was merged by {verdict.bypass} with a ruleset's bypass, without a code owner's approval. Its run's plan applies "
+            f"({run.get('html_url', '')}); GitHub records the bypass under Insights, Rules.")
+    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+        out.write(f"\n**Bypass:** {note}\n")
+    if os.environ.get("GITHUB_RUN_ATTEMPT", "1") != "1":
+        return
+    try:
+        (github or Pipeline()).comment(os.environ["GITHUB_REPOSITORY"], pull["number"], f"{note}\n\n{os.environ.get('RUN_URL', '')}", timeout=DEADLINE)
+    except Exception as error:  # noqa: BLE001: the run's page says it; the apply is never held up by a comment
+        say(f"::notice::Could not comment on #{pull.get('number')} ({error}); the run's page says the merge used the bypass.")
+
+
+def by_pull_request(changed: list[str], unchanged: list[str], github: Pipeline | None, say=print) -> approved.Verdict:
+    """GitHub Team: the gate, before any output is written."""
+    try:
+        verdict = approved.gate(os.environ["ROLE"], changed, Pipeline(token=os.environ.get("GATE_TOKEN") or None), say=say)
+    except ConfigError as error:  # the gate could not ask GitHub: nothing applies
+        say(f"::error::{error}; nothing is applied.")
+        verdict = approved.Verdict(False)
+    with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+        if not verdict.ok:
+            out.write(f"Nothing is applied: the plan of {', '.join(changed)} on main could not be shown to be the one its pull request's run "
+                      "showed, which a code owner approved. The job's log says why, and what to do.\n")
+        else:
+            shown = f", as #{verdict.pull['number']}'s run showed ({verdict.run.get('html_url', '')})" if verdict.pull else ""
+            out.write(f"To apply: {', '.join(changed) or 'nothing'}{shown}. On GitHub Team the pull request's approval is the gate, so nothing "
+                      f"waits. No changes: {', '.join(unchanged) or 'none'}.\n")
+    return verdict
+
+
+def main(github: Pipeline | None = None, say=print) -> int:
     stacks = json.loads(os.environ["STACKS"])
     batch_of = {stack: batch["id"] for batch in json.loads(os.environ["BATCHES"]) for stack in batch["stacks"].split()}
     changed = [stack for stack in stacks if changes(stack)]
     unchanged = [stack for stack in stacks if stack not in changed]
     jobs = [" ".join(changed)] if os.environ["ROLE"] == "platform" and changed else changed
+    team = os.environ.get("APPROVAL") == "pull-request"
+    verdict = by_pull_request(changed, unchanged, github, say) if team else None
+    if verdict is not None and not verdict.ok:
+        return 1
     with open(os.environ["GITHUB_OUTPUT"], "a") as out:
         out.write(f"stacks={json.dumps(jobs)}\n")
         out.write(f"batch_of={json.dumps(batch_of)}\n")
+    if verdict is not None:
+        if verdict.bypass:
+            bypassed(verdict, github, say)
+        return 0
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
         out.write(f"To apply: {', '.join(changed) or 'nothing'}. No changes, so no approval: {', '.join(unchanged) or 'none'}.\n")
     if changed:
@@ -126,8 +173,9 @@ def main(github: Pipeline | None = None, say=print) -> None:
             waiting(os.environ["ROLE"], changed, github, say)
         except Exception as error:  # noqa: BLE001: the outputs are written; nothing here may skip the apply
             say(f"::notice::Could not say why the run waits ({error}); it waits for approval in the {os.environ['ROLE']} environment all the same.")
+    return 0
 
 
 if __name__ == "__main__":
     sys.stdout.reconfigure(line_buffering=True)  # each line reaches the job's log before a subprocess writes there (finding 19)
-    main()
+    sys.exit(main())
