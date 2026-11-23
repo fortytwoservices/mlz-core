@@ -90,10 +90,11 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 |---|---|---|
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main-checks` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
 | `plan` | pull requests, `main`, and daily | One plan per stack the run plans ([below](#what-a-run-plans)) (the role's stacks, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
-| `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. With something to apply, the run then waits for a reviewer in the role's environment, and every later push or manual run on `main` queues behind it until it finishes (the daily check has a queue of its own): GitHub notifies the reviewers itself, and the run's page says why it waits (what started it, such as vending's contract merging, and what it applies). When a person's pull request started it, a comment there says so too, once; a contract pull request, a push without a pull request and a manual run get none. |
-| `apply` | `main` | Waits for a reviewer in the role's environment. Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
+| `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. With something to apply, the run then waits for a reviewer in the role's environment, and every later push or manual run on `main` queues behind it until it finishes (the daily check has a queue of its own): GitHub notifies the reviewers itself, and the run's page says why it waits (what started it, such as vending's contract merging, and what it applies). When a person's pull request started it, a comment there says so too, once; a contract pull request, a push without a pull request and a manual run get none. On GitHub Team nothing waits: the stacks go on to `apply` only if their plan is the one the merged pull request's run showed ([Approval on GitHub Team](#approval-on-github-team)). |
+| `apply` | `main` | Waits for a reviewer in the role's environment (on GitHub Team, the environment has none, and `changed` was the gate). Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
-| `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). |
+| `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). Not on GitHub Team, where a code owner approves a contract like any other change. |
+| `planned` | pull requests, GitHub Team only | One check that every plan of the pull request finished and that the last code owner's approval covers the plan; the ruleset `main-checks` requires it there ([Approval on GitHub Team](#approval-on-github-team)). |
 | `workload-repos` | vending's `main`, and daily | After every run in which nothing failed: each workload repo vending made gets mlz-core's workload starter once, and the landing zone's values (`mlz.auto.tfvars.json`) whenever they change, by the MLZ App; a repo whose pipeline is on an older release than vending's is offered a pull request to vending's (`docs/vending.md`, "Its upgrades"); each repo's `main` gets the role repos' rule, which nobody but the MLZ App may bypass ("Its rule on main"). |
 | `decommission` | vending's `main`, and daily | After a landing zone's decommission is applied, offers the pull requests that delete its files: the platform's rules file for it first, then, once its rules are out of Azure, its own file with its range released (`docs/vending.md`). Signs in as vending's plan identity to look at the hubs' firewall policies. A person merges them. |
 | `drift` | daily | Keeps one issue in the repo, "Daily check: Azure differs from main": opened, or commented on, when the check fails, or a stack's plan differs from `main` or did not finish (refused, or stopped before planning); closed by the first daily check that finds every stack as `main` says. An issue of that title opened by a person is left alone. |
@@ -155,9 +156,101 @@ file shows one row, `hubs.norwayeast.firewall.sku_tier`. When every stack is pla
 base to compare with, and the comment has the plan only.
 
 Every stack is planned on the daily check, on a manual run (Actions, mlz, Run workflow), when the pipeline file changed
-(an upgrade to another mlz-core release), when a push brings more than one commit, and when the base does not check
-with this release. A stack whose apply failed is not planned again by the next push that does not touch it: start a
-manual run, which plans every stack, or wait for the daily check, which reports it.
+(an upgrade to another mlz-core release), when `replan.txt` changed, when a push brings more than one commit, and when
+the base does not check with this release. A stack whose apply failed is not planned again by the next push that does
+not touch it: start a manual run, which plans every stack, or wait for the daily check, which reports it. On GitHub
+Team a manual run cannot apply: change `replan.txt` in a pull request instead ([below](#when-the-gate-refuses-replantxt)).
+
+## Approval on GitHub Team
+
+GitHub lets an environment wait for a reviewer in a private repo only on GitHub Enterprise. So on GitHub Team
+(`bootstrap.yaml`'s `github.plan: team`, [bootstrap](bootstrap.md)) no apply waits for a person, and the approval of the
+pull request is the only human gate. The pipeline makes it mean as much as it can: **what applies on `main` is a plan a
+code owner saw and approved, and nothing else.** Nobody looks at the plan of the run on `main` before it applies; it
+applies when it is the approved one, and nothing applies otherwise.
+
+Each repo's `.github/workflows/mlz.yml` says which plan it is on (`approval: pull-request`, which the installer and vending
+write for Team; without it, the Enterprise path runs). It is not a repo variable, which anyone with write access
+may change; a change under `.github/` needs the bypass team ([below](#changes-to-github)).
+
+### Before the merge: `planned`
+
+On Team, the ruleset `main-checks` requires `<role> / planned` beside `<role> / check` (`workload / planned` beside
+`workload / plan` in a workload repo), so no pull request merges before its plan is on it, and none merges with a plan
+nobody approved. The job fails unless every plan of the run finished, and then unless one of these holds:
+
+- the plan changes nothing;
+- no code owner has approved yet: any approval from now on comes after this plan;
+- the last code owner's approval came after this plan was on the pull request;
+- the plan is the one that approval saw: that of the pull request's run on the commit it approved, which had finished
+  before it. So "Update branch" asks for a new approval only when the plan itself changed.
+
+When it fails, it shows how the plan changed: a code owner approves again, and then re-running the failed job lets the
+pull request merge. A code owner is a member of the team `.github/CODEOWNERS` names (in a role repo, the platform team).
+
+The job runs whatever happened before it, since GitHub counts a skipped required check as passed. A run cancelled by a
+newer push, or with a failed plan, leaves it failed on that commit.
+
+### After the merge: the gate
+
+Before anything applies, the run on `main` checks that each stack's plan is the plan the merged pull request's last run
+showed, change for change and value for value (`tools/ci/approved.py`). Nothing applies, and the run says why, when:
+
+- the run is a later attempt of an older run, and its commit is no longer `main`'s head. Planned again, an older commit's
+  plan reads "back to that commit", the same changes as the plan once approved, and would undo what later runs applied.
+  A first attempt is always in order, since runs on `main` queue;
+- no pull request made the commit (a push to `main`, or a manual run of a commit no pull request made);
+- the pull request's last run did not finish with success, or was run again after the merge;
+- that run's plans are not marked as the pull request's own: another pull request's run on the same commit, into
+  another branch, has plans of its own;
+- a stack's plan on `main` differs from the one the pull request's run showed: Azure or the state changed since, or an
+  apply failed half way.
+
+Applies that pass the gate still check, as on Enterprise, that their own plan is the reviewed one and the state has not
+moved since.
+
+### When the gate refuses: `replan.txt`
+
+To plan every stack in a pull request, change `replan.txt` at the repo's top, with one line saying why. Its run plans
+every stack, and once it is approved and merged, `main` applies exactly that plan.
+
+That is the way to apply drift the daily check found, or the rest of an apply that failed half way. A workload repo needs
+none: it plans its one stack whole on every pull request, so any pull request will do.
+
+### Contracts and the bypass team
+
+- **Contracts:** a code owner approves each contract pull request, like any other change. `_generated/` has the
+  platform team as its code owner on Team, and `merge` does not run there.
+- **The bypass team** may still merge a pull request without a code owner's approval, which on Team skips the only
+  person. Its merge applies what the pull request's run showed. The run's page says who merged it with the bypass, and
+  so does one comment on the pull request. GitHub records each bypass under the repo's Insights, Rules.
+
+### Workload repos
+
+The same gate, with three differences:
+
+- **Who approves:** a workflow's token cannot read a team's members, so `planned` counts an approval by anyone with write
+  access but the author, not only the landing zone team's. Vending gives write access to that team and the bypass team.
+- **The values:** the MLZ App's commits of the landing zone's values still reach `main` without a pull request, and apply
+  with no person's approval. The gate accepts such a commit only while a rule on `main` asks for a pull request (vending's
+  ruleset lets nothing but the MLZ App past it), with one parent, changing only the values, the code owners, and the
+  starter's files in the commit that first adds the values.
+- **The bypass:** the job cannot read GitHub's record of a bypass, so a bypass merge is not named on the run's page.
+
+### What it does not catch
+
+- **The mode is held twice:**
+  - the pipeline file's input, which only the bypass team may change in a role repo, and on Team in a workload repo too;
+  - the environment's variable `MLZ_APPROVAL: pull-request`, which the bootstrap and vending set on Team.
+
+  An apply in Enterprise mode whose environment says `pull-request` is refused, since nothing would gate it. That
+  check is against a switch done out of order and against mistakes. It is not proof against a person with write or
+  maintain access, who may change an environment's variables (tested on 23 November).
+- **Removing an environment's reviewer on Enterprise** by hand is not caught by the pipeline. In a workload repo,
+  vending's daily plan shows it as drift.
+- **Switching between the plans:** for the time between two of GitHub's API calls inside the switch's apply, an
+  environment has neither its reviewer nor the variable. Cancel any run waiting for a reviewer, and merge nothing, until
+  the switch has applied ([bootstrap](bootstrap.md)).
 
 ## A plan that deletes a firewall policy is refused
 
@@ -180,6 +273,9 @@ request that updates `_generated/<role>.yaml`. If the contract did not change, n
 request still open from an earlier run is closed: it no longer matches what was deployed. A pull request
 still open with an older contract gets the new one on its branch. Publishing runs even when nothing was
 applied, so a publication that failed is retried by the next run.
+
+On GitHub Team a code owner approves each contract pull request instead, like any other change
+([Approval on GitHub Team](#contracts-and-the-bypass-team)); what follows is GitHub Enterprise's.
 
 The reading repo's run on that pull request merges it once `check` and `plan` have passed on it. A person's
 merge would add no control: the contract says what the other role has already deployed, and the run on
