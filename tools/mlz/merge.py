@@ -2,8 +2,8 @@
 
 Two kinds of combining, with different rules on purpose:
 
-- Chunks: one setting split over several files in a folder (hubs/norwayeast/network.yaml,
-  hubs/norwayeast/firewall.yaml, ...). The result is as if it were one file. Mappings are merged at any
+- Chunks: one setting split over several files in a folder (connectivity/norwayeast/network.yaml,
+  connectivity/norwayeast/firewall.yaml, ...). The result is as if it were one file. Mappings are merged at any
   depth, and two chunks may not set the same value: that is an error naming both files, so splitting a
   file can never silently override something.
 - Layers: a later file refining an earlier one (defaults, then workload, then environment). Mappings are

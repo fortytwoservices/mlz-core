@@ -2,10 +2,10 @@
 
 Each landing zone is four layers, each saying only what differs from the one above:
 
-  landing-zones/_defaults/all.yaml          every landing zone
-  landing-zones/_defaults/<env>.yaml        every landing zone in that environment (optional)
-  landing-zones/<workload>/_workload.yaml   one workload, all its environments
-  landing-zones/<workload>/<env>.yaml       one landing zone: one subscription, one network, one state
+  defaults/landing-zone-defaults.yaml               every landing zone
+  defaults/<env>-defaults.yaml                      every landing zone in that environment (optional)
+  landing-zones/<workload>/workload-defaults.yaml   one workload, all its environments
+  landing-zones/<workload>/<env>.yaml               one landing zone: one subscription, one network, one state
 
 Any of them can be a folder of chunks instead of one file. The landing zone's key is <workload>-<env>.
 Address ranges and subnets are not typed by anyone: the IP allocator writes them to _generated/ip-plan.yaml.
@@ -18,15 +18,57 @@ import re
 from ipaddress import IPv4Network, ip_address
 from pathlib import Path
 
-from .files import preload, read_setting, setting_names, yaml_files
+from . import advanced, naming
+from .files import preload, read_setting, read_yaml, setting_names, yaml_files
 from .merge import ConfigError, layer
 from .yamlout import dump
 
+# The defaults' folder and its files, and the workload's (docs/vending.md).
+DEFAULTS, ALL_DEFAULTS, WORKLOAD_DEFAULTS = "defaults", "landing-zone-defaults", "workload-defaults"
+# No environment may take the name in another file's: <env>-defaults.yaml would be every landing zone's, or the
+# workload's own file would be a landing zone.
+TAKEN_ENVIRONMENTS = (ALL_DEFAULTS.removesuffix("-defaults"), WORKLOAD_DEFAULTS)
 # Tags filled from a landing zone's own settings, and the ones mlz-core sets itself.
 TAG_SETTINGS = {"Owner": "owner", "CostCenter": "cost_center"}
 AUTOMATIC_TAGS = {"Environment": "the file name", "Workload": "the folder name", "ManagedBy": "mlz-core"}
-KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "budget", "network", "github", "tags"}
-SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo"}}
+KEYS = {"owner", "cost_center", "archetype", "location", "subscription", "billing_scope", "budget", "network", "github", "tags", "decommission", "short_name", "names", "advanced"}
+# Where a subscription vending makes is billed (docs/vending.md): an EA enrollment account, or an MCA invoice section.
+# An MPA customer's (CSP) is Fortytwo's Partner Center's to make, not the customer's identities'.
+BILLING_ACCOUNT = r"/providers/Microsoft\.Billing/billingAccounts/[^/]+"
+BILLING_SCOPES = {
+    "EA": re.compile(BILLING_ACCOUNT + r"/enrollmentAccounts/[^/]+"),
+    "MCA": re.compile(BILLING_ACCOUNT + r"/billingProfiles/[^/]+/invoiceSections/[^/]+"),
+    "MPA": re.compile(BILLING_ACCOUNT + r"/customers/[^/]+"),
+}
+# Recorded beside the landing zone's other names: the display name of the subscription vending makes. Its alias,
+# which makes it once and never changes, is the root's and the landing zone's key (subscription_alias).
+SUBSCRIPTION = "subscription"
+ALIAS_LENGTH = 63  # Microsoft.Subscription/aliases, as Azure/avm-ptn-alz-sub-vending documents it
+# What vending names in a landing zone from the customer's template (docs/naming.md), by the config's key: the type,
+# and the purpose that tells apart two of one type. An explicit name under names: in the landing zone's file wins.
+NAMED = {
+    "network_resource_group": ("resource_group", "net"),
+    "identity_resource_group": ("resource_group", "id"),
+    "virtual_network": ("virtual_network", None),
+    "route_table": ("route_table", None),
+    "deploy_identity": ("user_assigned_identity", None),
+    "budget": ("budget", None),
+    # The workload repo's (docs/vending.md): its plan identity, and its Terraform state, in a group of its own that
+    # decommissioning keeps, since the team's resources may outlive the landing zone's.
+    "plan_identity": ("user_assigned_identity", "plan"),
+    "state_resource_group": ("resource_group", "state"),
+    # The landing zone's only storage account, so no purpose: with one, a long customer code, app, environment and
+    # region could pass the 24 characters Azure allows (docs/naming.md). One recorded with it keeps its name.
+    "state_account": ("storage_account", None),
+}
+# Each one's number among the landing zone's own of its type: the {nn} that tells them apart when the type's template
+# has no {purpose} (docs/naming.md, without {purpose}). Fixed, and only ever added to; one not listed is alone of its
+# type, 01. A subnet's NSG takes the lowest number no NSG of the landing zone holds in the record when it is first
+# named (network_security_group_number).
+NUMBERS = {"network_resource_group": 1, "identity_resource_group": 2, "state_resource_group": 3, "deploy_identity": 1, "plan_identity": 2}
+# Recorded beside them: the workload repo vending creates, named by customer.yaml's naming.repository.
+REPOSITORY = "repository"
+SECTIONS = {"budget": {"monthly", "contacts"}, "network": {"size", "subnets"}, "github": {"organization", "repo", "create", "team"}}
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$")
 # 20 at most: the longest name built from one, nsg-<workload>-<env>-<subnet>-<region>, must fit Azure's 80.
 SUBNET_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?$")
@@ -34,6 +76,7 @@ GUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GITHUB_ORGANIZATION = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 GITHUB_REPO = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+GITHUB_TEAM = re.compile(r"^[a-z0-9]([a-z0-9_-]{0,98}[a-z0-9])?$")  # a team's slug, as in its URL
 DEFAULT_SIZE = 24
 # Azure: 50 tags on a resource, of which mlz-core sets five; names up to 512, values up to 256.
 EXTRA_TAGS, TAG_NAME_LENGTH, TAG_VALUE_LENGTH = 45, 512, 256
@@ -45,6 +88,14 @@ IP_PLAN_HEADER = (
     "Nothing here ever moves. A removed landing zone or subnet keeps its block until it is destroyed and\n"
     "released (python3 -m mlz release)."
 )
+NAMES = "_generated/names.yaml"
+NAMES_HEADER = (
+    "The names vending gave each landing zone from the naming template (docs/naming.md), kept as first given.\n"
+    "Written by the IP allocator (python3 -m mlz allocate): do not edit.\n"
+    "A name here stays when the template or a short name changes. To give a landing zone the template's names\n"
+    "again, run python3 -m mlz names --renew <key>; to change one name, set it under names: in its file.\n"
+    "A removed landing zone or subnet keeps its names while it holds its addresses in the IP plan."
+)
 
 
 def landing_zones(repo: Path) -> dict[str, dict]:
@@ -52,13 +103,13 @@ def landing_zones(repo: Path) -> dict[str, dict]:
     root = repo / "landing-zones"
     if not root.is_dir():
         raise ConfigError(f"{root}: no landing-zones folder.")
-    preload(yaml_files(root) + yaml_files(repo / "_generated"))
+    preload(yaml_files(root) + yaml_files(repo / DEFAULTS) + yaml_files(repo / "_generated"))
     read = {}  # each file is read once, however many landing zones share it
 
     def setting(*parts: str) -> tuple[str, dict]:
-        name = "landing-zones/" + "/".join(parts)
+        name = "/".join(parts)
         if name not in read:
-            read[name] = read_setting(root.joinpath(*parts)) or {}
+            read[name] = read_setting(repo.joinpath(*parts)) or {}
         return name, read[name]
 
     found = {}
@@ -67,15 +118,31 @@ def landing_zones(repo: Path) -> dict[str, dict]:
         if not folder.is_dir():
             raise ConfigError(f"{folder}.yaml: a landing zone lives in a folder, landing-zones/<workload>/<env>.yaml.")
         for env in setting_names(folder):
+            if env == WORKLOAD_DEFAULTS:
+                continue
+            if env in TAKEN_ENVIRONMENTS:
+                raise ConfigError(f"landing-zones/{workload}/{env}: {env} cannot be an environment, since {DEFAULTS}/{ALL_DEFAULTS}.yaml "
+                                  f"is every landing zone's defaults; rename the file.")
             key, where = f"{workload}-{env}", f"landing-zones/{workload}/{env}"
             if key in found:
                 raise ConfigError(f"{found[key]['where']} and {where} are both the landing zone {key}; rename one.")
             merged, origins = {}, {}
-            layers = [setting("_defaults", "all"), setting("_defaults", env), setting(workload, "_workload"), setting(workload, env)]
+            layers = [setting(DEFAULTS, ALL_DEFAULTS), setting(DEFAULTS, f"{env}-defaults"),
+                      setting("landing-zones", workload, WORKLOAD_DEFAULTS), setting("landing-zones", workload, env)]
             for name, data in layers:
                 merged = layer(merged, data)
                 record(origins, data, name)
             found[key] = {"workload": workload, "environment": env, "where": where, "settings": merged, "origins": origins, "layers": layers}
+    # Every file in defaults/ is one of the two kinds, for an environment a landing zone's file could have: a
+    # misnamed one would otherwise apply to nothing, unnoticed.
+    def defaults_file(name: str) -> bool:
+        env = name.removesuffix("-defaults")
+        return name == ALL_DEFAULTS or name != env and env not in TAKEN_ENVIRONMENTS and NAME.fullmatch(env) is not None
+
+    stray = [name for name in setting_names(repo / DEFAULTS) if not defaults_file(name)]
+    if stray:
+        raise ConfigError(f"{DEFAULTS}/{stray[0]}: not a defaults file; {DEFAULTS}/ holds {ALL_DEFAULTS}.yaml for every landing zone "
+                          f"and <env>-defaults.yaml for one environment, <env> as a landing zone's file names it (prod, test).")
     return found
 
 
@@ -127,9 +194,40 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
 
     problems += name_problems(key, lz)
     problems += [f"{at(k)}: {k!r} is not a landing zone setting; use {', '.join(sorted(KEYS))}." for k in sorted(set(s) - KEYS, key=str)]
-    for required in ("owner", "cost_center", "archetype", "subscription", "location"):
-        if s.get(required) in (None, ""):
-            problems.append(f"{where}: {required} is required (set it here or in a layer above).")
+    # Sub-vending inputs mlz-core leaves at their defaults (tools/mlz/advanced.py), in any layer, merged as the rest
+    # are; its maps' entries by the keys vending/terraform gives them.
+    subnets = list((wanted_network(lz, []) or (0, {}))[1])
+    budget = s.get("budget") if isinstance(s.get("budget"), dict) else {}
+    advanced.check("landing-zone", where, s.get("advanced"), problems, keys={
+        "virtual_networks": ["spoke"], "virtual_networks.subnets": subnets, "network_security_groups": subnets,
+        "budgets": ["monthly"] if budget.get("monthly") is not None else [], "budgets.notifications": ["actual_80", "forecast_100"]})
+    # One landing zone at a time, in its own file: a layer above would retire every landing zone below it. Every
+    # layer is looked at, since the landing zone's own file setting it too would hide one above.
+    for name, data in lz["layers"][:-1]:
+        if "decommission" in data:
+            problems.append(f"{name}: decommission retires one landing zone, so it goes in that landing zone's own file, {where}.")
+    for name, data in lz["layers"][:-1]:
+        if "names" in data:
+            problems.append(f"{name}: names are one landing zone's own, so they go in that landing zone's file, {where}.")
+    # One short name per workload: a landing zone's file, or a default, setting one would name it apart from the rest.
+    for name, data in lz["layers"]:
+        if "short_name" in data and name != f"landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}":
+            problems.append(f"{name}: short_name is the workload's, so it goes in landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml.")
+    problems += short_name_problems(lz)
+    if "decommission" in s and s["decommission"] is not True:
+        problems.append(f"{at('decommission')}: decommission is true or not there at all, not {s['decommission']!r}.")
+    problems += required_problems(lz)
+    billing = s.get("billing_scope")
+    if billing not in (None, "") and agreement(billing) is None:
+        problems.append(f"{at('billing_scope')}: billing_scope {billing!r} is an EA enrollment account "
+                        "(/providers/Microsoft.Billing/billingAccounts/<id>/enrollmentAccounts/<id>) or an MCA invoice section "
+                        "(.../billingAccounts/<id>/billingProfiles/<id>/invoiceSections/<id>).")
+    elif agreement(billing) == "MPA":
+        problems.append(f"{at('billing_scope')}: a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center, "
+                        "not by vending: make it there, then hand it over with subscription: <id> (docs/vending.md).")
+    if makes_subscription(lz) and len(subscription_alias(governance["root"], key)) > ALIAS_LENGTH:
+        problems.append(f"{where}: the alias vending makes its subscription by, {subscription_alias(governance['root'], key)}, is more than "
+                        f"Azure's {ALIAS_LENGTH} characters; give the workload or the environment a shorter name, or hand a subscription over.")
     for single in ("owner", "archetype", "location", "subscription"):
         if s.get(single) is not None and not isinstance(s[single], str):
             problems.append(f"{at(single)}: {single} is one value, not {s[single]!r}.")
@@ -196,7 +294,19 @@ def check(key: str, lz: dict, governance: dict, platform: dict, problems: list[s
     if repo is not None and not (isinstance(repo, str) and GITHUB_REPO.fullmatch(repo)):
         problems.append(f"{at('github', 'repo')}: github.repo {repo!r} is a repository name in the organization, for example payments-infra.")
     if repo is not None and organization is None:
-        problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in _defaults/all.yaml).")
+        problems.append(f"{at('github', 'repo')}: github.repo needs github.organization (set it once in {DEFAULTS}/{ALL_DEFAULTS}.yaml).")
+    create, team = github.get("create"), github.get("team")
+    if create is not None and not isinstance(create, bool):
+        problems.append(f"{at('github', 'create')}: github.create is true or false, without quotes.")
+    elif create is True and repo is not None:
+        problems.append(f"{at('github', 'create')}: github.repo names an existing repo, which vending never creates; "
+                        "leave out github.repo to have vending create one, or github.create to use that one.")
+    if team is not None and not (isinstance(team, str) and GITHUB_TEAM.fullmatch(team)):
+        problems.append(f"{at('github', 'team')}: github.team {team!r} is a GitHub team's slug, as in its URL, for example payments-devs.")
+    elif team is None and creates_repo(lz):
+        # Every apply needs someone to approve it: in a repo vending makes, the owning team does.
+        problems.append(f"{where}: github.team is needed: the GitHub team that owns the repo vending makes for this landing zone, and approves "
+                        f"its applies. Set it once for the workload, in landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml, or set github.create: false.")
 
 
 def wanted_network(lz: dict, problems: list[str]) -> tuple[int, dict[str, int]] | None:
@@ -251,10 +361,8 @@ def ip_plan(repo: Path) -> dict[str, dict]:
 
 
 def platform_ranges(platform: dict) -> list[IPv4Network]:
-    """Every region's platform range. A contract published before v0.3.0 has only the hub's own range, so
-    a vending repo upgraded before the platform's next contract still reads it."""
-    return [IPv4Network(r) for region in platform["regions"].values()
-            for r in ([region["platform_address_space"]] if "platform_address_space" in region else region.get("hub_range") or [])]
+    """Every region's platform range."""
+    return [IPv4Network(region["platform_address_space"]) for region in platform["regions"].values()]
 
 
 def plan_problems(plan: dict, zones: dict, wanted: dict, platform: dict) -> list[str]:
@@ -332,7 +440,8 @@ def allocate(repo: Path, platform: dict) -> tuple[dict[str, dict], list[str], li
         for name, block in plan.get(key, {}).get("removed_subnets", {}).items():
             length = (wanted[key] or (0, {}))[1].get(name)
             if length is not None and length != block.prefixlen:
-                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back, or release it first (python3 -m mlz release).")
+                problems.append(f"{key}: subnet {name} was removed and still holds {block}; ask for a /{block.prefixlen} to get it back. For a /{length}, "
+                                f"take {name} out of the YAML, free the block once the removed subnet is destroyed (./mlz release --repo . {key}), then ask for it again.")
     problems += plan_problems(plan, zones, wanted, platform)
     if problems:
         raise ConfigError("cannot allocate:\n  " + "\n  ".join(dict.fromkeys(problems)))
@@ -426,11 +535,60 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         check(key, lz, governance, platform, problems)
         wanted[key] = wanted_network(lz, problems)
         if key not in plan:
-            problems.append(f"{key}: no address range yet; run the IP allocator (python3 -m mlz allocate).")
+            problems.append(f"{key}: no address range yet; run the IP allocator (./mlz allocate --repo .).")
         elif wanted[key] and set(plan[key]["subnets"]) != set(wanted[key][1]):
-            problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (python3 -m mlz allocate).")
+            problems.append(f"{key}: its subnets in {IP_PLAN} are not the ones asked for; run the IP allocator (./mlz allocate --repo .).")
     problems += plan_problems(plan, zones, wanted, platform)
-    subscriptions = [str(z["settings"].get("subscription", "")).lower() for z in zones.values()]
+    # One short name per workload: two workloads with the same one would read alike in every name.
+    shorts = {}
+    for lz in zones.values():
+        if isinstance(short_name(lz), str):  # check() reports one that is not
+            shorts.setdefault(short_name(lz), set()).add(lz["workload"])
+    problems += [f"landing-zones: workloads {', '.join(sorted(w))} share the short name {k}; give each its own short_name." for k, w in sorted(shorts.items()) if len(w) > 1]
+    # Nor one of the platform's: a landing zone named hub would name its network as the hub's is named.
+    given = (governance.get("naming") or {}).get("platform") if isinstance(governance.get("naming"), dict) else None
+    parts = {**naming.PLATFORM, **(given if isinstance(given, dict) else {})}
+    problems += [f"landing-zones: workload{'s' if len(w) > 1 else ''} {', '.join(sorted(w))} {'have' if len(w) > 1 else 'has'} the short name {k}, "
+                 f"which names the platform's {part} (customer.yaml's naming.platform); give {'each' if len(w) > 1 else 'it'} another short_name."
+                 for k, w in sorted(shorts.items()) for part, code in parts.items() if code == k]
+    # Names as recorded when first given, under any the landing zone's file sets: the template is not read here,
+    # so a changed one renames nothing until the IP allocator records it for a landing zone (names --renew).
+    recorded, names = recorded_names(repo), {}
+    for key, lz in zones.items():
+        if key not in plan:
+            continue
+        if key not in recorded:
+            problems.append(f"{key}: no names yet; run the IP allocator (./mlz allocate --repo .).")
+            continue
+        names[key], _ = landing_zone_names(key, lz, sorted(plan[key]["subnets"]), recorded[key], None, problems)
+    # One repo per landing zone that vending makes: a name another landing zone has, made or named under github.repo,
+    # would give two landing zones one repo. GitHub ignores case in repo names. Two landing zones may still share an
+    # existing repo they both name.
+    repos: dict[tuple[str, str], list[tuple[str, bool]]] = {}
+    for key, lz in zones.items():
+        github = github_config(lz, names[key]) if key in names else None
+        if github and isinstance(github["organization"], str) and isinstance(github["repo"], str):  # check() reports the rest
+            repos.setdefault((github["organization"].lower(), github["repo"].lower()), []).append((key, github["create"]))
+    problems += [f"landing-zones: {', '.join(k for k, _ in sorted(users))} would share the repo {org}/{repo}, which vending makes for "
+                 f"{', '.join(k for k, made in sorted(users) if made)}; give naming.repository {{app}} and {{env}} apart, or name one under github.repo."
+                 for (org, repo), users in sorted(repos.items()) if len(users) > 1 and any(made for _, made in users)]
+    # The naming values a workload repo vending makes gets in mlz.auto.tfvars.json, for modules/naming.
+    settings = None
+    if any(creates_repo(lz) for lz in zones.values()):
+        try:
+            settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+        except ConfigError as error:
+            problems.append(f"_generated/governance.yaml: {error}")
+    workloads = {}
+    for key, lz in zones.items():
+        if settings is not None and creates_repo(lz) and isinstance(lz["settings"].get("location"), str):
+            try:
+                workloads[key] = {"landing_zone": key,
+                                  "location": lz["settings"]["location"], "app": short_name(lz),
+                                  **naming.helper_values(settings, lz["environment"], lz["settings"]["location"])}
+            except ConfigError as error:
+                problems.append(f"{lz['where']}: its workload repo's values: {error}")
+    subscriptions = [str(z["settings"].get("subscription") or "").lower() for z in zones.values()]
     problems += [f"subscription {s} is used by more than one landing zone." for s in sorted({s for s in subscriptions if s and subscriptions.count(s) > 1})]
     if problems:
         raise ConfigError("landing zone settings are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
@@ -440,20 +598,25 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
         s = lz["settings"]
         region = platform["regions"][s["location"]]
         budget, github = s.get("budget") or {}, s.get("github") or {}
+        tags = {
+            **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
+            "Owner": s["owner"],
+            "CostCenter": str(s["cost_center"]),
+            "Environment": lz["environment"],
+            "Workload": lz["workload"],
+            "ManagedBy": "mlz-core",
+        }
         configs[key] = {
             "key": key,
             "root_id": governance["root"],
-            "subscription_id": s["subscription"].lower(),
-            "management_group_id": governance["archetypes"][s["archetype"]],
+            # Handed over, or made by vending's apply, where the billing scope says (subscription_id null until then).
+            "subscription_id": s["subscription"].lower() if s.get("subscription") else None,
+            "subscription": {"alias": subscription_alias(governance["root"], key), "billing_scope": s["billing_scope"],
+                             "name": names[key][SUBSCRIPTION]} if makes_subscription(lz) else None,
+            # Decommissioned: ALZ's Decommissioned group, where its policies deny new resources.
+            "management_group_id": f"{governance['root']}-decommissioned" if decommissioned(lz) else governance["archetypes"][s["archetype"]],
             "location": s["location"],
-            "tags": {
-                **{str(k): str(v) for k, v in (s.get("tags") or {}).items()},
-                "Owner": s["owner"],
-                "CostCenter": str(s["cost_center"]),
-                "Environment": lz["environment"],
-                "Workload": lz["workload"],
-                "ManagedBy": "mlz-core",
-            },
+            "tags": tags,
             # Budget alerts go to the owner unless contacts are given.
             "budget": {"monthly": budget.get("monthly"), "contacts": budget.get("contacts") or [s["owner"]]},
             "network": {
@@ -463,9 +626,324 @@ def build(repo: Path, governance: dict, platform: dict) -> dict[str, dict]:
                 "dns_servers": region["dns_servers"],
                 "routes": route_table_routes(region.get("spoke_routes") or []),
             },
-            "github": {"organization": github["organization"], "repo": github["repo"]} if github.get("repo") else None,
+            "github": github_config(lz, names[key], governance),
+            "decommission": decommissioned(lz),
+            "names": names[key],
+            # mlz.auto.tfvars.json in the workload repo vending makes (tools/mlz/workload.py, starter/mlz-workload).
+            "workload": {**workloads[key], **workload_facts(names[key], plan[key], region, tags)} if key in workloads else None,
+            # Sub-vending inputs mlz-core leaves alone, checked; only when given, so a landing zone without them is as before.
+            **({"advanced": advanced.clean("landing-zone", s.get("advanced"))} if advanced.clean("landing-zone", s.get("advanced")) else {}),
         }
     return configs
+
+
+# The resource groups vending makes in a landing zone's subscription, by what they hold.
+LANDING_ZONE_GROUPS = {"network": "network_resource_group", "identity": "identity_resource_group", "state": "state_resource_group"}
+
+
+def workload_facts(names: dict, plan: dict, region: dict, tags: dict) -> dict:
+    """What the landing zone's own repo needs to know of it, beside the naming values: its network, by names (a
+    subscription vending makes is never read back, so the repo builds the IDs from the subscription its pipeline
+    signs in to), the tags vending gives what it makes, and the resource groups vending makes, which it owns: anything
+    changed in them, its next apply changes back."""
+    groups = {role: names[key] for role, key in LANDING_ZONE_GROUPS.items()}
+    return {
+        "network": {
+            "resource_group": groups["network"],
+            "virtual_network": names["virtual_network"],
+            "address_space": str(plan["range"]),
+            "subnets": {name: {"name": names["subnet"] % name, "address_prefix": str(block)}
+                        for name, block in plan["subnets"].items()},
+            "dns_servers": region["dns_servers"],
+        },
+        "tags": tags,
+        "resource_groups": groups,
+        "platform_owns": sorted(groups.values()),
+    }
+
+
+def short_name_problems(lz: dict) -> list[str]:
+    """What is wrong with the workload's short name: one it sets, or the workload's own name when it sets none."""
+    s = lz["settings"]
+    if "short_name" in s and not (isinstance(s["short_name"], str) and naming.SHORT.fullmatch(s["short_name"]) and 2 <= len(s["short_name"]) <= 5):
+        return [f"{origin(lz, 'short_name')}: short_name is {s['short_name']!r}; it must be 2 to 5 lower-case letters and digits."]
+    if "short_name" not in s and not (naming.SHORT.fullmatch(lz["workload"]) and 2 <= len(lz["workload"]) <= 5):
+        return [f"landing-zones/{lz['workload']}/{WORKLOAD_DEFAULTS}.yaml: short_name is needed, since the workload's name {lz['workload']!r} "
+                "is not 2 to 5 lower-case letters and digits; it goes in every name of the workload's landing zones (docs/naming.md)."]
+    return []
+
+
+def required_problems(lz: dict) -> list[str]:
+    """The settings every landing zone needs, which the layers alone decide: a subscription handed over, or a
+    billing_scope for vending to make one (docs/vending.md)."""
+    where, s = lz["where"], lz["settings"]
+    found = [f"{where}: {k} is required (set it here or in a layer above)." for k in ("owner", "cost_center", "archetype", "location")
+             if s.get(k) in (None, "")]
+    if s.get("subscription") in (None, "") and s.get("billing_scope") in (None, ""):
+        found.append(f"{where}: subscription is required, or billing_scope for vending to make one (set either here or in a layer above).")
+    return found
+
+
+def agreement(billing_scope: object) -> str | None:
+    """EA, MCA or MPA, by the billing scope's form; None for anything else."""
+    if not isinstance(billing_scope, str):
+        return None
+    return next((name for name, form in BILLING_SCOPES.items() if form.fullmatch(billing_scope)), None)
+
+
+def subscription_alias(root: str, key: str) -> str:
+    """The alias vending makes a landing zone's subscription by: its root and key, unique in the tenant and never
+    changed, so the subscription is made once whatever it is named. Azure keeps an alias after the subscription it made
+    is cancelled: a landing zone of the same key later would get that subscription again (docs/vending.md)."""
+    return f"{root}-{key}"
+
+
+def makes_subscription(lz: dict) -> bool:
+    """Whether vending makes the landing zone's subscription: none handed over, and an EA or MCA billing scope."""
+    s = lz["settings"]
+    return s.get("subscription") in (None, "") and agreement(s.get("billing_scope")) in ("EA", "MCA")
+
+
+def creates_repo(lz: dict) -> bool:
+    """Whether vending makes the landing zone's workload repo: it does for every landing zone once github.organization
+    is set, unless github.repo names an existing one, or github.create is false."""
+    github = lz["settings"].get("github")
+    return isinstance(github, dict) and bool(github.get("organization")) and github.get("repo") is None and github.get("create") is not False
+
+
+def github_config(lz: dict, names: dict, governance: dict | None = None) -> dict | None:
+    """The landing zone's repo for the root: the one vending makes, or the existing one github.repo names; else None.
+    For one vending makes, governance's bypass team too (bootstrap.yaml's), which tools/mlz/workload.py gives its rules,
+    and on GitHub Team its approval, pull-request: its pipeline passes it and its apply environment has no reviewer."""
+    github = lz["settings"].get("github")
+    if not isinstance(github, dict) or not github.get("organization") or (github.get("repo") is None and not creates_repo(lz)):
+        return None  # check() reports a github that is not a group of settings
+    repo = github["repo"] if github.get("repo") is not None else names.get(REPOSITORY)  # '' or false: check() reports it
+    made = creates_repo(lz)
+    return {"organization": github["organization"], "repo": repo, "create": made, "team": github.get("team"),
+            "description": f"Workload repo of landing zone {lz['workload']}-{lz['environment']}, made by mlz-core's vending.",
+            **({"bypass_team": ((governance or {}).get("github") or {}).get("bypass_team")} if made else {}),
+            **({"approval": "pull-request"} if made and ((governance or {}).get("github") or {}).get("plan") == "team" else {})}
+
+
+def short_name(lz: dict) -> str:
+    """The workload's short name in names: short_name, or the workload's own name when it fits."""
+    return lz["settings"].get("short_name") or lz["workload"]
+
+
+def landing_zone_names(key: str, lz: dict, subnets: list[str], kept: dict, settings: naming.Naming | None,
+                       problems: list[str]) -> tuple[dict, dict]:
+    """Every name vending gives in the landing zone, and the record's entry for it (_generated/names.yaml).
+    A name under names: in its file wins; then the one kept in the record; else, given settings, the template's.
+    The entry holds the template's names, kept or new, for whatever has no name of its own. Subnets and peerings,
+    named inside their network, keep their own pattern (docs/naming.md)."""
+    where, s = lz["where"], lz["settings"]
+    explicit = s.get("names")
+    if explicit is not None and not isinstance(explicit, dict):
+        problems.append(f"{where}: names maps each name to set ({', '.join([*NAMED, SUBSCRIPTION, 'network_security_groups'])}) to the name.")
+        explicit = {}
+    explicit = explicit or {}
+    problems += [f"{where}: names.{k} is not a name vending gives; use {', '.join([*NAMED, SUBSCRIPTION, 'network_security_groups'])}."
+                 for k in sorted(set(explicit) - set(NAMED) - {SUBSCRIPTION, "network_security_groups"}, key=str)]
+    nsgs = explicit.get("network_security_groups")
+    nsgs = {} if nsgs is None else nsgs  # only absent or empty means none: false or [] is reported
+    if not isinstance(nsgs, dict):
+        problems.append(f"{where}: names.network_security_groups maps a subnet to its NSG's name.")
+        nsgs = {}
+    problems += [f"{where}: names.network_security_groups.{k} is not one of its subnets ({', '.join(subnets)})." for k in sorted(set(nsgs) - set(subnets), key=str)]
+    app, env = short_name(lz), lz["environment"]
+    # check() says what the short name or the location must be: no name is right without them.
+    fits = isinstance(app, str) and naming.SHORT.fullmatch(app) is not None and 2 <= len(app) <= 5 and isinstance(s.get("location"), str)
+    template = settings is not None and fits
+    entry: dict = {}
+
+    def one(item: str, kind: str, purpose: str | None, given: dict, held: dict, number: int = 1) -> str | None:
+        try:
+            if item in given:
+                if not isinstance(given[item], str):
+                    raise ConfigError(f"{given[item]!r} is not a name")
+                return naming.check(kind, given[item])
+            if item in held:
+                return held[item]
+            if template and env not in settings.environments:  # once, however many names need it
+                problems.append(f"{where}: the environment {env!r} has no short name for names; add it under naming.environments in customer.yaml.")
+            elif template and kind == REPOSITORY:  # a GitHub repo: long names, from naming.repository
+                return naming.repository_name(settings, lz["workload"], env)
+            elif template:
+                return naming.render(settings, kind, app=app, env=env, region=s["location"], purpose=purpose, number=number)
+            elif settings is None and fits:
+                problems.append(f"{key}: {NAMES} has no name for {item} yet; run the IP allocator (./mlz allocate --repo .).")
+            elif settings is not None:  # the template needs both; check() says the same, so the messages are one
+                problems.extend(short_name_problems(lz) or [f"{where}: location is required (set it here or in a layer above)."])
+            return None
+        except ConfigError as error:
+            problems.append(f"{where}: {error}")
+            return None
+
+    names = {}
+    for item, (kind, purpose) in NAMED.items():
+        names[item] = one(item, kind, purpose, explicit, kept, NUMBERS.get(item, 1))
+        if item not in explicit and names[item] is not None:
+            entry[item] = names[item]
+    # The workload repo, when vending makes it (an existing one, github.repo, is the landing zone's own to name).
+    if creates_repo(lz):
+        names[REPOSITORY] = one(REPOSITORY, REPOSITORY, None, {}, kept)
+        if names[REPOSITORY] is not None:
+            entry[REPOSITORY] = names[REPOSITORY]
+    # The subscription, when vending makes it: its display name, recorded like the rest; its alias never changes.
+    if makes_subscription(lz):
+        names[SUBSCRIPTION] = one(SUBSCRIPTION, "subscription", None, explicit, kept)
+        if SUBSCRIPTION not in explicit and names[SUBSCRIPTION] is not None:
+            entry[SUBSCRIPTION] = names[SUBSCRIPTION]
+    held = kept.get("network_security_groups") or {}
+    names["network_security_groups"] = {}
+    # Without {purpose}, a new subnet's NSG takes the lowest number whose name no NSG of the landing zone holds: the
+    # record keeps a removed subnet's while the IP plan holds its block, so a number is never given again while that
+    # NSG may still be there, and a number once recorded never moves.
+    taken = {name.lower() for name in held.values() if isinstance(name, str)} | {name.lower() for name in nsgs.values() if isinstance(name, str)}
+    for subnet in subnets:
+        number = 1
+        if template and subnet not in nsgs and subnet not in held and naming.counts(settings, "network_security_group"):
+            number = next((n for n in range(1, 100) if nsg_name(settings, app, env, s["location"], n).lower() not in taken), 100)
+        names["network_security_groups"][subnet] = one(subnet, "network_security_group", subnet, nsgs, held, number)
+        if names["network_security_groups"][subnet] is not None:
+            taken.add(names["network_security_groups"][subnet].lower())
+        if subnet not in nsgs and names["network_security_groups"][subnet] is not None:
+            entry.setdefault("network_security_groups", {})[subnet] = names["network_security_groups"][subnet]
+    # Two of one type side by side need names apart, which a template without {purpose} would not give: both
+    # resource groups in one subscription, or every NSG in one resource group. Azure ignores case in both.
+    for what, items in (("resource groups", [(n, names[n]) for n in ("network_resource_group", "identity_resource_group", "state_resource_group")]),
+                        ("identities", [(n, names[n]) for n in ("deploy_identity", "plan_identity")]),
+                        ("NSGs", [(f"network_security_groups.{s}", v) for s, v in names["network_security_groups"].items()])):
+        seen: dict[str, str] = {}
+        for item, value in items:
+            if value is not None and value.lower() in seen:
+                problems.append(f"{where}: {seen[value.lower()]} and {item} would both be {value}, and Azure needs its {what} named apart; "
+                                "put {purpose} or {nn} in the template (naming.template, or naming.templates.<type>), or set one under names:.")
+            elif value is not None:
+                seen[value.lower()] = item
+    names["subnet"] = "snet-%s"
+    names["peering_to_hub"], names["peering_from_hub"] = f"peer-{key}-to-hub", f"peer-hub-to-{key}"
+    return names, entry
+
+
+def nsg_name(settings: naming.Naming, app: str, env: str, region: str, number: int) -> str:
+    """A landing zone's NSG name with this number, from a template without {purpose}; "" when the template cannot give
+    one (an unknown environment, say: the name itself then says why)."""
+    try:
+        return naming.render(settings, "network_security_group", app=app, env=env, region=region, number=number)
+    except ConfigError:
+        return ""
+
+
+def recorded_names(repo: Path, source: Path | None = None) -> dict[str, dict]:
+    """_generated/names.yaml, or another copy of it (source): {key: {name: value, network_security_groups: {subnet:
+    value}}}, each checked."""
+    recorded = (read_yaml(source) if source else read_setting(repo / NAMES.removesuffix(".yaml"))) or {}
+    parsed = {}
+    for key, entry in recorded.items():
+        try:
+            if not isinstance(entry, dict) or set(entry) - set(NAMED) - {REPOSITORY, SUBSCRIPTION, "network_security_groups"}:
+                raise ValueError  # the allocator writes {} for a landing zone without names, never null or a list
+            # In the order the allocator writes them, whatever order the file was read in.
+            parsed[str(key)] = {item: naming.check(kind, entry[item]) for item, (kind, _) in NAMED.items() if item in entry}
+            if SUBSCRIPTION in entry:
+                parsed[str(key)][SUBSCRIPTION] = naming.check("subscription", entry[SUBSCRIPTION])
+            if REPOSITORY in entry:
+                if not (isinstance(entry[REPOSITORY], str) and naming.GITHUB_REPOSITORY.fullmatch(entry[REPOSITORY])):
+                    raise ValueError
+                parsed[str(key)][REPOSITORY] = entry[REPOSITORY]
+            if "network_security_groups" in entry:
+                if not isinstance(entry["network_security_groups"], dict) or not entry["network_security_groups"]:
+                    raise ValueError  # the allocator leaves the key out rather than write it empty
+                parsed[str(key)]["network_security_groups"] = {str(subnet): naming.check("network_security_group", value)
+                                                                for subnet, value in sorted(entry["network_security_groups"].items())}
+        except (AttributeError, TypeError, ValueError, ConfigError):
+            raise ConfigError(f"{NAMES}: {key} is not as the IP allocator writes it; restore the file from git.") from None
+    return parsed
+
+
+def flat(entry: dict) -> dict[str, str]:
+    """A record's entry as one level: network_security_groups.<subnet> for each NSG."""
+    return {**{k: v for k, v in entry.items() if k != "network_security_groups"},
+            **{f"network_security_groups.{s}": v for s, v in (entry.get("network_security_groups") or {}).items()}}
+
+
+def give_names(repo: Path, plan: dict[str, dict], governance: dict, renew: set[str] = frozenset(),
+               base: dict[str, dict] | None = None) -> tuple[dict[str, dict], list[str]]:
+    """The names record for every landing zone with a range in plan: what it had, and the template's name for anything
+    new. A landing zone in renew gets the template's names again for everything it has now. base is the record on a pull request's
+    base branch: a name is kept only once it is there, where it can be deployed from, so one this pull request gave
+    on an earlier run follows its YAML as it is now. Returns (record, what changed); fails with every problem when a
+    name cannot be given."""
+    zones, recorded = landing_zones(repo), recorded_names(repo)
+    for key in sorted(renew):
+        if key not in zones:
+            raise ConfigError(f"no landing zone {key}; the landing zones are {', '.join(sorted(zones)) or 'none yet'}.")
+        if key not in plan:
+            raise ConfigError(f"{key} has no address range yet, so no names to renew; the IP allocator gives both on its pull request.")
+    try:
+        # customer.yaml's naming, from governance's contract: null without one, for mlz-core's defaults.
+        settings = naming.settings({"naming": governance.get("naming") or None}, governance["root"])
+    except ConfigError as error:
+        raise ConfigError(f"_generated/governance.yaml: {error}") from None
+    def kept(key: str) -> dict:
+        entry = recorded.get(key, {})
+        if key in renew:  # what it has now gets the template's names; a removed subnet's NSG keeps its own while held
+            removed = plan[key]["removed_subnets"]
+            entry = {"network_security_groups": {subnet: name for subnet, name in (entry.get("network_security_groups") or {}).items() if subnet in removed}}
+        if base is None:
+            return entry
+        on_base = base.get(key, {})
+        return {**{item: value for item, value in entry.items() if (item in NAMED or item in (REPOSITORY, SUBSCRIPTION)) and item in on_base},
+                "network_security_groups": {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items()
+                                            if subnet in (on_base.get("network_security_groups") or {})}}
+
+    # A removed landing zone or subnet keeps its names while it holds its addresses: asked for again, before it
+    # is released, it is the same resource, under the same name.
+    held = held_names({key: kept(key) for key in recorded}, plan)
+    record, changes, problems = {}, [], []
+    for key in sorted(plan):
+        if key not in zones:
+            if key in held:
+                record[key] = held[key]
+            continue
+        before = flat(recorded.get(key, {}))
+        _, record[key] = landing_zone_names(key, zones[key], sorted(plan[key]["subnets"]), held.get(key, {}), settings, problems)
+        removed = {subnet: name for subnet, name in (held.get(key, {}).get("network_security_groups") or {}).items()
+                   if subnet in plan[key]["removed_subnets"]}
+        if removed:
+            record[key]["network_security_groups"] = dict(sorted({**record[key].get("network_security_groups", {}), **removed}.items()))
+        changes += [f"{key}: {item} {value}" if item not in before else f"{key}: {item} {before[item]}, now {value}"
+                    for item, value in flat(record[key]).items() if before.get(item) != value]
+    if problems:
+        raise ConfigError("cannot name:\n  " + "\n  ".join(dict.fromkeys(problems)))
+    return record, changes
+
+
+def held_names(record: dict[str, dict], plan: dict[str, dict]) -> dict[str, dict]:
+    """The record without the names whose addresses are released: a landing zone's while plan holds its range, a
+    subnet's NSG while plan holds its block, given or removed."""
+    held = {}
+    for key, entry in record.items():
+        if key not in plan:
+            continue
+        blocks = set(plan[key]["subnets"]) | set(plan[key]["removed_subnets"])
+        held[key] = {item: value for item, value in entry.items() if item != "network_security_groups"}
+        nsgs = {subnet: value for subnet, value in (entry.get("network_security_groups") or {}).items() if subnet in blocks}
+        if nsgs:
+            held[key]["network_security_groups"] = nsgs
+    return held
+
+
+def render_names(record: dict[str, dict]) -> str:
+    return dump(record, NAMES_HEADER, spaced=True)
+
+
+def decommissioned(lz: dict) -> bool:
+    """decommission: true in the landing zone's file: its plan destroys everything vending made and moves the
+    subscription to Decommissioned. Its range stays held until it is released."""
+    return lz["settings"].get("decommission") is True
 
 
 def route_table_routes(routes: list[dict]) -> dict[str, dict]:

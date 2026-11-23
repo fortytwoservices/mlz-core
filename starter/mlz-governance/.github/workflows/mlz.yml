@@ -20,8 +20,10 @@ permissions:
   contents: read
   id-token: write
   pull-requests: write
+  issues: write # the daily check's drift issue
 
 jobs:
+  # The job's name is in its checks' names: main's ruleset requires governance / check to pass before a merge.
   governance:
     # Runs on main go one at a time, first in first out, so each one plans only after the one before has
     # applied, and the plan a reviewer approves already includes it. Pull requests and the daily drift check
@@ -29,9 +31,9 @@ jobs:
     concurrency:
       group: mlz-main-${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && 'queue' || github.run_id }}
       queue: max
-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.3.0 # x-release-please-version
+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.14.0 # x-release-please-version
     with:
       role: governance
-    # By name: mlz-core is in another organisation, which `secrets: inherit` does not reach.
+    # By name: the one secret role.yml takes, and no other.
     secrets:
       MLZ_RELEASE_APP_PRIVATE_KEY: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}

@@ -9,7 +9,7 @@ library and a per-customer rendering step.
 1. The customer's `customer.yaml` holds only what differs from Fortytwo's defaults
    (`governance/defaults.yaml`). A key that is neither one of governance's settings nor in the defaults
    is refused, so a mistyped key cannot leave its default in place unnoticed.
-2. `governance/scripts/render_library.py` merges the two, checks them, and writes the customer's part of
+2. `python3 -m mlz governance` (`tools/mlz/governance.py`) merges the two, checks them, and writes the customer's part of
    the ALZ library: the management group tree, Fortytwo's archetype overrides and the tag policy
    assignments, plus `config.json` for Terraform. Management group IDs cannot be templated at plan time,
    which is why this step exists.
@@ -18,6 +18,28 @@ library and a per-customer rendering step.
    module with telemetry off.
 4. The top group, `<root>`, comes from the bootstrap (`docs/bootstrap.md`); governance marks it as
    existing and builds everything below it, so its pipeline never needs rights at the tenant root.
+
+## Where a value comes from
+
+`./mlz explain --repo .` in the governance repo shows every setting and where it comes from: `customer.yaml`
+(naming the default it replaces), `governance/defaults.yaml`, or mlz-core's naming defaults; then the names worked
+out for management's resources, and the check `mlz governance` makes. `--inputs` lists every input of the root's
+two module calls, ALZ's and management's, with its class, value and source (`docs/reference/governance.md` has
+them without the values).
+
+## Module inputs mlz-core leaves alone
+
+`customer.yaml`'s `advanced:` sets inputs of governance's two module calls that mlz-core does not set, each under
+the call's name: `alz` (policy assignments to modify, management group role assignments, non-compliance messages,
+...) and `management` (the workspace's retention and daily quota, its network access, Sentinel, a data collection
+rule's options, ...). Anything mlz-core owns is refused with a message that names its owner: `docs/advanced.md`, and
+the inputs it takes on `docs/reference/governance.md`.
+
+```yaml
+advanced:
+  management:
+    retention_in_days: 90
+```
 
 ## What the defaults give (decided by the user, 30 October 2026)
 
@@ -42,8 +64,11 @@ most 24.
 ## Central management and the platform subscriptions
 
 - `az-tf-mlz-management` runs in this root: the Log Analytics workspace, the Azure Monitor Agent's
-  identity and the three data collection rules, in `rg-<root>-management-<region>` in the management
-  subscription. Names come from `modules/naming`, shared by every root.
+  identity and the three data collection rules, in `rg-acme-mgt-pd-nwe-01` in the management subscription:
+  `log-acme-mgt-pd-nwe-01`, `id-acme-mgt-ama-pd-nwe-01`, `dcr-acme-mgt-changetracking-pd-nwe-01` and so on. The
+  names come from `customer.yaml`'s naming template (`docs/naming.md`), worked out by `mlz governance` with
+  `tools/mlz/names.py`, which every root's names come from. So `naming:` is checked on every run, section or
+  not: a root ID that cannot be the customer's code (over four characters, or with a hyphen) needs `naming.org`.
 - The ALZ policies get their IDs as defaults (`log_analytics_workspace_id`, the `ama_*` values,
   `resource_group_location`, `email_security_contact`). The IDs are built from the names, so they are known
   at plan time, and `policy_assignments_dependencies` assigns the policies after the resources exist.
@@ -52,14 +77,20 @@ most 24.
   (its default `actionGroupRoleIds`); a dedicated recipient is a later choice.
 - `customer.yaml` names the platform subscriptions (`subscriptions.management`, `.connectivity`, and
   optionally `.identity` and `.security`); each one is placed in its management group.
-- **Private Link DNS:** the policy's defaults come from the platform's published contract
-  (`platform_contract_file`), not from `customer.yaml`. Until the platform has created the zones, the
-  library's placeholders stay, and the ALZ module grants no rights on zones; the run after the platform
-  publishes its contract grants them. Without this, the first apply fails on 53 role assignments on zones
-  that do not exist yet (met in the canary).
+- **Private Link DNS:** `Deploy-Private-DNS-Zones` points at the zones where the platform makes them,
+  from the first run: the connectivity subscription, `rg-acme-dns-pd-nwe-01` (`tools/mlz/names.py`), the
+  primary region. ALZ would give its identity Network Contributor on each zone, which fails while the zones
+  do not exist yet (53 role assignments, met in the canary) and needed a second governance run after the
+  platform's first. Instead it gets **Private DNS Zone Contributor on the connectivity subscription**, and
+  no role on each zone: a narrower role, over every zone there. The zone parameters it leaves out are in
+  `governance/terraform/private-dns-zone-parameters.json`, every one of the ALZ set's 57; check them again
+  when the ALZ library changes.
 - **Vending's rights:** with the bootstrap's contract (`bootstrap_contract_file`, `_generated/bootstrap.yaml`),
-  governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones and
-  Sandboxes, the groups it creates. Without the contract, no such rights are granted.
+  governance gives vending's apply identity Owner and its plan identity Reader on Landing Zones,
+  Sandboxes and Decommissioned, the groups it creates (a decommissioned landing zone's subscription moves to
+  Decommissioned, and its stack still plans there). Without the contract, no such rights are granted.
+- **Naming:** `customer.yaml`'s `naming:` section (the customer's code, the template, short names) is checked
+  here, where it is written, and published in the contract as written (`docs/naming.md`).
 - `contract` output: what platform and vending read, written as `_generated/governance.yaml` in their repos by `python3 -m mlz contract governance`.
 
 ## Tested

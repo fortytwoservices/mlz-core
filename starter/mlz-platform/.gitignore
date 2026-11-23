@@ -1,0 +1,4 @@
+# JetBrains: the project's own settings stay on each person's machine, but for the YAML schema mappings,
+# which belong to mlz-core (.idea/jsonSchemas.xml).
+/.idea/*
+!/.idea/jsonSchemas.xml

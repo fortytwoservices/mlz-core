@@ -22,8 +22,8 @@ class NewLandingZoneTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
 
     def tearDown(self):
@@ -39,11 +39,11 @@ class NewLandingZoneTest(unittest.TestCase):
 
     def test_a_new_workload_gets_its_required_settings_commented_out(self):
         written = new.landing_zone(self.repo, "billing", "prod", NOTHING)
-        self.assertEqual([p.name for p in written], ["_workload.yaml", "prod.yaml"])
-        workload = self.read("landing-zones/billing/_workload.yaml")
+        self.assertEqual([p.name for p in written], ["workload-defaults.yaml", "prod.yaml"])
+        workload = self.read("landing-zones/billing/workload-defaults.yaml")
         self.assertIn("# owner: team@example.com", workload)
         self.assertIn("# archetype: corp", workload)
-        self.assertNotIn("location", workload)  # _defaults/all.yaml sets it
+        self.assertNotIn("location", workload)  # defaults/landing-zone-defaults.yaml sets it
         env = self.read("landing-zones/billing/prod.yaml")
         self.assertIn("# subscription: 00000000-0000-0000-0000-000000000000", env)
         # Commented out, they read as not set: the check names each one until someone fills it in.
@@ -51,20 +51,41 @@ class NewLandingZoneTest(unittest.TestCase):
         self.assertEqual(lz["settings"], vending.landing_zones(self.repo)["billing-prod"]["settings"])
         self.assertNotIn("owner", lz["settings"])
 
+    def test_a_new_workload_s_short_name(self):
+        # A name that is not 2 to 5 needs one: commented out, the check asks for it.
+        new.landing_zone(self.repo, "billing", "prod", NOTHING)
+        self.assertIn("# short_name: abc", self.read("landing-zones/billing/workload-defaults.yaml"))
+        new.landing_zone(self.repo, "invoicing", "prod", {**NOTHING, "short_name": "inv"})
+        self.assertIn("\nshort_name: inv", self.read("landing-zones/invoicing/workload-defaults.yaml"))
+        # One that fits is its own short name: nothing to write.
+        new.landing_zone(self.repo, "web", "prod", {**NOTHING, "owner": "web@demo.example", "cost_center": "1", "archetype": "corp"})
+        self.assertNotIn("short_name", self.read("landing-zones/web/workload-defaults.yaml"))
+        with self.assertRaisesRegex(ConfigError, "payments is a workload already; its short name is in"):
+            new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "short_name": "pay"})
+
     def test_given_settings_are_written_and_one_a_layer_above_has_is_left_out(self):
         given = {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555", "cost_center": "4711", "archetype": "online"}
         new.landing_zone(self.repo, "payments", "dev", given)
         settings = vending.landing_zones(self.repo)["payments-dev"]["settings"]
         self.assertEqual(settings["subscription"], "55555555-5555-5555-5555-555555555555")
-        self.assertEqual(settings["archetype"], "online")  # given, over corp from _workload.yaml
-        self.assertEqual(settings["cost_center"], "4711")  # from _workload.yaml: the same value is not repeated
+        self.assertEqual(settings["archetype"], "online")  # given, over corp from workload-defaults.yaml
+        self.assertEqual(settings["cost_center"], "4711")  # from workload-defaults.yaml: the same value is not repeated
         self.assertNotIn("cost_center", self.read("landing-zones/payments/dev.yaml"))
-        self.assertFalse((self.repo / "landing-zones/payments/_workload.yaml").read_text() != WORKLOAD)
+        self.assertFalse((self.repo / "landing-zones/payments/workload-defaults.yaml").read_text() != WORKLOAD)
 
     def test_the_subscription_is_always_in_the_landing_zones_own_file(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "subscription: 55555555-5555-5555-5555-555555555555\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "subscription: 55555555-5555-5555-5555-555555555555\n")
         new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555"})
         self.assertIn("\nsubscription: 55555555-5555-5555-5555-555555555555", self.read("landing-zones/payments/dev.yaml"))
+
+    def test_no_subscription_is_asked_for_when_vending_makes_it(self):
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321\n")
+        new.landing_zone(self.repo, "payments", "dev", NOTHING)
+        self.assertNotIn("subscription", self.read("landing-zones/payments/dev.yaml").split("\n", 1)[1])
+        self.assertTrue(vending.makes_subscription(vending.landing_zones(self.repo)["payments-dev"]))
+        # One given is handed over, as ever.
+        new.landing_zone(self.repo, "payments", "test", {**NOTHING, "subscription": "55555555-5555-5555-5555-555555555555"})
+        self.assertIn("\nsubscription: 55555555-5555-5555-5555-555555555555", self.read("landing-zones/payments/test.yaml"))
 
     def test_a_file_written_meanwhile_is_not_written_over(self):
         # Another run wrote the file after this one's checks: the exclusive write refuses, and leaves it as it was.
@@ -80,7 +101,7 @@ class NewLandingZoneTest(unittest.TestCase):
         self.assertEqual(self.read("landing-zones/payments/dev.yaml"), "subscription: theirs\n")
 
     def test_a_cost_center_given_as_text_matches_the_same_number_above(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD.replace("cost_center: '4711'", "cost_center: 4711"))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("cost_center: '4711'", "cost_center: 4711"))
         new.landing_zone(self.repo, "payments", "dev", {**NOTHING, "cost_center": "4711"})
         self.assertNotIn("cost_center", self.read("landing-zones/payments/dev.yaml"))
         new.landing_zone(self.repo, "payments", "test", {**NOTHING, "cost_center": "04711"})  # another tag: written
@@ -98,6 +119,12 @@ class NewLandingZoneTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "is the landing zone payments-api-prod already"):
             new.landing_zone(self.repo, "payments-api", "prod", NOTHING)
 
+    def test_an_environment_named_like_another_file_is_refused(self):
+        for env in ("landing-zone", "workload-defaults"):
+            with self.assertRaisesRegex(ConfigError, f"environment '{env}': that name is taken by workload-defaults.yaml or "
+                                                     "defaults/landing-zone-defaults.yaml"):
+                new.landing_zone(self.repo, "billing", env, NOTHING)
+
     def test_a_name_azure_names_cannot_take_is_refused(self):
         with self.assertRaisesRegex(ConfigError, "workload 'Billing'"):
             new.landing_zone(self.repo, "Billing", "prod", NOTHING)
@@ -110,7 +137,7 @@ class NewLandingZoneTest(unittest.TestCase):
         self.assertIn("mlz new: wrote", out.getvalue())
         self.assertIn("cost_center is required", out.getvalue())
         self.assertNotIn("owner is required", out.getvalue())
-        self.assertIn("owner: billing@demo.example", self.read("landing-zones/billing/_workload.yaml"))
+        self.assertIn("owner: billing@demo.example", self.read("landing-zones/billing/workload-defaults.yaml"))
 
 
 if __name__ == "__main__":

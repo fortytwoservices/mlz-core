@@ -1,62 +1,202 @@
 """Sets a new customer up, step by step; every step can be run again and changes only what is missing.
 
-    python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters
-    python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo
-    python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked
+    python3 -m mlz install repos     --settings <dir>                 the three repos: private, main ruleset, starters,
+                                                                      the platform team as code owner
+    python3 -m mlz install check     --settings <dir>                 the MLZ App's client ID and key in each repo, the
+                                                                      code owners and the rulesets
+    python3 -m mlz install bootstrap --settings <dir> --tenant <id>   bootstrap/terraform, its state moved, subjects checked;
+                                                                      again after the platform's first apply, for the
+                                                                      state account's private endpoint and the
+                                                                      runners' vault
     python3 -m mlz install handover  --settings <dir> --tenant <id>   the platform subscriptions into the top group
     python3 -m mlz install publish   --settings <dir>                 bootstrap.yaml offered to the governance repo
+    python3 -m mlz install runners   --settings <dir> --tenant <id>   the runners in management's network, then the
+             [--app-key <file>]                                       repos moved onto them. Self-hosted: the runner
+                                                                      group, the runner App's key into the vault, and
+                                                                      the bootstrap's apply; GitHub-hosted: GitHub's
+                                                                      side (an owner of the organization; others get
+                                                                      the commands to send)
+    python3 -m mlz install subscriptions --settings <dir> --tenant <id> --billing-scope <scope>
+                                                                      vending's apply identity may make subscriptions
+                                                                      there (a billing owner; others get the command
+                                                                      and the role to send)
 
 <dir> holds the customer's customer.yaml and bootstrap.yaml: a checkout of the governance repo, or for a new
 customer a folder of the two files before the repos exist (repos then commits them to the governance repo).
 Run from an mlz-core checkout (PYTHONPATH=tools), signed in to gh (admin on the customer's repos, workflow
 scope) and, for bootstrap and handover, to the Azure CLI as someone who may create the top group.
 
-The MLZ App itself is made by hand (GitHub needs a browser for that); check says whether it is set.
+The MLZ App and the runner App are made by hand (GitHub needs a browser for that); check says whether the MLZ App is set.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Callable
 
-from . import contract
+from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
+from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import RELEASE_PLEASE_MARKER, WORKFLOW
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, caller, takes_approval, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
 APP_VARIABLE, APP_SECRET = "MLZ_RELEASE_APP_CLIENT_ID", "MLZ_RELEASE_APP_PRIVATE_KEY"
-# Changes reach main only through pull requests; main is never rewritten or deleted (decided 2026-11-11).
-MAIN_RULESET = {
-    "name": "main",
-    "target": "branch",
-    "enforcement": "active",
-    "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
-    "rules": [
-        {"type": "deletion"},
-        {"type": "non_fast_forward"},
-        {"type": "pull_request", "parameters": {
-            "required_approving_review_count": 0,
-            "dismiss_stale_reviews_on_push": False,
-            "require_code_owner_review": False,
-            "require_last_push_approval": False,
-            "required_review_thread_resolution": False,
-        }},
-    ],
-}
+# Changes reach main only through pull requests; main is never rewritten or deleted (decided 2026-11-11). A change to
+# a file with a code owner needs that owner's approval (CODEOWNERS, tools/mlz/owners.py, decided 2026-11-14); a change
+# to one without, such as _generated/, needs none, so the contract pull requests still merge themselves. And none
+# merges until the pipeline's check has passed on it (decided 2026-11-14), so what the check refuses never reaches main:
+# contract pull requests merge themselves only after it has passed anyway. Not the plan, which reaches Azure and can
+# fail for reasons of its own. And strict (decided by the user on 2026-11-15): a pull request merges only once it is
+# up to date with main and checked there, so one checked before a code owner handover merged is checked again against
+# the new owners (tools/mlz/owners.py). A contract another merge left behind is brought up to date by its run, and
+# the run of that merge merges it (tools/ci/merge.py).
+GITHUB_ACTIONS_APP = 15368  # the app that reports workflow jobs' checks, so no other app or token can pass one
+
+
+def required_check(role: str) -> str:
+    """The check GitHub knows the role's check job by: the starter workflow's job, named after the role, then
+    role.yml's own (as the canary's runs showed, 2026-11-14)."""
+    return f"{role} / check"
+
+
+def team_checks(role: str) -> list[str]:
+    """The checks main-checks requires on GitHub Team beside the role's check: role.yml's planned job, which passes once
+    every plan of the pull request finished, so its approval can cover the plan applied (docs/pipelines.md)."""
+    return [f"{role} / planned"]
+
+
+# A branch's run uses the workflow the branch has, with the repo's secrets (the MLZ App's key) and the plan identity's
+# trust, so whoever could change .github/ on a branch could reach both (finding 17, abc, 19 November). This ruleset
+# refuses such a change on every branch, from anyone but the bypass team (decision D9).
+PUSH_RULESET = "pipeline-files"
+
+
+def push_ruleset(team_id: int | None, app_id: int | None = None) -> dict:
+    """pipeline-files: changes under .github/ refused on every branch, but from the bypass team (team_id) and, in a
+    workload repo on GitHub Team, the MLZ App (app_id), which writes that repo's pipeline (tools/mlz/workload.py)."""
+    return {
+        "name": PUSH_RULESET,
+        "target": "push",
+        "enforcement": "active",
+        "bypass_actors": app_bypass(app_id) + ([{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}] if team_id else []),
+        "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [PIPELINE_FILES]}}],
+    }
+
+
+CHECKS_RULESET = "main-checks"
+
+
+def app_bypass(app_id: int | None) -> list[dict]:
+    """The MLZ App as a bypass actor: in a workload repo, its own commits of the landing zone's values go straight to
+    main (tools/mlz/workload.py, decision D14); in a role repo, it alone writes _generated/ (generated_ruleset)."""
+    return [{"actor_id": app_id, "actor_type": "Integration", "bypass_mode": "always"}] if app_id else []
+
+
+# The contracts, the IP plan and the names are trusted inputs: each role plans from the contracts in its repo, and
+# vending gives the team governance's contract names write access to every workload repo after a run with no apply.
+# _generated/ has no code owner, so that its pull requests merge themselves; without this ruleset anyone who may push
+# could change a file there and merge it alone (review S1, 20 November). It refuses a change under _generated/ on
+# every branch from anyone but the MLZ App, which makes every such change in a pipeline, and the bypass team, which
+# runs mlz install publish and, when the pipeline cannot, ./mlz allocate. Not part of pipeline-files: the App must not
+# change .github/. A branch can still be brought up to date with main past it, by "Update branch" or a pushed merge,
+# while a merge commit that changes a file there itself is refused (tested on GitHub on 23 November).
+GENERATED_RULESET = "generated-files"
+GENERATED_FILES = "_generated/**/*"
+
+
+def generated_ruleset(team_id: int, app_id: int) -> dict:
+    return {
+        "name": GENERATED_RULESET,
+        "target": "push",
+        "enforcement": "active",
+        "bypass_actors": app_bypass(app_id) + [{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "always"}],
+        "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [GENERATED_FILES]}}],
+    }
+
+
+def main_ruleset(role: str, team_id: int | None = None, app_id: int | None = None, approvals: int = 0,
+                 dismiss_stale: bool = False) -> dict:
+    """The ruleset main: pull requests only, a code owner's approval, no force push or deletion. The bypass team
+    (team_id) may merge a pull request without the approval, and only a pull request (decision D8): GitHub records each
+    bypass under the repo's Insights, Rules. A bypass covers its whole ruleset, so the check lives in a ruleset of its
+    own (checks_ruleset), which nobody bypasses but, in a workload repo, the MLZ App (app_id). approvals: how many
+    approvals besides the code owner rule, and dismiss_stale whether a push after an approval needs a new one (a workload
+    repo asks both, tools/mlz/workload.py)."""
+    actors = ([{"actor_id": team_id, "actor_type": "Team", "bypass_mode": "pull_request"}] if team_id else []) + app_bypass(app_id)
+    return {
+        "name": "main",
+        "target": "branch",
+        "enforcement": "active",
+        **({"bypass_actors": actors} if actors else {}),
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [
+            {"type": "deletion"},
+            {"type": "non_fast_forward"},
+            {"type": "pull_request", "parameters": {
+                "required_approving_review_count": approvals,
+                "dismiss_stale_reviews_on_push": dismiss_stale,
+                "require_code_owner_review": True,
+                "require_last_push_approval": False,
+                "required_review_thread_resolution": False,
+            }},
+        ],
+    }
+
+
+def checks_ruleset(role: str, app_id: int | None = None, check: str | None = None, more: list[str] | None = None) -> dict:
+    """The ruleset main-checks: the role's check (or check) passed, and on GitHub Team the more checks too (team_checks),
+    on a branch up to date with main, before any merge into main, the bypass team's included. No bypass actor but, in a
+    workload repo, the MLZ App (app_id)."""
+    return {
+        "name": CHECKS_RULESET,
+        "target": "branch",
+        "enforcement": "active",
+        **({"bypass_actors": app_bypass(app_id)} if app_id else {}),
+        "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}},
+        "rules": [
+            {"type": "required_status_checks", "parameters": {
+                "strict_required_status_checks_policy": True,
+                "required_status_checks": [{"context": context, "integration_id": GITHUB_ACTIONS_APP}
+                                           for context in [check or required_check(role), *(more or [])]],
+            }},
+        ],
+    }
 # bootstrap.yaml's settings, read by the bootstrap and by this script. Anything else is refused.
-BOOTSTRAP_SETTINGS = ("github", "state_operators")
-GITHUB_SETTINGS = ("organization", "repositories", "reviewers")
+BOOTSTRAP_SETTINGS = ("github", "state_operators", "names")
+GITHUB_SETTINGS = ("organization", "plan", "app", "repositories", "platform_team", "bypass_team", "reviewers", "runners")
+# bootstrap.yaml's github.plan: the organization's GitHub plan, which decides who approves an apply (docs/bootstrap.md,
+# GitHub plan). enterprise, the default: a reviewer in the apply's environment, which GitHub allows in a private repo only
+# on Enterprise. team: the pull request's approval, which then covers the plan that is applied (docs/pipelines.md). Each
+# repo's pipeline passes it to mlz-core's workflow as its approval: environment, or pull-request.
+GITHUB_PLANS = {"enterprise": "environment", "team": "pull-request"}
+# On Team, the environment variable that says an environment has no reviewer, so that an apply whose pipeline still
+# expects one refuses (a check against a switch done out of order, and against mistakes; docs/bootstrap.md).
+APPROVAL_VARIABLE = "MLZ_APPROVAL"
+# bootstrap.yaml's github.runners: where the pipelines' Azure jobs run (mlz install runners). Self-hosted by default:
+# a scale set of Fortytwo's runner image in management's network; GitHub-hosted, GitHub's runners joined to it.
+RUNNER_SETTINGS = ("kind", "size", "instances", "app_client_id", "image")
+RUNNER_KINDS = {"self-hosted": "Standard_D2ds_v6", "github-hosted": "2-core"}  # each kind's default size
+RUNNER_INSTANCES = 1
+# As many as snet-runners holds: one address each, of a /26 less the five Azure keeps (tools/mlz/platform.py).
+MAXIMUM_INSTANCES = 2 ** (32 - platform.NETWORKS["management"][1]["runners"][1]) - 5
+CODE_OWNERS_BRANCH = "mlz/code-owners"
 CONTRACT_PATH, CONTRACT_BRANCH = "_generated/bootstrap.yaml", "mlz/bootstrap-contract"
 STARTER_BRANCH = "mlz/starter"
+EXECUTABLE_BRANCH = "mlz/executable"  # the pull request that makes ./mlz executable, when a run stopped before it did
 
 
 def settings(folder: Path) -> tuple[dict, dict]:
@@ -69,16 +209,146 @@ def settings(folder: Path) -> tuple[dict, dict]:
     unknown = [str(k) for k in bootstrap if k not in BOOTSTRAP_SETTINGS]
     unknown += [f"github.{k}" for k in github if k not in GITHUB_SETTINGS] if isinstance(github, dict) else []
     if unknown:
-        raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}) and state_operators.")
+        raise ConfigError(f"bootstrap.yaml: {', '.join(unknown)} is not a setting; it takes github ({', '.join(GITHUB_SETTINGS)}), state_operators and names.")
+    github_plan(bootstrap)
     return customer, bootstrap
 
 
+def github_plan(bootstrap: dict) -> str:
+    """bootstrap.yaml's github.plan, enterprise unless set; ConfigError for another value, and for reviewers on Team."""
+    github = bootstrap.get("github") or {}
+    plan = github.get("plan", "enterprise")
+    if not isinstance(plan, str) or plan not in GITHUB_PLANS:
+        raise ConfigError(f"bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not {plan!r} (docs/bootstrap.md, GitHub plan).")
+    if plan == "team" and github.get("reviewers") is not None:
+        raise ConfigError("bootstrap.yaml: github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a private repo "
+                          "only on Enterprise, so on Team nobody would wait for them: each apply is approved on its pull request instead. Remove "
+                          "github.reviewers (docs/bootstrap.md, GitHub plan).")
+    return plan
+
+
+def bootstrap_names(customer: dict, bootstrap: dict) -> dict:
+    """The bootstrap's names, and the platform's it points at, from customer.yaml's naming (tools/mlz/names.py), with
+    bootstrap.yaml's names: for its resource group or state account."""
+    try:
+        settings = naming.settings(customer, customer["root_id"])
+        return names.bootstrap(settings, customer["primary_region"], names.bootstrap_explicit(bootstrap.get("names")),
+                               self_hosted=runner_settings(bootstrap)["kind"] == "self-hosted")
+    except KeyError as error:
+        raise ConfigError(f"customer.yaml: {error} is required.") from None
+    except ConfigError as error:
+        raise ConfigError(f"names: {error}") from None
+
+
+def runner_settings(bootstrap: dict) -> dict:
+    """bootstrap.yaml's github.runners, checked, with the defaults filled in; ConfigError with every problem."""
+    given = (bootstrap.get("github") or {}).get("runners")
+    if given is None:
+        given = {}
+    if not isinstance(given, dict):
+        raise ConfigError(f"bootstrap.yaml: github.runners takes {', '.join(RUNNER_SETTINGS)}.")
+    problems = [f"bootstrap.yaml: github.runners.{key} is not a setting; it takes {', '.join(RUNNER_SETTINGS)}." for key in given if key not in RUNNER_SETTINGS]
+    kind = given.get("kind", "self-hosted")
+    if not isinstance(kind, str) or kind not in RUNNER_KINDS:
+        problems.append(f"bootstrap.yaml: github.runners.kind is self-hosted or github-hosted, not {kind!r}.")
+        kind = "self-hosted"
+    size = given.get("size", RUNNER_KINDS[kind])
+    # Each is written into a command or a script, so only the characters the names need.
+    if kind == "self-hosted" and not (isinstance(size, str) and re.fullmatch(r"Standard_[A-Za-z0-9_]+", size)):
+        problems.append(f"bootstrap.yaml: github.runners.size is an Azure virtual machine size for self-hosted runners, such as {RUNNER_KINDS[kind]}, not {size!r}.")
+    if kind == "github-hosted" and not (isinstance(size, str) and re.fullmatch(r"[0-9]+-core(-[a-z0-9-]+)?", size)):
+        problems.append(f"bootstrap.yaml: github.runners.size is one of GitHub's runner sizes for github-hosted runners, such as {RUNNER_KINDS[kind]}, not {size!r}.")
+    instances = given.get("instances", RUNNER_INSTANCES)
+    if kind == "self-hosted" and not (isinstance(instances, int) and not isinstance(instances, bool) and 0 <= instances <= MAXIMUM_INSTANCES):
+        problems.append(f"bootstrap.yaml: github.runners.instances is a whole number of runners from 0 to {MAXIMUM_INSTANCES}, as many as "
+                        f"snet-runners holds, not {instances!r}.")
+    client_id = given.get("app_client_id")
+    if client_id is not None and not (isinstance(client_id, str) and re.fullmatch(r"[A-Za-z0-9.]+", client_id)):
+        problems.append(f"bootstrap.yaml: github.runners.app_client_id is the runner App's client ID (letters, digits and dots), not {client_id!r}.")
+    image = given.get("image", "fortytwo")
+    if not isinstance(image, str) or image not in RUNNER_IMAGES:
+        problems.append(f"bootstrap.yaml: github.runners.image is fortytwo or dev (Fortytwo's own tests), not {image!r}.")
+        image = "fortytwo"
+    for key in ("instances", "app_client_id", "image"):
+        if kind == "github-hosted" and key in given:
+            problems.append(f"bootstrap.yaml: github.runners.{key} is for self-hosted runners; GitHub's own scale and register themselves.")
+    if problems:
+        raise ConfigError("\n  ".join(problems))
+    return {"kind": kind, "size": size, "instances": instances, "app_client_id": client_id, "image": image}
+
+
 def repositories(bootstrap: dict) -> dict[str, str]:
+    """The three repos, by role (github.repositories.core, the copy of mlz-core, is core_repository's)."""
     github = bootstrap.get("github") or {}
     names = github.get("repositories") or {}
-    if not github.get("organization") or set(names) != set(ROLES):
+    if not github.get("organization") or set(names) - {"core"} != set(ROLES):
         raise ConfigError("bootstrap.yaml needs github.organization and github.repositories for governance, platform and vending.")
     return {role: f"{github['organization']}/{names[role]}" for role in ROLES}
+
+
+def core_repository(bootstrap: dict) -> str:
+    """The customer's own copy of mlz-core, which the three repos' pipelines call (tools/mlz/mirror.py)."""
+    repositories(bootstrap)
+    github = bootstrap["github"]
+    return f"{github['organization']}/{github['repositories'].get('core') or mirror.NAME}"
+
+
+def platform_team(bootstrap: dict) -> tuple[str, str]:
+    """(organization, team slug): the GitHub team that owns the three repos, bootstrap.yaml's github.platform_team."""
+    github = bootstrap.get("github") or {}
+    team = github.get("platform_team")
+    if not isinstance(team, str) or not team:
+        raise ConfigError("bootstrap.yaml needs github.platform_team: the slug of the GitHub team that owns the three repos "
+                          "and approves their changes (docs/bootstrap.md).")
+    return github["organization"], team
+
+
+def bypass_team(bootstrap: dict) -> tuple[str, str]:
+    """(organization, team slug): the small team that alone may change .github/ in the three repos, bootstrap.yaml's
+    github.bypass_team. Not the platform team: every member of that one can push."""
+    github = bootstrap.get("github") or {}
+    team = github.get("bypass_team")
+    if not isinstance(team, str) or not team:
+        raise ConfigError("bootstrap.yaml needs github.bypass_team: the slug of the small GitHub team that alone may change .github/ in "
+                          "the three repos (mlz upgrade, CODEOWNERS), and so can reach the MLZ App's key (docs/bootstrap.md).")
+    if team == github.get("platform_team"):
+        raise ConfigError(f"bootstrap.yaml: github.bypass_team is {team}, the platform team. Name a smaller team: every member of the "
+                          "platform team can push, and the bypass team's members alone may change .github/ (docs/bootstrap.md).")
+    return github["organization"], team
+
+
+def found_bypass_team(github, bootstrap: dict) -> dict:
+    """The bypass team as GitHub has it: there, and visible, so the platform team can see who may bypass."""
+    org, team = bypass_team(bootstrap)
+    found = github.team(org, team)
+    if found is None:
+        raise ConfigError(f"{org} has no team {team} (bootstrap.yaml's github.bypass_team). Make it, with the few people who may run "
+                          "mlz upgrade and change CODEOWNERS, then run this step again.")
+    if found.get("privacy") == "secret":
+        raise ConfigError(f"{org}/{team} is a secret team: the platform team could not see who may change .github/. An organization "
+                          "owner makes it visible (the team's Settings, Team visibility), then run this step again.")
+    return found
+
+
+def found_app(github, bootstrap: dict) -> dict:
+    """The MLZ App as GitHub has it, from bootstrap.yaml's github.app: its slug, the last part of its page's address. A
+    ruleset's bypass names it by its ID, which only GitHub knows. The customer's own: an App of anyone else let past
+    the rule on _generated/ could write the contracts. A private App is shown to its organization's members."""
+    github_settings = bootstrap.get("github") or {}
+    org, slug = github_settings.get("organization"), github_settings.get("app")
+    if not isinstance(slug, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
+        raise ConfigError(f"bootstrap.yaml needs github.app: the slug of the customer's MLZ App, the last part of its page's address "
+                          f"(https://github.com/apps/<slug>){'' if slug is None else f', not {slug!r}'}. With the bypass team, it alone may "
+                          "change _generated/ in the three repos (docs/bootstrap.md).")
+    found = github.app(slug)
+    if found is None:
+        raise ConfigError(f"no GitHub App {slug} that you can see (bootstrap.yaml's github.app). Its slug is the last part of its page's "
+                          f"address, https://github.com/apps/<slug>; an App {org} owns is shown to its members.")
+    owner = (found.get("owner") or {}).get("login")
+    if not isinstance(owner, str) or owner.lower() != str(org).lower():
+        raise ConfigError(f"the GitHub App {slug} (bootstrap.yaml's github.app) belongs to {owner}, not {org}. Name the customer's own "
+                          "MLZ App: it may change _generated/ in the three repos.")
+    return found
 
 
 def release() -> str:
@@ -86,12 +356,99 @@ def release() -> str:
 
 
 def starter_files(role: str, folder: Path) -> dict[str, str]:
-    """The role's starter as a new repo gets it, with the customer's own settings for governance."""
+    """The role's starter as a new repo gets it, calling the organization's copy of mlz-core, with its code owners
+    and, for governance, the customer's settings."""
+    _, bootstrap = settings(folder)
     base = CORE / "starter" / f"mlz-{role}"
-    files = {str(p.relative_to(base)): RELEASE_PLEASE_MARKER.sub("", p.read_text()) for p in sorted(base.rglob("*")) if p.is_file()}
+    files = {str(p.relative_to(base)): starter_text(p.read_text(), core_repository(bootstrap)) for p in sorted(base.rglob("*")) if p.is_file()}
+    plan = github_plan(bootstrap)
+    files[WORKFLOW] = caller(files[WORKFLOW], plan)
+    files[owners.PATH] = owners.render(*platform_team(bootstrap), plan)
     if role == "governance":
         files.update({name: (folder / name).read_text() for name in ("customer.yaml", "bootstrap.yaml")})
     return files
+
+
+def starter_text(text: str, core: str) -> str:
+    """A starter file as a repo gets it: without release-please's marker, and calling role.yml in the organization's
+    copy of mlz-core instead of mlz-core's own (tools/mlz/mirror.py)."""
+    return RELEASE_PLEASE_MARKER.sub("", text).replace(f"uses: {mirror.UPSTREAM}/.github/workflows/role.yml@", f"uses: {core}/.github/workflows/role.yml@")
+
+
+def offer_executable(github, repo: str, branch: str, out: Callable[[str], None]) -> None:
+    """A starter file a person runs, on the branch without its mode, as a run that stopped between the starter's
+    commit and the one after it leaves it: the mode comes as a pull request, which a person merges (main may take
+    nothing else once its ruleset is there)."""
+    stale = github.not_executable(repo, branch, list(EXECUTABLE))
+    if not stale:
+        return
+    names = ", ".join(stale)
+    url = github.open_pull(repo, EXECUTABLE_BRANCH)
+    if not url:
+        github.reset_branch(repo, EXECUTABLE_BRANCH, branch)
+        github.make_executable(repo, EXECUTABLE_BRANCH, stale, f"chore: {names} executable")
+        url = github.create_pull(repo, EXECUTABLE_BRANCH, branch, f"chore: {names} executable",
+                                 f"`{names}` came without its mode from an earlier `mlz install repos` that stopped; this makes it executable.\n")
+    out(f"{repo}: {names} is not executable; the fix is offered in {url}")
+
+
+PLAN_BRANCH = "mlz/github-plan"  # the pull request that moves a repo to its GitHub plan's way (docs/bootstrap.md, Switching plans)
+
+
+def offer_plan(github, repo: str, branch: str, org: str, team: str, plan: str, out: Callable[[str], None]) -> None:
+    """A repo whose pipeline or code owners are another GitHub plan's than bootstrap.yaml's github.plan is offered the
+    change, as a pull request a code owner approves: on Team its caller passes approval: pull-request and the platform
+    team owns _generated/; on Enterprise neither. Both are under .github/, so whoever runs this must be in the bypass
+    team. Its environment's reviewer is the bootstrap's, which waits for this to be merged (docs/bootstrap.md)."""
+    changes = {}
+    workflow = github.file(repo, WORKFLOW, branch)[0]
+    if workflow is not None and caller(workflow, plan) != workflow:
+        called, ref = pin_of(workflow)
+        if plan == "team" and not takes_approval(github.file(called, ".github/workflows/role.yml", ref)[0]):
+            # Its pipeline would not start with approval: an upgrade comes first.
+            out(f"{repo}: its pipeline calls {called}'s role.yml at {ref}, which has no approval input, so it cannot take GitHub Team's way "
+                "yet; move it to a release with GitHub Team's gate first (mlz upgrade), then run this step again.")
+            return
+        changes[WORKFLOW] = caller(workflow, plan)
+    # The file GitHub reads, wherever it is (an adopted repo's may be at the top or in docs/): the installer's, with the
+    # plan's rule for /_generated/, whenever that rule is not it (another owner, or none, included).
+    location = next((path for path in owners.LOCATIONS if github.file(repo, path, branch)[0] is not None), None)
+    if location and generated_rule_problems(repo, github.file(repo, location, branch)[0], org, team, plan):
+        changes[location] = owners.render(org, team, plan)
+    title = f"chore: GitHub {plan.capitalize()}'s way" + (": each apply approved on its pull request" if plan == "team" else ": each apply waits for a reviewer")
+    url = github.open_pull(repo, PLAN_BRANCH)
+    # An open switch from an earlier run counts only if its branch holds exactly this plan's files: one for the other plan,
+    # or with a file this plan leaves as main has it, is closed, and offered again when there is anything to offer.
+    if url and any(github.file(repo, path, PLAN_BRANCH)[0] != changes.get(path, github.file(repo, path, branch)[0])
+                   for path in {WORKFLOW, *([location] if location else []), *changes}):
+        github.close_pulls(repo, PLAN_BRANCH, f"Closed by mlz install repos: bootstrap.yaml's github.plan is {plan} now, and this pull request "
+                                              "no longer holds that plan's files.")
+        url = None
+    if not changes:
+        return
+    if not url:
+        refuse_if_pushes_refused(github, repo, changes)
+        github.commit_files(repo, PLAN_BRANCH, github.reset_branch(repo, PLAN_BRANCH, branch), changes, title)
+        url = github.create_pull(repo, PLAN_BRANCH, branch, title,
+                                 f"From `mlz install repos`: bootstrap.yaml's `github.plan` is `{plan}`. This moves "
+                                 + " and ".join(f"`{path}`" for path in sorted(changes)) + " to its way. Merge it in the order "
+                                 "docs/bootstrap.md in mlz-core gives (Switching plans), so that an apply never runs without a gate.\n")
+    out(f"{repo}: GitHub {plan.capitalize()}'s way is offered in {url}")
+
+
+def refuse_if_pushes_refused(github, repo: str, paths) -> None:
+    """Stops before a branch is made whose commit a push ruleset would refuse, with what to do (upgrade.push_refused)."""
+    refused = push_refused(github, repo, list(paths))
+    if refused:
+        raise ConfigError(refused)
+
+
+def make_executable(github, repo: str, branch: str, files: dict[str, str], message: str) -> None:
+    """The starter files a person runs (./mlz), made executable after the commit that wrote them, which cannot set a
+    mode (GitHub.make_executable). A new repo's: before its ruleset, as its first commit is."""
+    executable = [path for path in EXECUTABLE if path in files]
+    if executable:
+        github.make_executable(repo, branch, executable, f"{message}: {', '.join(executable)} executable")
 
 
 def answer(question: str) -> str:
@@ -110,7 +467,22 @@ def answer(question: str) -> str:
 
 def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None:
     _, bootstrap = settings(folder)
-    for role, repo in repositories(bootstrap).items():
+    repos = repositories(bootstrap)
+    org, team = platform_team(bootstrap)
+    found_team = github.team(org, team)
+    if found_team is None:
+        raise ConfigError(f"{org} has no team {team} (bootstrap.yaml's github.platform_team). Make it, and connect it to its "
+                          "Entra ID group if the organization syncs teams, then run this step again.")
+    if found_team.get("privacy") == "secret":
+        # GitHub skips a secret team in CODEOWNERS, which would leave every path without an owner.
+        raise ConfigError(f"{org}/{team} is a secret team, and CODEOWNERS can only name a visible one. An organization owner "
+                          "makes it visible (the team's Settings, Team visibility), then run this step again.")
+    admins = found_bypass_team(github, bootstrap)
+    mlz_app = found_app(github, bootstrap)
+    # First the organization's copy of mlz-core, at this release: a new repo's first commit starts its pipeline,
+    # which calls it.
+    mirror.ensure(github, core_repository(bootstrap), release(), out)
+    for role, repo in repos.items():
         owner, name = repo.split("/")
         found = github.repo(repo)
         if found is None:
@@ -136,27 +508,118 @@ def step_repos(github, folder: Path, out: Callable[[str], None] = print) -> None
         branch = github.default_branch(repo)
         message = f"chore: mlz-{role} from mlz-core {release()}"
         if created:
-            github.commit_files(repo, branch, github.head(repo, branch), starter_files(role, folder), message)
+            files = starter_files(role, folder)
+            github.commit_files(repo, branch, github.head(repo, branch), files, message)
+            make_executable(github, repo, branch, files, message)
             out(f"{repo}: created, private, with the {role} starter")
         elif github.file(repo, WORKFLOW, branch)[0] is None:
-            missing = {path: text for path, text in starter_files(role, folder).items() if github.file(repo, path, branch)[0] is None}
+            starter = starter_files(role, folder)
+            missing = {path: text for path, text in starter.items() if github.file(repo, path, branch)[0] is None}
+            # The repo's own .gitignore keeps every line it has; the starter's it lacks are appended.
+            if GITIGNORE in starter and GITIGNORE not in missing:
+                ignore = gitignore_with(github.file(repo, GITIGNORE, branch)[0], starter[GITIGNORE])
+                if ignore is not None:
+                    missing[GITIGNORE] = ignore
+            # GitHub reads .github/CODEOWNERS before the root's and docs/: one added beside the repo's own would replace it.
+            if any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+                missing.pop(owners.PATH, None)
             url = github.open_pull(repo, STARTER_BRANCH)
             if not url:
+                refuse_if_pushes_refused(github, repo, missing)
                 github.commit_files(repo, STARTER_BRANCH, github.reset_branch(repo, STARTER_BRANCH, branch), missing, message)
+            make_executable(github, repo, STARTER_BRANCH, missing, message)  # also on an offer an earlier run left without it
+            if not url:
                 url = github.create_pull(repo, STARTER_BRANCH, branch, message, f"The {role} starter's files this repo does not have yet, from `mlz install repos`. Files already here are left as they are.\n")
             out(f"{repo}: the {role} starter's missing files are offered in {url}")
         else:
             out(f"{repo}: exists, files left as they are")
-        # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
-        if github.add_ruleset(repo, MAIN_RULESET):
-            out(f"{repo}: ruleset main (pull requests only, no force push or deletion)")
+            offer_executable(github, repo, branch, out)
+            offer_plan(github, repo, branch, org, team, github_plan(bootstrap), out)
+            if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+                # A repo set up before code owners: the file comes as a pull request, which a person merges.
+                url = github.open_pull(repo, CODE_OWNERS_BRANCH)
+                if not url:
+                    refuse_if_pushes_refused(github, repo, [owners.PATH])
+                    plan = github_plan(bootstrap)
+                    github.commit_files(repo, CODE_OWNERS_BRANCH, github.reset_branch(repo, CODE_OWNERS_BRANCH, branch),
+                                        {owners.PATH: owners.render(org, team, plan)}, "chore: the platform team as code owner")
+                    url = github.create_pull(repo, CODE_OWNERS_BRANCH, branch, "chore: the platform team as code owner",
+                                             f"`{owners.PATH}` from `mlz install repos`: {org}/{team} owns every file, and `_generated/` "
+                                             + ("none" if plan == "enterprise" else "too, on GitHub Team, so a person approves each contract")
+                                             + " (docs/pipelines.md in mlz-core, Code owners).\n")
+                out(f"{repo}: {owners.PATH} is offered in {url}")
+        # A code owner needs write access; one with more (maintain, admin) keeps it.
+        if github.team_can_write(org, team, repo):
+            out(f"{repo}: {org}/{team} may write, as its code owner")
         else:
-            out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests")
+            github.grant_team(org, team, repo)
+            out(f"{repo}: {org}/{team} given write access, as its code owner")
+        # After the starter's first commit, which writes .github/: the bypass team alone may change it from now on.
+        if github.add_ruleset(repo, push_ruleset(admins["id"])):
+            out(f"{repo}: ruleset {PUSH_RULESET} (changes under .github/ refused on every branch, but from {org}/{admins['slug']})")
+            if not created:
+                # It refuses pushes only: a branch pushed before it keeps its changes, and a pull request from one runs them.
+                out(f"{repo}: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know")
+        else:
+            out(f"{repo}: has a ruleset named {PUSH_RULESET} already, left as it is; mlz install check says whether it refuses changes "
+                "under .github/")
+        if github.add_ruleset(repo, generated_ruleset(admins["id"], mlz_app["id"])):
+            out(f"{repo}: ruleset {GENERATED_RULESET} (changes under _generated/ refused on every branch, but from the MLZ App "
+                f"{mlz_app['slug']} and {org}/{admins['slug']})")
+            if not created:
+                out(f"{repo}: its branches pushed before the ruleset keep any change under _generated/ they have; delete those you do not know")
+        else:
+            out(f"{repo}: has a ruleset named {GENERATED_RULESET} already, left as it is; mlz install check says whether it refuses "
+                "changes under _generated/")
+        # Never replaces a ruleset of that name: the customer's own may be stricter than this one.
+        # A push after an approval needs a new one, as in the workload repos (the user's decision, 19 November).
+        if github.add_ruleset(repo, main_ruleset(role, admins["id"], dismiss_stale=True)):
+            out(f"{repo}: ruleset main (pull requests only, a code owner's approval, which a later push takes back; no force push or "
+                f"deletion; {org}/{admins['slug']} may merge a pull request without the approval)")
+        else:
+            out(f"{repo}: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
+                "and requires a code owner's review (mlz install check says)")
+        more = team_checks(role) if github_plan(bootstrap) == "team" else []
+        checks = " and ".join([required_check(role), *more])
+        if github.add_ruleset(repo, checks_ruleset(role, more=more)):
+            out(f"{repo}: ruleset {CHECKS_RULESET} ({checks} passed on a branch up to date with main, before any merge; nobody bypasses it)")
+        else:
+            out(f"{repo}: has a ruleset named {CHECKS_RULESET} already, left as it is; mlz install check says whether {checks} "
+                f"{'is' if not more else 'are'} required on main")
 
 
 def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None:
-    _, bootstrap = settings(folder)
+    customer, bootstrap = settings(folder)
+    out(f"names: the state account will be {bootstrap_names(customer, bootstrap)['storage_account']}")
     problems = []
+    # On Enterprise an apply waits for a reviewer in its environment, which GitHub allows in a private repo only on
+    # Enterprise; on Team the pull request's approval covers the plan applied. Enterprise's way on a Team organization
+    # would leave every apply without a gate; Team's way on an Enterprise organization works, and is how it is proved
+    # (docs/bootstrap.md, GitHub plan).
+    org, wanted = (bootstrap.get("github") or {}).get("organization"), github_plan(bootstrap)
+    plan = github.plan(org) if org else None
+    if plan is None and org:
+        out(f"{org}: GitHub did not show its plan to this sign-in (it shows it to an owner, and to a sign-in with the admin:org scope), "
+            f"so it is not checked here; bootstrap.yaml says {wanted}.")
+    elif plan == "enterprise" and wanted == "team":
+        out(f"{org}: on GitHub Enterprise, with bootstrap.yaml's github.plan: team, so each apply is approved on its pull request and no "
+            "environment waits for a reviewer. Set github.plan: enterprise for the reviewer.")
+    elif plan == "team" and wanted == "enterprise":
+        problems.append(f"{org}: on GitHub Team, but bootstrap.yaml's github.plan says enterprise. GitHub allows a reviewer on an environment "
+                        "in a private repo only on Enterprise, so no apply would wait for anyone: set github.plan: team, and each apply is "
+                        "approved on its pull request (docs/bootstrap.md, GitHub plan).")
+    elif plan and plan not in GITHUB_PLANS:
+        problems.append(f"{org}: on GitHub's {plan} plan. MLZ needs GitHub Team or Enterprise: on the others GitHub has no environments, "
+                        "rulesets or code owners in a private repo.")
+    else:
+        out(f"{org}: on GitHub {wanted.capitalize()}" + (", so each apply is approved on its pull request" if wanted == "team" else ""))
+    try:
+        mlz_app = found_app(github, bootstrap)
+    except ConfigError as error:
+        mlz_app = None
+        problems.append(str(error))
+    if mlz_app and wanted == "team":
+        problems += team_app_problems(mlz_app, out)
     for role, repo in repositories(bootstrap).items():
         if github.repo(repo) is None:
             problems.append(f"{repo}: no such repo; run mlz install repos first.")
@@ -167,12 +630,320 @@ def step_check(github, folder: Path, out: Callable[[str], None] = print) -> None
         if not github.has_secret(repo, APP_SECRET):
             missing.append(f"secret {APP_SECRET}")
         if missing:
-            problems.append(f"{repo}: no {' and no '.join(missing)}. Install the customer's MLZ App on the repo, then: "
+            problems.append(f"{repo}: no {' and no '.join(missing)}. Install the customer's MLZ App on all the organization's repos, then: "
                             f"gh variable set {APP_VARIABLE} --repo {repo} --body <client ID>; gh secret set {APP_SECRET} --repo {repo} < <private key file>")
+        elif mlz_app and github.variable(repo, APP_VARIABLE) != mlz_app.get("client_id"):
+            # The rule on _generated/ lets through the App bootstrap.yaml names; the pipelines write as the one the variable names.
+            problems.append(f"{repo}: its {APP_VARIABLE} is not the client ID of {mlz_app['slug']}, the MLZ App bootstrap.yaml's github.app "
+                            f"names ({mlz_app.get('client_id')}), so the App its pipeline writes as may not change _generated/. Name the same "
+                            "App in both.")
         else:
             out(f"{repo}: the MLZ App's client ID and key are set")
+        problems += code_owner_problems(github, bootstrap, repo, out)
+        problems += push_ruleset_problems(github, bootstrap, repo, out)
+        problems += generated_ruleset_problems(github, bootstrap, repo, mlz_app, out)
+        problems += required_check_problems(github, role, repo, out)
+        for check in team_checks(role) if wanted == "team" else []:
+            problems += required_check_problems(github, role, repo, out, check)
+        problems += approval_problems(github, role, repo, wanted, out)
+    # GitHub shows an App's installations only to the App itself and the organization's owners.
+    out(f"{org}: not checked here: that the MLZ App is installed on all its repos, {core_repository(bootstrap)} included. A repo "
+        "without it stops its run at the App's token step (Not Found), and an App on selected repos cannot reach the workload "
+        "repos it makes (docs/bootstrap.md).")
     if problems:
-        raise ConfigError("\n  ".join(["the MLZ App is not set up everywhere:"] + problems))
+        raise ConfigError("\n  ".join(["not ready for MLZ:"] + problems))
+
+
+def code_owner_problems(github, bootstrap: dict, repo: str, out: Callable[[str], None]) -> list[str]:
+    """What stops the repo's code owners from deciding: the platform team's access, the file as GitHub reads it, and
+    the ruleset that makes their approval required."""
+    try:
+        org, team = platform_team(bootstrap)
+    except ConfigError as error:
+        return [str(error)]
+    found = []
+    if not github.team_can_write(org, team, repo):
+        found.append(f"{repo}: {org}/{team} cannot write to it, so it cannot be its code owner; mlz install repos gives it access.")
+    branch = github.default_branch(repo)
+    if not any(github.file(repo, location, branch)[0] is not None for location in owners.LOCATIONS):
+        found.append(f"{repo}: no {owners.PATH} on {branch}; mlz install repos offers one.")
+    else:
+        errors = github.codeowners_errors(repo, branch)
+        if errors is None:
+            found.append(f"{repo}: GitHub has not read {owners.PATH} yet; run this step again in a minute.")
+        text = next(github.file(repo, location, branch)[0] for location in owners.LOCATIONS if github.file(repo, location, branch)[0] is not None)
+        found += generated_rule_problems(repo, text, org, team, github_plan(bootstrap))
+        found += [f"{repo}: {problem}" for problem in owners.problems(errors or [], repo)]
+    # The rules GitHub applies to the branch, from every active ruleset, the organization's too: a ruleset that is
+    # disabled, only evaluated, or aimed at other branches has none here.
+    if not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")
+               for rule in github.branch_rules(repo, branch)):
+        found.append(f"{repo}: no active ruleset requires a code owner's review on {branch}, so CODEOWNERS only suggests reviewers; "
+                     "turn on 'Require review from Code Owners' in its ruleset main (Settings, Rules, Rulesets), and check that it is active.")
+    elif not any(rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("dismiss_stale_reviews_on_push")
+                 for rule in github.branch_rules(repo, branch)):
+        found.append(f"{repo}: an approval on {branch} stays after a later push, so an approved change can become another before it merges; "
+                     "turn on 'Dismiss stale pull request approvals when new commits are pushed' in its ruleset main (Settings, Rules, "
+                     "Rulesets). Bringing a branch up to date with main keeps the approval (docs/pipelines.md, Code owners).")
+    if not found:
+        out(f"{repo}: {org}/{team} may write, GitHub reads its CODEOWNERS whole, and a code owner's review is required on {branch}, "
+            "which a later push takes back")
+    return found
+
+
+# Paths under .github/ a guard must refuse: the two files the installer writes, and names nobody would list one by one,
+# so that a rule naming only some files, or with an exception there, is no guard of the whole folder.
+PIPELINE_PROBES = (WORKFLOW, owners.PATH, ".github/workflows/zz-mlz-probe.yml", ".github/zz-mlz-probe", ".github/actions/zz-mlz-probe/action.yml")
+
+
+def push_ruleset_problems(github, bootstrap: dict, repo: str, out: Callable[[str], None]) -> list[str]:
+    """Whether the active push rulesets refuse every change under .github/ (finding 17), and let the bypass team, and
+    nobody else, through each of them: GitHub applies them all, so one the team may not bypass refuses its upgrade."""
+    try:
+        org, team = bypass_team(bootstrap)
+        admins = found_bypass_team(github, bootstrap)
+        platform = github.team(*platform_team(bootstrap))
+    except ConfigError as error:
+        return [str(error)]
+    guards = [r for r in github.rulesets(repo) if r.get("target") == "push" and r.get("enforcement") == "active"
+              and any(restricts(r, probe) for probe in PIPELINE_PROBES)]
+    open_paths = [probe for probe in PIPELINE_PROBES if not any(restricts(r, probe) for r in guards)]
+    if open_paths:
+        which = "changes" if not guards else f"every change (not {', '.join(open_paths)})"
+        return [f"{repo}: no active push ruleset refuses {which} under .github/, so a pull request's own run can reach the MLZ App's key and "
+                f"the plan identity; mlz install repos makes the ruleset {PUSH_RULESET}, restricting {PIPELINE_FILES} (docs/pipelines.md)."]
+    found = []
+    for ruleset in guards:
+        actors = ruleset.get("bypass_actors") or []
+        if not any(a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"] and a.get("bypass_mode") in ("always", "exempt", None) for a in actors):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under .github/, and {org}/{team} (bootstrap.yaml's "
+                         "github.bypass_team) may not bypass it, so nobody can run mlz upgrade; add the team as a bypass actor (Settings, Rules, Rulesets).")
+        others = [describe_actor(a, platform) for a in actors if not (a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"])]
+        if others:
+            found.append(f"{repo}: its ruleset {ruleset['name']} also lets {', '.join(others)} change .github/, and so reach the MLZ App's key; "
+                         f"only {org}/{team} should (Settings, Rules, Rulesets).")
+    if not found:
+        out(f"{repo}: changes under .github/ are refused on every branch, but from {org}/{team} "
+            f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
+    # Only noted: without it, every merge waits for a second code owner (decision D8 gives the team that bypass). The
+    # rulesets that require a code owner's review on the default branch, each by its ID, as GitHub applies them there.
+    branch = github.default_branch(repo)
+    review_ids = {rule.get("ruleset_id") for rule in github.branch_rules(repo, branch)
+                  if rule.get("type") == "pull_request" and (rule.get("parameters") or {}).get("require_code_owner_review")}
+    by_id = {r.get("id"): r for r in github.rulesets(repo)}
+    blocking = [by_id.get(i, {"name": f"ID {i}"}) for i in sorted(review_ids, key=str)
+                if not any(a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"] for a in by_id.get(i, {}).get("bypass_actors") or [])]
+    for ruleset in blocking:
+        out(f"{repo}: {org}/{team} may not merge a pull request without a code owner's approval past ruleset {ruleset['name']}. mlz install "
+            f"repos gives a new repo's ruleset main that bypass. For an existing one: first run mlz install repos, so that {CHECKS_RULESET}, "
+            f"without bypass actors, requires the check on an up-to-date branch, and take the check out of {ruleset['name']}; then add "
+            f"the team to {ruleset['name']} as a bypass actor, pull requests only (Settings, Rules, Rulesets). A bypass covers its whole "
+            "ruleset, so with the check still in it the team could merge without the check too.")
+    return found
+
+
+# Paths under _generated/ a guard must refuse: every file written there, so that a rule on one of them alone counts as a
+# guard whose bypass must let the App through; and names nobody would list one by one, with each suffix the loaders read
+# (files.read_setting takes <name>.yml, or a folder of chunks, as well as <name>.yaml) and none.
+GENERATED_PROBES = (*(f"_generated/{name}" for name in stacks.WRITERS),
+                    *(f"_generated/zz-mlz-probe{suffix}" for suffix in (".yaml", ".yml", "", "/x.yaml", "/x.yml")))
+
+
+def lets_through(actors: list[dict], kind: str, actor_id) -> bool:
+    """Whether a ruleset's bypass actors let this actor past every push, as a push ruleset's bypass must."""
+    return any(a.get("actor_type") == kind and a.get("actor_id") == actor_id and a.get("bypass_mode") in ("always", "exempt", None) for a in actors)
+
+
+def generated_ruleset_problems(github, bootstrap: dict, repo: str, mlz_app: dict | None, out: Callable[[str], None]) -> list[str]:
+    """Whether the active push rulesets refuse every change under _generated/ (review S1), and let the MLZ App and the
+    bypass team, and nobody else, through each of them: one the App may not bypass stops the contracts, one the team
+    may not stops mlz install publish. mlz_app None: bootstrap.yaml's github.app is wrong, said once already."""
+    try:
+        org, team = bypass_team(bootstrap)
+        admins = found_bypass_team(github, bootstrap)
+        platform = github.team(*platform_team(bootstrap))
+    except ConfigError as error:
+        return [str(error)]
+    guards = [r for r in github.rulesets(repo) if r.get("target") == "push" and r.get("enforcement") == "active"
+              and any(restricts(r, probe) for probe in GENERATED_PROBES)]
+    open_paths = [probe for probe in GENERATED_PROBES if not any(restricts(r, probe) for r in guards)]
+    if open_paths:
+        which = "changes" if not guards else f"every change (not {', '.join(open_paths)})"
+        return [f"{repo}: no active push ruleset refuses {which} under _generated/, so anyone who may push can change a contract, the IP plan "
+                f"or the names and merge it without a review; mlz install repos makes the ruleset {GENERATED_RULESET}, restricting "
+                f"{GENERATED_FILES} (docs/pipelines.md)."]
+    found = []
+    for ruleset in guards:
+        actors = ruleset.get("bypass_actors") or []
+        if not lets_through(actors, "Team", admins["id"]):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under _generated/, and {org}/{team} (bootstrap.yaml's "
+                         "github.bypass_team) may not bypass it, so nobody can run mlz install publish; add the team as a bypass actor "
+                         "(Settings, Rules, Rulesets).")
+        if mlz_app and not lets_through(actors, "Integration", mlz_app["id"]):
+            found.append(f"{repo}: its ruleset {ruleset['name']} refuses changes under _generated/, and the MLZ App {mlz_app['slug']} may not "
+                         "bypass it, so no contract, IP plan or names reach this repo; add the App as a bypass actor (Settings, Rules, Rulesets).")
+        others = [describe_actor(a, platform) for a in actors
+                  if not (a.get("actor_type") == "Team" and a.get("actor_id") == admins["id"])
+                  and not (mlz_app and a.get("actor_type") == "Integration" and a.get("actor_id") == mlz_app["id"])]
+        if others:
+            found.append(f"{repo}: its ruleset {ruleset['name']} also lets {', '.join(others)} change _generated/; only the MLZ App and "
+                         f"{org}/{team} should (Settings, Rules, Rulesets).")
+    if not found:
+        app = f"the MLZ App {mlz_app['slug']}" if mlz_app else "the MLZ App"
+        out(f"{repo}: changes under _generated/ are refused on every branch, but from {app} and {org}/{team} "
+            f"(ruleset{'s' if len(guards) > 1 else ''} {', '.join(r['name'] for r in guards)})")
+    return found
+
+
+# What the pipeline's tokens ask of the MLZ App on GitHub Team, beside what it needs on both plans (role.yml): the gate's
+# token, scoped to the repo, reads its runs, the pull request, the rule suites (Administration) and its contents; planned
+# mints one scoped to the repo (runs, pull request, contents) and one with Members alone, for the code owners' team.
+TEAM_APP_PERMISSIONS = ("actions", "pull_requests", "administration", "contents", "members")
+
+
+def team_gate_problems(github, bootstrap: dict, role: str, repo: str) -> list[str]:
+    """What a role repo lacks of GitHub Team's gate on main, the branch it deploys from: its pipeline passing approval:
+    pull-request; code owners who decide (the platform team able to write, CODEOWNERS as GitHub reads it, with the
+    platform team owning _generated/, and a code owner's review required); and <role> / planned required. Each is what
+    makes the pull request's approval stand in for the environment's reviewer."""
+    branch = github.default_branch(repo)
+    if branch != "main":
+        return [f"{repo}: its default branch is {branch}, but MLZ deploys from main; rename it to main first."]
+    found = []
+    if approval_of(github.file(repo, WORKFLOW, branch)[0] or "") != "pull-request":
+        found.append(f"{repo}: its pipeline does not pass approval: pull-request yet; merge the pull request mlz install repos offers.")
+    found += code_owner_problems(github, bootstrap, repo, lambda _: None)
+    for check in team_checks(role):
+        found += required_check_problems(github, role, repo, lambda _: None, check)
+    return found
+
+
+def generated_rule_problems(repo: str, codeowners: str, org: str, team: str, plan: str) -> list[str]:
+    """Whether CODEOWNERS' rule for /_generated/ is the plan's: no owner on Enterprise, so a contract merges itself and
+    its apply waits for the reviewer; the platform team on Team, so a person approves each contract."""
+    wanted = ["/_generated/"] if plan == "enterprise" else ["/_generated/", f"@{org}/{team}"]
+    rule = owners.generated_rule(codeowners)
+    if rule is not None and [rule[0], *(owner.lower() for owner in rule[1:])] == [wanted[0], *(owner.lower() for owner in wanted[1:])]:
+        return []
+    meaning = ("no owner, so a contract merges itself and its apply waits for the reviewer" if plan == "enterprise" else
+               f"@{org}/{team} as owner, so a person approves each contract")
+    return [f"{repo}: its CODEOWNERS has {'`' + ' '.join(rule) + '`' if rule else 'no rule for /_generated/'}, but on GitHub {plan.capitalize()} "
+            f"/_generated/ has {meaning}. mlz install repos offers the change (docs/bootstrap.md, Switching plans)."]
+
+
+def team_app_problems(app: dict, out: Callable[[str], None]) -> list[str]:
+    """Whether the MLZ App asks for at least read of each permission the Team gate's tokens ask for, as GET /apps/<slug>
+    shows it. Whether an owner has accepted them on the installation only the App and the owners see: said."""
+    held = app.get("permissions") or {}
+    missing = [name for name in TEAM_APP_PERMISSIONS if held.get(name) not in ("read", "write", "admin")]
+    if missing:
+        return [f"the MLZ App {app['slug']} does not ask for {', '.join(f'{name} (read)' for name in missing)}, which the pipeline's gate on "
+                "GitHub Team reads with; an owner of the App adds them (its Settings, Permissions), and an owner of the organization "
+                "accepts them on its installation."]
+    out(f"the MLZ App {app['slug']} asks for what the gate on GitHub Team reads with ({', '.join(TEAM_APP_PERMISSIONS)}); whether an owner "
+        "accepted each on its installation only an owner sees")
+    return []
+
+
+def approval_problems(github, role: str, repo: str, plan: str, out: Callable[[str], None]) -> list[str]:
+    """Whether the repo's pipeline and its environment agree with github.plan, both ways: on Enterprise the pipeline
+    passes no approval and the environment waits for a reviewer; on Team the pipeline passes approval: pull-request and
+    the environment has no reviewer and the variable MLZ_APPROVAL: pull-request. And that only main may use it, which
+    GitHub allows in a private repo on Team and Enterprise: this is where a Team organization that lacks it shows."""
+    found, wanted = [], GITHUB_PLANS[plan]
+    branch = github.default_branch(repo)
+    workflow = github.file(repo, WORKFLOW, branch)[0]
+    if workflow is None:
+        found.append(f"{repo}: no {WORKFLOW} on {branch}, so nothing deploys and no check runs; mlz install repos offers the starter's files.")
+    elif approval_of(workflow) != wanted:
+        found.append(f"{repo}: its pipeline ({WORKFLOW}) passes approval: {approval_of(workflow)}, but bootstrap.yaml's github.plan is {plan}, "
+                     f"whose approval is {wanted}. mlz install repos offers the change; a member of the bypass team merges it (docs/bootstrap.md, "
+                     "Switching plans).")
+    environment = github.environment(repo, role)
+    if environment is None:
+        out(f"{repo}: no environment {role} yet; mlz install bootstrap makes it")
+        return found
+    rules = environment.get("protection_rules") or []
+    reviewed = any(rule.get("type") == "required_reviewers" and rule.get("reviewers") for rule in rules)
+    variable = github.environment_variable(repo, role, APPROVAL_VARIABLE)
+    if plan == "enterprise" and not reviewed:
+        found.append(f"{repo}: its environment {role} has no reviewer, so an apply there waits for nobody. mlz install bootstrap gives it "
+                     "github.reviewers.")
+    if plan == "enterprise" and variable is not None:
+        found.append(f"{repo}: its environment {role} has the variable {APPROVAL_VARIABLE}, left from GitHub Team's way, so every apply there "
+                     "refuses. mlz install bootstrap removes it.")
+    if plan == "team" and reviewed:
+        found.append(f"{repo}: its environment {role} still has a reviewer, so the switch to GitHub Team's way is not finished. mlz install "
+                     "bootstrap removes it, once every repo's pipeline passes approval: pull-request.")
+    if plan == "team" and variable != "pull-request":
+        found.append(f"{repo}: its environment {role} has no variable {APPROVAL_VARIABLE}: pull-request, which makes an apply refuse whose "
+                     "pipeline still expects a reviewer. mlz install bootstrap sets it.")
+    policy = environment.get("deployment_branch_policy") or {}
+    allowed = github.branch_policies(repo, role) if policy.get("custom_branch_policies") else []
+    if policy.get("protected_branches") or allowed != [("main", "branch")]:
+        accepts = ("any protected branch" if policy.get("protected_branches") else
+                   ", ".join(f"{name}{' (a tag)' if kind == 'tag' else ''}" for name, kind in allowed) if allowed else "any branch")
+        found.append(f"{repo}: its environment {role} is not limited to main (it accepts {accepts}), so a run on another branch could apply. "
+                     "GitHub has branch policies on an environment in a private repo on Team and Enterprise; mlz install bootstrap sets main alone.")
+    if not found:
+        out(f"{repo}: its pipeline and its environment {role} are GitHub {plan.capitalize()}'s: "
+            + ("an apply waits for a reviewer" if plan == "enterprise" else "no reviewer, each apply approved on its pull request")
+            + ", from main only")
+    return found
+
+
+def describe_actor(actor: dict, platform_team: dict | None) -> str:
+    """A ruleset's bypass actor, as a person reads it."""
+    kind, actor_id = actor.get("actor_type"), actor.get("actor_id")
+    if kind == "Team":
+        return "the platform team" if platform_team and actor_id == platform_team.get("id") else f"the team with ID {actor_id}"
+    if kind == "RepositoryRole":
+        # 5 is Admin (abc's main ruleset, 19 November); the other IDs are not checked, so they are named by ID.
+        return "the repository's admins" if actor_id == 5 else f"the repository role with ID {actor_id}"
+    return {"OrganizationAdmin": "the organization's owners", "DeployKey": "deploy keys", "Integration": f"the App with ID {actor_id}",
+            "User": f"the user with ID {actor_id}"}.get(kind, f"{kind} {actor_id}")
+
+
+def required_check_problems(github, role: str, repo: str, out: Callable[[str], None], check: str | None = None) -> list[str]:
+    """Whether GitHub refuses a merge into the default branch until the pipeline's check (or check, one of team_checks)
+    has passed, by the rules it enforces there from every active ruleset. Only from GitHub Actions: a check expected
+    from another app never passes, and one from any source can be passed by any token that may write statuses."""
+    branch, check = github.default_branch(repo), check or required_check(role)
+    wanted = {"context": check, "integration_id": GITHUB_ACTIONS_APP}
+    # Each rule apart: GitHub applies the strictest of them, so one that is strict about another check keeps every
+    # branch up to date too. A ruleset someone may bypass does not bind them (a bypass covers its whole ruleset), so the
+    # check counts only from a ruleset without bypass actors.
+    found = [rule for rule in github.branch_rules(repo, branch) if rule.get("type") == "required_status_checks"]
+    by_id = {r.get("id"): r for r in github.rulesets(repo)}
+
+    def requires(rule: dict) -> bool:
+        return any({key: each.get(key) for key in wanted} == wanted for each in (rule.get("parameters") or {}).get("required_status_checks", []))
+
+    def bypassed(rule: dict) -> bool:
+        return bool(by_id.get(rule.get("ruleset_id"), {}).get("bypass_actors"))
+
+    required = [rule for rule in found if requires(rule)]
+    # Strict from a ruleset nobody bypasses too: one its bypass actors may skip keeps nobody's branch up to date for them.
+    strict = any((rule.get("parameters") or {}).get("strict_required_status_checks_policy") and not bypassed(rule) for rule in found)
+    binding = [rule for rule in required if not bypassed(rule)]
+    if binding and strict:
+        out(f"{repo}: {check} must pass, on a branch up to date with {branch}, before any merge into {branch}; nobody may bypass it")
+        return []
+    if required and not binding:
+        names = sorted({by_id.get(rule.get("ruleset_id"), {}).get("name", f"ID {rule.get('ruleset_id')}") for rule in required})
+        return [f"{repo}: {check} is required only by {', '.join(f'ruleset {name}' for name in names)}, whose bypass actors may merge without it; "
+                f"require it in a ruleset without bypass actors (mlz install repos makes {CHECKS_RULESET}), and take it out of one with them."]
+    if required:
+        return [f"{repo}: {check} must pass before a merge into {branch}, but not on a branch up to date with it, so a change checked "
+                f"against an older {branch} can merge; turn on 'Require branches to be up to date before merging' in the ruleset that "
+                f"requires it, {CHECKS_RULESET} (Settings, Rules, Rulesets)."]
+    if check in team_checks(role):
+        return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so on GitHub Team a pull request could merge, approved, "
+                f"before its plans finished, and its approval would cover no plan. Add {check} to its ruleset {CHECKS_RULESET}, from GitHub "
+                "Actions (Settings, Rules, Rulesets); mlz install repos makes a new repo's so (docs/bootstrap.md, Switching plans)."]
+    return [f"{repo}: no active ruleset requires {check} to pass on {branch}, so a change the check refuses can still be merged; "
+            f"mlz install repos makes the ruleset {CHECKS_RULESET}, without bypass actors, which requires it from GitHub Actions on a "
+            f"branch up to date with {branch}."]
 
 
 # bootstrap
@@ -193,15 +964,16 @@ class Terraform:
         """The root as this mlz-core has it: files from an earlier copy go first, and the checkout's override files
         (a git-ignored backend_override.tf from running the root by hand) are never copied, since either would
         change what the root does. The bootstrap step writes its own override while the state is local."""
-        pairs = ((CORE / "bootstrap" / "terraform", self.root), (CORE / "modules" / "naming", self.work / "modules" / "naming"))
+        pairs = ((CORE / "bootstrap" / "terraform", self.root),)
         if any(target.resolve() == source.resolve() for source, target in pairs):
             # The copy's old files go first: in the checkout itself, those are the sources.
             raise ConfigError(f"the work folder {self.work} is mlz-core's own checkout; choose another with --work.")
         for source, target in pairs:
             target.mkdir(parents=True, exist_ok=True)
-            for old in target.glob("*.tf"):
+            # .json too, which an earlier mlz-core's copy of modules/naming had.
+            for old in [*target.glob("*.tf"), *target.glob("*.json")]:
                 old.unlink()
-            for path in [*source.glob("*.tf"), *source.glob(".terraform.lock.hcl")]:
+            for path in [*source.glob("*.tf"), *source.glob("*.json"), *source.glob(".terraform.lock.hcl")]:
                 if not path.name.endswith("override.tf"):
                     shutil.copy2(path, target / path.name)
 
@@ -219,7 +991,34 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
                    ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
     """Plans and applies the bootstrap, with a local state the first time; then moves the state into the account
     the bootstrap created, and checks that the identities trust the subjects GitHub issues."""
-    _, bootstrap = settings(folder)
+    apply_bootstrap(github, terraform, folder, yes, out, ask, wait)
+    if json.loads(terraform.output("state_private_endpoint")):
+        out("bootstrap: the state account has its private endpoint in management's network.")
+    else:
+        out("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.")
+    out("bootstrap: done. Next: mlz install handover, then mlz install publish.")
+
+
+def apply_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Callable[[str], None] = print,
+                    ask: Callable[[str], str] = answer, wait: Callable[[float], None] = time.sleep) -> None:
+    """The bootstrap's plan and apply, for the bootstrap step and the runners step."""
+    customer, bootstrap = settings(folder)
+    if github_plan(bootstrap) == "team":
+        # On Team the apply takes the role environments' reviewers away: only once every role repo's pipeline passes
+        # approval: pull-request, so that no apply is ever left without a gate (docs/bootstrap.md, Switching plans).
+        behind = [problem for role, repo in repositories(bootstrap).items() if github.repo(repo) is not None
+                  for problem in team_gate_problems(github, bootstrap, role, repo)]
+        if behind:
+            raise ConfigError("\n  ".join(["bootstrap.yaml's github.plan is team, and this apply would take each role environment's reviewer "
+                                             "away; Team's gate must hold first in every role repo, or an apply there would wait for nobody. "
+                                             "Nothing was applied (docs/bootstrap.md, Switching plans):"] + behind))
+    # Worked out here, on every run, from customer.yaml's naming and bootstrap.yaml's names: (docs/naming.md), and
+    # bootstrap.yaml's runner settings, checked, with their defaults.
+    names_file, runners_file = terraform.work / "names.json", terraform.work / "runners.json"
+    names_file.parent.mkdir(parents=True, exist_ok=True)
+    names_file.write_text(json.dumps(bootstrap_names(customer, bootstrap), indent=2) + "\n")
+    runners = runner_settings(bootstrap)
+    runners_file.write_text(json.dumps({**runners, "image": runner_image(runners["image"])}, indent=2) + "\n")
     terraform.prepare()
     backend, pending = terraform.work / "backend.hcl", terraform.work / "backend.hcl.pending"
     override = terraform.root / "backend_override.tf"
@@ -230,11 +1029,14 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     if terraform.run(*init).returncode:
         raise ConfigError("terraform init failed; see above.")
     plan = terraform.work / "bootstrap.tfplan"
-    variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}"]
-    status = terraform.run("plan", "-input=false", "-detailed-exitcode", f"-out={plan}", *variables).returncode
-    if status == 1:
+    variables = ["-var", f"customer_file={(folder / 'customer.yaml').resolve()}", "-var", f"bootstrap_file={(folder / 'bootstrap.yaml').resolve()}",
+                 "-var", f"names_file={names_file}", "-var", f"runners_file={runners_file}"]
+    # Whether anything is to apply is the plan's own JSON, read as the pipeline reads it (tools/ci/summary.py), never
+    # Terraform's exit code (D12): an import or a move alone changes nothing in Azure, but must be applied for the
+    # state to record it.
+    if terraform.run("plan", "-input=false", f"-out={plan}", *variables).returncode or not plan.is_file():
         raise ConfigError("terraform plan failed; see above.")
-    if status == 2:
+    if plan_changes(terraform, plan, out):
         if not yes and ask("Apply this plan? [y/N] ").strip().lower() != "y":
             raise ConfigError("not applied.")
         if terraform.run("apply", "-input=false", str(plan)).returncode:
@@ -242,7 +1044,25 @@ def step_bootstrap(github, terraform, folder: Path, yes: bool = False, out: Call
     if local:
         move_state(terraform, backend, pending, override, out, wait)
     check_subjects(github, json.loads(terraform.output("oidc_subjects")), repositories(bootstrap), out)
-    out("bootstrap: done. Next: mlz install handover, then mlz install publish.")
+
+
+def plan_changes(terraform, plan: Path, out: Callable[[str], None] = print) -> list[str]:
+    """The bootstrap plan's changes, as the pipeline lists a stack's (tools/ci/summary.py: resources, outputs, and the
+    imports, moves and forgets that change only the state), with its summary printed; a ConfigError when Terraform
+    cannot show the plan, or summary.py fails on it (an errored plan, or one whose applyable it does not agree with)."""
+    from ci import summary  # tools/ci, on the same path as tools/mlz: one rule for the pipeline and the bootstrap
+
+    shown = terraform.run("show", "-json", str(plan), capture=True)
+    if shown.returncode:
+        raise ConfigError(f"terraform show could not read the plan: {shown.stderr.strip()}")
+    as_json, summary_file, changes_file = (terraform.work / name for name in ("bootstrap.plan.json", "bootstrap-summary.md", "bootstrap-changes.txt"))
+    as_json.write_text(shown.stdout)
+    checked = summary.main(str(as_json), "bootstrap", str(summary_file), str(changes_file))
+    as_json.unlink()
+    if checked:
+        raise ConfigError("the bootstrap's plan is not one to apply; see above.")
+    out(summary_file.read_text().rstrip("\n"))
+    return changes_file.read_text().splitlines()
 
 
 def move_state(terraform, backend: Path, pending: Path, override: Path, out, wait) -> None:
@@ -281,15 +1101,37 @@ class Azure:
     """Azure Resource Manager in one tenant, with the Azure CLI's sign-in for that tenant."""
 
     def __init__(self, tenant: str):
-        self.token = subprocess.run(["az", "account", "get-access-token", "--tenant", tenant, "--resource", "https://management.azure.com",
-                                     "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
+        self.tenant = tenant
+        self.token = self.access_token("https://management.azure.com")
 
-    def request(self, method: str, url: str) -> dict:
+    def access_token(self, resource: str) -> str:
+        return subprocess.run(["az", "account", "get-access-token", "--tenant", self.tenant, "--resource", resource,
+                               "--query", "accessToken", "-o", "tsv"], capture_output=True, text=True, check=True).stdout.strip()
+
+    def object_id(self) -> str:
+        """The signed-in principal's object ID, from its own token: no Graph call, which a guest's sign-in may not make."""
+        payload = self.token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))["oid"]
+
+    def vault(self, method: str, url: str, body: dict | None = None) -> dict:
+        """Key Vault's data plane, as the signed-in principal. The value sent is never logged."""
+        if not getattr(self, "vault_token", None):
+            self.vault_token = self.access_token("https://vault.azure.net")
+        request = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         headers={"Authorization": f"Bearer {self.vault_token}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(request) as response:
+            answer = response.read()
+        return json.loads(answer) if answer else {}
+
+    def request(self, method: str, url: str, body: dict | None = None) -> dict:
         # Without no-cache, getEntities answered from a cache for minutes after a move: three subscriptions just
         # moved into the tree still showed in unmanaged_subscriptions (TCAF, 2026-11-11), so a second handover
         # would have asked to move them again.
-        req = urllib.request.Request(url if url.startswith("https://") else f"https://management.azure.com{url}", method=method,
-                                     headers={"Authorization": f"Bearer {self.token}", "Content-Length": "0", "Cache-Control": "no-cache"})
+        headers = {"Authorization": f"Bearer {self.token}", "Cache-Control": "no-cache"}
+        data = None if body is None else json.dumps(body).encode()
+        headers.update({"Content-Length": "0"} if data is None else {"Content-Type": "application/json"})
+        req = urllib.request.Request(url if url.startswith("https://") else f"https://management.azure.com{url}", data=data, method=method,
+                                     headers=headers)
         with urllib.request.urlopen(req) as response:
             body = response.read()
         return json.loads(body) if body else {}
@@ -306,6 +1148,15 @@ class Azure:
 
     def move(self, group: str, subscription: str) -> None:
         self.request("PUT", f"/providers/Microsoft.Management/managementGroups/{group}/subscriptions/{subscription}?api-version=2021-04-01")
+
+    def resource(self, resource_id: str, api_version: str) -> dict | None:
+        """The resource, or None if it, or its resource group, does not exist."""
+        try:
+            return self.request("GET", f"{resource_id}?api-version={api_version}")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                return None
+            raise
 
 
 def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], None] = print, ask: Callable[[str], str] = answer) -> None:
@@ -334,24 +1185,421 @@ def step_handover(azure, folder: Path, yes: bool = False, out: Callable[[str], N
         out(f"handover: {role} subscription {subscription} is now in {root}")
 
 
+# runners
+
+RUNNER = "mlz"  # the organization's runner group, the label jobs run on, and GitHub's network configuration and runner
+RUNS_ON = "MLZ_RUNS_ON"  # the repo variable the workflow runs its Azure jobs on, when set (.github/workflows/role.yml)
+MAXIMUM_RUNNERS = 10  # GitHub-hosted: at most this many at a time
+# Self-hosted: the vault secret the runners read their GitHub App's key from (docs/bootstrap.md, private runners).
+APP_KEY_SECRET = "github-runner-app-key"
+VAULT_API = "2024-11-01"
+SECRETS_OFFICER = "b86a8fe4-44ce-4948-aee5-eccb2c155cd7"  # Key Vault Secrets Officer, held only for the key's upload
+# Fortytwo's runner image's plan, whose terms the management subscription accepts once.
+# Fortytwo's runner images, by github.runners.image: the GitHub offer's plan, which Microsoft bills to the subscription
+# (the default); or the dev plan of the Azure DevOps offer, the one Fortytwo's own tests run on, billed nothing.
+# Neither image carries a runner: the registration script installs GitHub's. Which subscriptions may use the dev
+# plan is up to its audience in Partner Center, not to mlz-core.
+FORTYTWO = "amestofortytwoas1653635920536"
+RUNNER_IMAGES = {
+    "fortytwo": {"publisher": FORTYTWO, "offer": "self_hosted_runner_github", "sku": "ubuntu-latest-gen2"},
+    "dev": {"publisher": FORTYTWO, "offer": "self_hosted_runner_ado", "sku": "ubuntu-latest-dev-gen2"},
+}
+
+
+def runner_image(key: str) -> dict:
+    """The image the module takes: the plan is the SKU's, as Fortytwo's offers name them."""
+    image = RUNNER_IMAGES[key]
+    return {**image, "plan": {"name": image["sku"], "product": image["offer"], "publisher": image["publisher"]}}
+
+
+def gh_fields(body: dict, prefix: str = "") -> list[str]:
+    """A request body as gh api fields: -f for text, -F for numbers and booleans, key[] for lists, key[sub].
+    Each one quoted for the shell: these are pasted into one by an owner, and some values come from YAML."""
+    fields = []
+    for key, value in body.items():
+        name = f"{prefix}[{key}]" if prefix else key
+        if isinstance(value, dict):
+            fields += gh_fields(value, name)
+        else:
+            for item in value if isinstance(value, list) else [value]:
+                flag = "-f" if isinstance(item, str) else "-F"
+                text = str(item).lower() if isinstance(item, bool) else str(item)
+                fields.append(f"{flag} {shlex.quote(name + ('[]' if isinstance(value, list) else '') + '=' + text)}")
+    return fields
+
+
+def core_releases(core: str, workflows: list[str] | None) -> set[str]:
+    """Of the workflows a runner group admits, those that are the customer's copy of mlz-core's role.yml at a
+    release: nothing else may run where the runner App's key is."""
+    return {w for w in workflows or [] if re.fullmatch(re.escape(mirror.workflow(core, "")) + r"v[0-9]+\.[0-9]+\.[0-9]+", w)}
+
+
+def step_runners(github, azure, folder: Path, out: Callable[[str], None] = print, terraform=None, app_key: Path | None = None,
+                 yes: bool = False, wait: Callable[[float], None] = time.sleep) -> None:
+    """Moves the pipelines' Azure jobs onto runners in management's network, of the kind bootstrap.yaml's
+    github.runners says: self-hosted (the default) or GitHub-hosted."""
+    _, bootstrap = settings(folder)
+    if runner_settings(bootstrap)["kind"] == "github-hosted":
+        github_hosted_runners(github, azure, folder, out)
+    else:
+        self_hosted_runners(github, azure, terraform, folder, app_key, yes, out, wait)
+
+
+def github_hosted_runners(github, azure, folder: Path, out: Callable[[str], None] = print) -> None:
+    """GitHub-hosted runners joined to management's network. In the customer's organization: a network
+    configuration naming the network settings resource in management's network, a runner group for the three
+    repos only, and a GitHub-hosted runner in it. Then, once the state account has its private endpoint, the repos run their Azure
+    jobs on that runner. Only an owner of the organization may make the three: anyone else gets them as
+    commands to send to one, filled in, and changes nothing."""
+    customer, bootstrap = settings(folder)
+    org, repos = bootstrap["github"]["organization"], repositories(bootstrap)
+    root, region = customer["root_id"], customer["primary_region"]
+    if region not in platform.GITHUB_RUNNER_REGIONS:
+        raise ConfigError(f"GitHub joins its runners to a customer's network only in some regions, not {region} (docs/platform.md, "
+                          "GitHub-hosted runners). The pipelines stay on GitHub's public runners.")
+    named = bootstrap_names(customer, bootstrap)
+    management = f"/subscriptions/{customer['subscriptions']['management']}"
+    settings_name = names.network(naming.settings(customer, root), "management", region, [])["github_network_settings"]
+    network = azure.resource(f"{management}/resourceGroups/{named['network_resource_groups']['management']}/providers/GitHub.Network/networkSettings/{settings_name}", "2024-04-02")
+    github_id = ((network or {}).get("tags") or {}).get("GitHubId")
+    if not github_id:
+        raise ConfigError(f"management's network has no GitHub network settings yet ({settings_name}): the platform's management stack makes it. "
+                          "Run the platform's pipeline on main, then this step again.")
+    endpoint = azure.resource(f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.Network/privateEndpoints/{named['state_endpoint']}", "2024-07-01")
+    ready = ((endpoint or {}).get("properties") or {}).get("provisioningState") == "Succeeded"
+    waiting = "the state account has no private endpoint yet, and the runner reaches the state only through it: run mlz install bootstrap again"
+    repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
+    configuration = {"name": RUNNER, "compute_service": "actions", "network_settings_ids": [github_id]}
+    group = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False}
+    runner = {"name": RUNNER, "image": {"id": "ubuntu-latest", "source": "github"},
+              "size": runner_settings(bootstrap)["size"], "maximum_runners": MAXIMUM_RUNNERS}
+    switch = [f"gh variable set {RUNS_ON} --repo {shlex.quote(repo)} --body {RUNNER}" for repo in repos.values()]
+
+    if not github.is_owner(org):
+        out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the network "
+            f"configuration {RUNNER} for {settings_name}, the runner group {RUNNER} for the three repos only, and the runner {RUNNER} in it.\n")
+        out("\n".join([
+            f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
+            f"configuration=$(gh api -X POST {shlex.quote(f'orgs/{org}/settings/network-configurations')} {' '.join(gh_fields(configuration))} --jq .id)",
+            f"group=$(gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(group))} -f network_configuration_id=\"$configuration\" --jq .id)",
+            f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/hosted-runners')} {' '.join(gh_fields(runner))} -F runner_group_id=\"$group\"",
+        ]) + "\n")
+        out("runners: then move the three repos onto the runner, as an admin on them"
+            + ("" if ready else f". Not yet: {waiting}, then run these") + ":\n")
+        out("\n".join(switch))
+        return
+
+    found = github.network_configuration(org, RUNNER)
+    if found is None:
+        try:
+            found = github.create_network_configuration(org, configuration)
+        except ConfigError as error:
+            raise ConfigError(f"{error}\nIf {org} belongs to an enterprise account, an enterprise owner must first let its organizations make network "
+                              "configurations: the enterprise's Settings, Policies, Hosted compute networking (docs/bootstrap.md).") from error
+        out(f"runners: network configuration {RUNNER} made, for {settings_name}")
+    elif found.get("network_settings_ids") != [github_id] or found.get("failover_network_enabled") or found.get("failover_network_settings_ids"):
+        # Only management's network: a second or failover network would run jobs where the state is out of reach.
+        raise ConfigError(f"{org} has a network configuration named {RUNNER} for other or further network settings; it must name {settings_name} "
+                          "alone, with no failover. Delete or rename it, then run this step again.")
+    else:
+        out(f"runners: network configuration {RUNNER} is in place")
+
+    made = github.runner_group(org, RUNNER)
+    if made is None:
+        made = github.create_runner_group(org, {**group, "network_configuration_id": found["id"]})
+        out(f"runners: runner group {RUNNER} made, for the three repos only")
+    else:
+        # Kept to the three repos and the network: a wider group would let other repos run jobs inside it.
+        if made.get("visibility") != "selected" or made.get("allows_public_repositories") or made.get("network_configuration_id") != found["id"]:
+            github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False, "network_configuration_id": found["id"]})
+        if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
+            github.set_runner_group_repositories(org, made["id"], repo_ids)
+        out(f"runners: runner group {RUNNER} is for the three repos only")
+
+    existing = github.hosted_runner(org, RUNNER)
+    if existing is None:
+        github.create_hosted_runner(org, {**runner, "runner_group_id": made["id"]})
+        out(f"runners: runner {RUNNER} made ({runner['size']}, at most {MAXIMUM_RUNNERS} at a time)")
+    elif existing.get("runner_group_id") != made["id"]:
+        raise ConfigError(f"{org} has a runner named {RUNNER} outside the runner group {RUNNER}; move or delete it, then run this step again.")
+    else:
+        out(f"runners: runner {RUNNER} is in place")
+
+    if not ready:
+        out(f"runners: the repos stay on GitHub's public runners: {waiting}, then this step.")
+        return
+    for repo in repos.values():
+        if github.variable(repo, RUNS_ON) != RUNNER:
+            github.set_variable(repo, RUNS_ON, RUNNER)
+    out(f"runners: the three repos run their plans, applies and publications on {RUNNER} from their next run. "
+        f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
+
+
+def self_hosted_runners(github, azure, terraform, folder: Path, app_key: Path | None, yes: bool, out: Callable[[str], None],
+                        wait: Callable[[float], None]) -> None:
+    """Self-hosted runners in management's network: Fortytwo's runner image on a scale set that the bootstrap
+    deploys (az-tf-mlz-github-runners), registered as the customer's runner App into the organization's runner
+    group mlz. The group admits only the three repos, and only role.yml in the organization's copy of mlz-core
+    (tools/mlz/mirror.py) at the releases they pin, so a pull request cannot put a job of its own on the runners,
+    where the App's key is within reach (decided 2026-11-16). In order: the group, the App's key into the bootstrap's vault, the subscription's prerequisites,
+    the bootstrap's apply, and once a runner is online, the repos' switch."""
+    customer, bootstrap = settings(folder)
+    runners = runner_settings(bootstrap)
+    org, repos, core = bootstrap["github"]["organization"], repositories(bootstrap), core_repository(bootstrap)
+    if not runners["app_client_id"]:
+        raise ConfigError("bootstrap.yaml needs github.runners.app_client_id: the client ID of the customer's runner App, which an owner of "
+                          f"{org} makes with one permission, Organization > Self-hosted runners: write (docs/bootstrap.md, private runners).")
+    named = bootstrap_names(customer, bootstrap)
+    management = f"/subscriptions/{customer['subscriptions']['management']}"
+    network = (f"{management}/resourceGroups/{named['network_resource_groups']['management']}/providers/Microsoft.Network/"
+               f"virtualNetworks/{named['management_network']}")
+    if azure.resource(f"{network}/subnets/{named['runners_subnet']}", "2024-07-01") is None:
+        raise ConfigError(f"management's network has no {named['runners_subnet']} yet: the platform's management stack makes it. "
+                          "Run the platform's pipeline on main, then this step again.")
+    vault_id = f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.KeyVault/vaults/{named['key_vault']}"
+    vault = azure.resource(vault_id, VAULT_API)
+    if vault is None:
+        raise ConfigError(f"the runners' vault {named['key_vault']} is not there yet: the bootstrap makes it once management's network and the "
+                          "hub's zones exist. Run mlz install bootstrap again, then this step.")
+
+    group = self_hosted_group(github, org, repos, core, out, bootstrap)
+    if group is None:
+        return
+
+    secret_id = f"{vault_id}/secrets/{APP_KEY_SECRET}"
+    if app_key is not None:
+        upload_app_key(azure, vault_id, vault, app_key, out, wait)
+    elif azure.resource(secret_id, VAULT_API) is None:
+        raise ConfigError(f"the runner App's key is not in {named['key_vault']} yet: run this step with --app-key <the .pem file from the App's "
+                          "settings page>, as the person who downloaded it (docs/bootstrap.md, private runners).")
+
+    if not runner_prerequisites(azure, management, runners["image"], out):
+        return
+    apply_bootstrap(github, terraform, folder, yes, out)
+
+    # Online, and taking the jobs MLZ_RUNS_ON sends: the label mlz, which every one of the bootstrap's runners has.
+    online = [runner for runner in github.group_runners(org, group["id"])
+              if runner.get("status") == "online" and RUNNER in {label.get("name") for label in runner.get("labels") or []}]
+    if not online:
+        out(f"runners: {runners['instances']} {named['runners']} instance(s) deployed; none is online in the runner group {RUNNER} yet "
+            "(each registers within minutes of booting). Run this step again to move the repos onto them.")
+        return
+    endpoint = azure.resource(f"{management}/resourceGroups/{named['resource_group']}/providers/Microsoft.Network/privateEndpoints/{named['state_endpoint']}", "2024-07-01")
+    if ((endpoint or {}).get("properties") or {}).get("provisioningState") != "Succeeded":
+        out("runners: the repos stay on GitHub's public runners: the state account has no private endpoint yet, and the runners reach the "
+            "state only through it. Run mlz install bootstrap again, then this step.")
+        return
+    for repo in repos.values():
+        if github.variable(repo, RUNS_ON) != RUNNER:
+            github.set_variable(repo, RUNS_ON, RUNNER)
+    out(f"runners: {len(online)} online; the three repos run their plans, applies and publications on them from their next run. "
+        f"To go back to GitHub's public runners: gh variable delete {RUNS_ON} --repo <repo>.")
+
+
+def pinned_releases(github, repos: dict[str, str], core: str) -> set[str]:
+    """The releases of role.yml in the customer's copy of mlz-core that the repos' workflows call on their default
+    branches: the only workflows the runner group admits. A repo on anything else could never use the runners."""
+    found, problems = set(), []
+    for repo in repos.values():
+        text, _ = github.file(repo, WORKFLOW, github.default_branch(repo))
+        try:
+            called, ref = pin_of(text or "")
+        except ConfigError:
+            problems.append(f"{repo}: its {WORKFLOW} does not call mlz-core's role.yml.")
+            continue
+        if called != core or version(ref) is None:
+            problems.append(f"{repo}: its {WORKFLOW} calls {called}'s role.yml at {ref}, which the runner group cannot admit: only "
+                            f"{core}'s, the organization's own copy of mlz-core, at a release. python3 -m mlz upgrade {repo} --core {core} "
+                            "moves it onto the copy.")
+            continue
+        if not github.tag_exists(core, ref):
+            problems.append(f"{repo}: its {WORKFLOW} calls {core}'s role.yml at {ref}, which {core} has no tag for: "
+                            f"python3 -m mlz upgrade {repo} --to {ref} --core {core} pushes it there.")
+            continue
+        found.add(ref)
+    if problems:
+        raise ConfigError("\n  ".join(problems))
+    return found
+
+
+def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: Callable[[str], None], bootstrap: dict | None = None) -> dict | None:
+    """The organization's runner group mlz, for the three repos and role.yml in the organization's copy of mlz-core,
+    at the releases they pin, only: a runner group can admit no workflow of another organization's. Only an owner
+    may make it: anyone else gets the command to send to one, and None."""
+    repo_ids = sorted(github.repo(repo)["id"] for repo in repos.values())
+    pinned = sorted(mirror.workflow(core, ref) for ref in pinned_releases(github, repos, core))
+    workflow = " and ".join(pinned)
+    body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
+            "restricted_to_workflows": True, "selected_workflows": pinned}
+    # Made with no repo, and given the repos only once GitHub is seen to keep its limit to role.yml: a repo admitted to
+    # a group without it could start a job there before the limit is read back.
+    empty = {**body, "selected_repository_ids": []}
+    if not github.is_owner(org):
+        out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
+            f"{RUNNER}, for {workflow} only and no repo yet. Then an owner runs this step again, which admits the three repos once GitHub "
+            "keeps that limit.\n")
+        out("\n".join([f"gh auth refresh -h github.com -s {RUNNER_SCOPES}",
+                       f"gh api -X POST {shlex.quote(f'orgs/{org}/actions/runner-groups')} {' '.join(gh_fields(empty))}"]) + "\n")
+        return None
+    made = github.runner_group(org, RUNNER)
+    if made is None:
+        made = github.create_runner_group(org, empty)
+        workflows_kept(github, org, pinned, bootstrap, out)
+        github.set_runner_group_repositories(org, made["id"], repo_ids)
+        out(f"runners: runner group {RUNNER} made, for the three repos and {workflow} only")
+        return made
+    if made.get("network_configuration_id"):
+        raise ConfigError(f"{org}'s runner group {RUNNER} is for GitHub-hosted runners (it has a network configuration). Delete it to move to "
+                          "self-hosted runners, or set github.runners.kind: github-hosted in bootstrap.yaml.")
+    # Kept narrow: a wider group would let other repos, or a job a pull request adds, run where the App's key is.
+    # mlz-core's releases admitted before stay, for repos that have not moved yet; any other workflow goes.
+    workflows = sorted(core_releases(core, made.get("selected_workflows")) | set(pinned))
+    if (made.get("visibility") != "selected" or made.get("allows_public_repositories") or not made.get("restricted_to_workflows")
+            or workflows != sorted(made.get("selected_workflows") or [])):
+        github.update_runner_group(org, made["id"], {"visibility": "selected", "allows_public_repositories": False,
+                                                     "restricted_to_workflows": True, "selected_workflows": workflows})
+    workflows_kept(github, org, workflows, bootstrap, out)
+    if github.runner_group_repositories(org, made["id"]) != set(repo_ids):
+        github.set_runner_group_repositories(org, made["id"], repo_ids)
+    out(f"runners: runner group {RUNNER} is for the three repos and {workflow} only")
+    return made
+
+
+def workflows_kept(github, org: str, requested: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
+    """Whether GitHub kept the group's limit to exactly the workflows requested (role.yml at the releases admitted), read
+    back. Without it any workflow of the three repos could run where the runner App's key is, and nothing in the repos
+    can prove there is none: an old run kept in the Actions history can be re-run with the workflow it had. So a group
+    without the limit is left with no repo in it, and the step stops, on GitHub Team as on Enterprise (the user's
+    decision of 23 November). GitHub documents the limit ("Changing which workflows can access a runner group") for
+    Enterprise Cloud only; on Team, GitHub-hosted runners joined to management's network are the private way."""
+    group = github.runner_group(org, RUNNER) or {}
+    if group.get("restricted_to_workflows") and sorted(group.get("selected_workflows") or []) == sorted(requested):
+        return
+    if group.get("id") is not None:
+        github.set_runner_group_repositories(org, group["id"], [])
+    kept = sorted(group.get("selected_workflows") or []) if group.get("restricted_to_workflows") else []
+    lost = (f"{org}'s runner group {RUNNER} is not limited to {' and '.join(requested)}: GitHub "
+            + (f"keeps it limited to {', '.join(kept)} instead" if kept else "did not keep its limit to selected workflows"))
+    if bootstrap is not None and github_plan(bootstrap) == "team":
+        raise ConfigError(f"{lost}, which GitHub documents for Enterprise Cloud only. Without it any workflow of the three repos could reach "
+                          f"the runners and the runner App's key, so no repo may use the group now, and no self-hosted runner is made. On "
+                          "GitHub Team, set github.runners.kind: github-hosted in bootstrap.yaml: GitHub's runners, joined to management's "
+                          "network (docs/bootstrap.md, private runners).")
+    raise ConfigError(f"{lost}, which GitHub Enterprise allows. Without it any workflow of the three repos could reach the runners and the "
+                      f"runner App's key, so no repo may use the group now: set it in the organization's Settings, Actions, Runner groups, "
+                      f"{RUNNER}, Workflow access (selected workflows: {', '.join(requested)}), then run this step again.")
+
+
+def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callable[[str], None], wait: Callable[[float], None]) -> None:
+    """Writes the runner App's private key into the vault, straight to Key Vault's data plane: never through
+    Terraform, so never in a state or a plan, and never printed. The vault's firewall admits nobody and its roles
+    give nobody secrets, so for the write only, the signed-in person holds Key Vault Secrets Officer on it and
+    their address passes its firewall; both go again whatever happens."""
+    try:
+        key = app_key.expanduser().read_text()
+    except OSError as error:
+        raise ConfigError(f"--app-key {app_key}: {error.strerror}.") from None
+    if "-----BEGIN" not in key or "PRIVATE KEY-----" not in key:
+        raise ConfigError(f"--app-key {app_key} is not a private key file: use the .pem file the runner App's settings page downloads.")
+    subscription = vault_id.split("/")[2]
+    assignment = f"{vault_id}/providers/Microsoft.Authorization/roleAssignments/{uuid.uuid5(uuid.NAMESPACE_URL, vault_id + '/upload/' + azure.object_id())}"
+    azure.request("PUT", f"{assignment}?api-version=2022-04-01", {"properties": {
+        "roleDefinitionId": f"/subscriptions/{subscription}/providers/Microsoft.Authorization/roleDefinitions/{SECRETS_OFFICER}",
+        "principalId": azure.object_id()}})
+    acls = (vault.get("properties") or {}).get("networkAcls") or {}
+    opened = None
+    url = f"{vault['properties']['vaultUri'].rstrip('/')}/secrets/{APP_KEY_SECRET}?api-version=7.4"
+    try:
+        for attempt in range(30):
+            try:
+                azure.vault("PUT", url, {"value": key, "contentType": "application/x-pem-file"})
+                break
+            except urllib.error.HTTPError as error:
+                text = error.read().decode(errors="replace")
+                address = re.search(r"Client address: ([0-9a-fA-F.:]+)", text)
+                if "ForbiddenByFirewall" in text and address and opened is None:
+                    opened = address.group(1)
+                    azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}",
+                                  {"properties": {"networkAcls": {**acls, "ipRules": [*(acls.get("ipRules") or []), {"value": opened}]}}})
+                    out(f"runners: {opened} may reach the vault for the upload")
+                elif error.code != 403 or attempt == 29:  # a new role can take minutes to reach Key Vault
+                    raise ConfigError(f"Key Vault refused the key (HTTP {error.code}): {json.loads(text).get('error', {}).get('message', text) if text.startswith('{') else text}") from None
+                wait(10)
+        else:
+            raise ConfigError("Key Vault did not take the key within five minutes: its firewall or the new role had not reached it yet. "
+                              "Run this step again with --app-key.")
+    finally:
+        # Each tried whatever the other does. A failed one says what to undo by hand; the bootstrap's next apply
+        # also takes an address left in the firewall out again.
+        undone = []
+        if opened is not None:
+            try:
+                azure.request("PATCH", f"{vault_id}?api-version={VAULT_API}", {"properties": {"networkAcls": acls}})
+            except urllib.error.URLError:
+                undone.append(f"az keyvault network-rule remove --name {vault_id.rsplit('/', 1)[1]} --ip-address {opened}")
+        try:
+            azure.request("DELETE", f"{assignment}?api-version=2022-04-01")
+        except urllib.error.URLError:
+            undone.append(f"az role assignment delete --ids {assignment}")
+        if undone:
+            out("runners: these could not be undone after the upload; run them now:\n" + "\n".join(undone))
+    gone = "" if undone else "; your role and address are gone from it again"
+    out(f"runners: the runner App's key is in the vault as {APP_KEY_SECRET}{gone}. Delete the .pem file now, and never send it on: the "
+        "App's settings page makes a new key whenever one is needed.")
+
+
+def runner_prerequisites(azure, management: str, image: str, out: Callable[[str], None]) -> bool:
+    """What Fortytwo's image needs from the management subscription, once: its plan's terms accepted, and
+    encryption at host registered. Registration can take a while: False until it has finished."""
+    plan = RUNNER_IMAGES[image]
+    terms = (f"{management}/providers/Microsoft.MarketplaceOrdering/offerTypes/virtualmachine/publishers/{plan['publisher']}"
+             f"/offers/{plan['offer']}/plans/{plan['sku']}/agreements/current?api-version=2021-01-01")
+    # Reading the terms or accepting them: Azure may refuse either for a plan the subscription may not use.
+    try:
+        agreement = azure.request("GET", terms)
+        if not (agreement.get("properties") or {}).get("accepted"):
+            azure.request("PUT", terms, {**agreement, "properties": {**(agreement.get("properties") or {}), "accepted": True}})
+            out(f"runners: the terms of Fortytwo's runner image ({plan['offer']}, {plan['sku']}) are accepted for the management subscription")
+    except urllib.error.HTTPError as error:
+        if image == "dev" and error.code in (400, 403, 404):
+            raise ConfigError(f"the management subscription may not use Fortytwo's dev image ({plan['offer']}, {plan['sku']}; HTTP {error.code}): "
+                              "it is for Fortytwo's own tenants. Leave github.runners.image out for Fortytwo's runner image.") from None
+        raise
+    feature = f"{management}/providers/Microsoft.Features/providers/Microsoft.Compute/features/EncryptionAtHost"
+    state = (azure.request("GET", f"{feature}?api-version=2021-07-01").get("properties") or {}).get("state")
+    if state != "Registered":
+        if state != "Registering":
+            azure.request("POST", f"{feature}/register?api-version=2021-07-01")
+        out("runners: encryption at host is being registered on the management subscription, which takes a few minutes. Run this step again then.")
+        return False
+    # A registered feature takes effect once its provider is registered again; again changes nothing.
+    azure.request("POST", f"{management}/providers/Microsoft.Compute/register?api-version=2021-04-01")
+    return True
+
+
 # publish
 
-def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = print) -> str | None:
-    """The bootstrap's contract, offered to the governance repo as a pull request like every other contract."""
-    _, bootstrap = settings(folder)
-    repo = repositories(bootstrap)["governance"]
+def bootstrap_contract(terraform) -> dict:
+    """The bootstrap's contract, read from its state in its account."""
     terraform.prepare()
     backend = terraform.work / "backend.hcl"
     if not backend.exists():
         raise ConfigError("the bootstrap's state is not in its account yet; run mlz install bootstrap first.")
     if terraform.run("init", "-input=false", "-reconfigure", f"-backend-config={backend}").returncode:
         raise ConfigError("terraform init failed; see above.")
-    text = contract.render("bootstrap", json.loads(terraform.output("contract")))
+    return json.loads(terraform.output("contract"))
+
+
+def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = print) -> str | None:
+    """The bootstrap's contract, offered to the governance repo as a pull request like every other contract."""
+    _, bootstrap = settings(folder)
+    repo = repositories(bootstrap)["governance"]
+    text = contract.render("bootstrap", bootstrap_contract(terraform))
     base = github.default_branch(repo)
     if github.file(repo, CONTRACT_PATH, base)[0] == text:
         out(f"publish: {repo} already has this {CONTRACT_PATH}")
         # A pull request left open by an earlier publish offers a contract that is no longer the deployed one:
-        # merged, it would bring back old identities. Closed, as tools/ci/publish.sh does for the other contracts.
+        # merged, it would bring back old identities. Closed, as tools/ci/publish.py does for the other contracts.
         for url in github.close_pulls(repo, CONTRACT_BRANCH, f"Closed by mlz install publish: {CONTRACT_PATH} on {base} already matches the bootstrap's state."):
             out(f"publish: closed {url}, which no longer matches the bootstrap")
         return None
@@ -359,6 +1607,8 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
     if url and github.file(repo, CONTRACT_PATH, CONTRACT_BRANCH)[0] == text:
         out(f"publish: {url} already offers this {CONTRACT_PATH}")
         return url
+    # Only the MLZ App and the bypass team may change _generated/ (generated_ruleset): stop before the branch is made.
+    refuse_if_pushes_refused(github, repo, [CONTRACT_PATH])
     # Onto an open pull request's branch: a branch moved back to main would close its pull request.
     head = github.head(repo, CONTRACT_BRANCH) if url else github.reset_branch(repo, CONTRACT_BRANCH, base)
     github.commit_files(repo, CONTRACT_BRANCH, head, {CONTRACT_PATH: text}, "chore: bootstrap contract")
@@ -367,7 +1617,127 @@ def step_publish(github, terraform, folder: Path, out: Callable[[str], None] = p
         "The pipeline identities and the state account from the bootstrap. Governance's run merges it once it has "
         "checked and planned it, and the run on main that starts is governance's first deployment, which waits for "
         "its reviewer.\n\nFrom there the contracts go between the repos by themselves, each run on main waiting for "
-        "its reviewer: platform, governance again (its Private Link DNS policy then points at the zones), and vending. "
-        "Hand each landing zone's subscription over before its YAML is merged (docs/pipelines.md, The first run).\n")
+        "its reviewer: platform, then vending. "
+        "Hand each landing zone's subscription over before its YAML is merged, unless vending makes it where billing_scope "
+        "says (docs/pipelines.md, The first run).\n")
     out(f"publish: {url} merges itself once governance's run has checked and planned it; its apply then waits for the reviewer")
     return url
+
+
+# subscriptions
+
+# What lets vending's apply identity make subscriptions billed to a scope (docs/vending.md, The subscription): a
+# billing role, which neither Azure's role assignments nor Entra ID's roles give or show, by agreement. Checked on
+# Microsoft Learn on 13 November 2026: "Assign Enterprise Agreement roles to service principals" (EA) and
+# "Programmatically create Azure subscriptions for a Microsoft Customer Agreement" (MCA).
+BILLING_ROLES = {
+    "EA": {
+        "role": "SubscriptionCreator", "id": "a0bcee42-bf30-4d1b-926a-48d21664ef71", "api": "2019-10-01-preview",
+        "on": "the enrollment account",
+        "granter": "the enrollment account's owner, its Account Owner (\"enrollment account owner (EA admin)\" in Microsoft's role table)",
+        "portal": None,
+    },
+    "MCA": {
+        "role": "Azure subscription creator", "id": "30000000-aaaa-bbbb-cccc-100000000006", "api": "2024-04-01",
+        "on": "the invoice section",
+        "granter": "an owner of the invoice section, of its billing profile or of the billing account",
+        "portal": "Cost Management + Billing, the invoice section, Access control (IAM): Add, role Azure subscription creator, for the identity",
+    },
+}
+
+
+GRANT_CHECKS, GRANT_WAIT = 10, 6.0  # how often, and how many seconds apart, a grant is looked for after it is asked
+
+
+def grant_request(kind: str, scope: str, principal: str, tenant: str) -> tuple[str, str, dict]:
+    """The billing API call that gives principal the role on scope: (method, path, body). An EA assignment is named by
+    whoever makes it: here after the scope and the identity, so making it again changes nothing."""
+    role = BILLING_ROLES[kind]
+    assignment = {"principalId": principal, "principalTenantId": tenant, "roleDefinitionId": f"{scope}/billingRoleDefinitions/{role['id']}"}
+    if kind == "EA":
+        name = uuid.uuid5(uuid.NAMESPACE_URL, f"mlz-core/{scope}/{principal}")
+        return "PUT", f"{scope}/billingRoleAssignments/{name}?api-version={role['api']}", {"properties": assignment}
+    return "POST", f"{scope}/createBillingRoleAssignment?api-version={role['api']}", assignment
+
+
+def az_rest(method: str, path: str, body: dict | None = None, query: str | None = None) -> str:
+    """The same call as an Azure CLI command, for someone else to run."""
+    command = ["az", "rest", "--method", method.lower(), "--url", f"https://management.azure.com{path}"]
+    command += ["--body", json.dumps(body)] if body is not None else []
+    command += ["--query", query] if query is not None else []
+    return shlex.join(command)
+
+
+def holds_role(azure, kind: str, scope: str, principal: str) -> bool | None:
+    """Whether principal has the role on scope; None when the sign-in may not read the scope's role assignments."""
+    role = BILLING_ROLES[kind]
+    url = f"{scope}/billingRoleAssignments?api-version={role['api']}"
+    try:
+        while url:
+            page = azure.request("GET", url)
+            if any((a.get("properties") or {}).get("principalId") == principal
+                   and str((a.get("properties") or {}).get("roleDefinitionId", "")).lower().endswith(role["id"])
+                   for a in page.get("value", [])):
+                return True
+            url = page.get("nextLink")
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403, 404):
+            return None
+        raise
+    return False
+
+
+def step_subscriptions(azure, terraform, folder: Path, scope: str, tenant: str, yes: bool = False,
+                       out: Callable[[str], None] = print, ask: Callable[[str], str] = answer,
+                       wait: Callable[[float], None] = time.sleep) -> bool:
+    """Lets vending's apply identity make the landing zones' subscriptions billed to scope: gives it the billing role
+    when this sign-in may, after asking; otherwise prints the role the person who may give it holds, and the command
+    they run. Returns whether the identity has the role."""
+    settings(folder)
+    kind = vending.agreement(scope)
+    if kind not in BILLING_ROLES:
+        raise ConfigError(f"--billing-scope {scope!r} is an EA enrollment account (/providers/Microsoft.Billing/billingAccounts/<id>/"
+                          "enrollmentAccounts/<id>) or an MCA invoice section (.../billingAccounts/<id>/billingProfiles/<id>/"
+                          "invoiceSections/<id>), as billing_scope is in the vending repo; a CSP customer's subscriptions are "
+                          "made in Fortytwo's Partner Center.")
+    identity = (((bootstrap_contract(terraform).get("identities") or {}).get("vending") or {}).get("apply") or {})
+    if not identity.get("principal_id"):
+        raise ConfigError("the bootstrap's contract has no vending apply identity; run mlz install bootstrap first.")
+    principal, role = identity["principal_id"], BILLING_ROLES[kind]
+    who = f"vending's apply identity {identity.get('name', '')} (object ID {principal})".replace("  ", " ")
+    out(f"subscriptions: {who} makes the subscriptions billed to {scope} once it has the {kind} role {role['role']} on {role['on']}.")
+    held = holds_role(azure, kind, scope, principal)
+    if held:
+        out("subscriptions: it has it; vending can make them.")
+        return True
+    out("subscriptions: it does not have it yet." if held is False else "subscriptions: your sign-in may not read who has billing roles there, or there is no such scope.")
+    method, path, body = grant_request(kind, scope, principal, tenant)
+    if yes or ask("Give it the role now, signed in as you? [y/N] ").strip().lower() in ("y", "yes"):
+        try:
+            azure.request(method, path, body)
+        except urllib.error.HTTPError as error:
+            if error.code not in (400, 401, 403):
+                raise
+            out(f"subscriptions: Azure refused it (HTTP {error.code}): your sign-in may not give billing roles there.")
+        else:
+            # Taken is not given: an MCA grant answers 202 and finishes later, or fails later. Done only once the role
+            # assignments show it, read as at the start; for about a minute.
+            for _ in range(GRANT_CHECKS):
+                if holds_role(azure, kind, scope, principal):
+                    out(f"subscriptions: done; {who} has the role {role['role']} on {role['on']}.")
+                    return True
+                wait(GRANT_WAIT)
+            out("subscriptions: Azure took the request, but its role assignments do not show the role yet: it may still be "
+                "on its way, or have failed. Check again later (below), or have the person who may give it run the command.")
+    # The person who may: what they must hold, and what they run.
+    check = az_rest("GET", f"{scope}/billingRoleAssignments?api-version={role['api']}",
+                    query=f'value[?properties.principalId==`"{principal}"`].properties.roleDefinitionId')
+    lines = [f"subscriptions: {role['granter']} gives it. Send them this, to run in a bash shell (Azure Cloud Shell will do):", "",
+             f"  az login --tenant {tenant}", f"  {az_rest(method, path, body)}", ""]
+    if role["portal"]:
+        lines += [f"  or in the Azure portal: {role['portal']} {identity.get('name', principal)}.", ""]
+    lines += ["subscriptions: then, to check, by them or anyone who may read the billing roles there (it ends in "
+              f"{role['id']}):", "", f"  {check}"]
+    for line in lines:
+        out(line)
+    return False

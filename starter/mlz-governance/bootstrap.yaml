@@ -3,13 +3,22 @@
 
 github:
   organization: demo-org
+  plan: enterprise                 # the organization's GitHub plan: enterprise, or team (docs/bootstrap.md, GitHub plan)
+  app: demo-org-mlz                # the MLZ App (github.com/apps/<this>); with bypass_team, the only writer of _generated/
   repositories:                    # the three repos made from mlz-core's templates
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
-  reviewers: [demo-platform-lead]  # GitHub users who approve every apply
+  platform_team: platform          # the GitHub team that owns the three repos and approves their changes
+  bypass_team: platform-admins     # the few who may change .github/ (mlz upgrade, CODEOWNERS); not the platform team
+  reviewers: [demo-platform-lead]  # GitHub users who approve every apply (Enterprise; on Team, leave it out)
 
 # People who may run Terraform by hand against the state (the bootstrap itself, break-glass work),
 # by name: their Entra object IDs.
 state_operators:
   platform-lead: 00000000-0000-0000-0000-000000000010
+
+# The bootstrap's names come from customer.yaml's naming template (docs/naming.md). To keep a name, or when a
+# storage account's name is taken in another tenant (they are global), set it here:
+# names:
+#   storage_account: stdemomlzstatepdnwe01

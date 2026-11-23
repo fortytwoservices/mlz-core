@@ -2,12 +2,14 @@
 
     python3 -m mlz new landing-zone --repo <mlz-vending> <workload> <env> [--subscription <id>]
         [--owner <email>] [--cost-center <id>] [--archetype corp|online|sandbox] [--location <region>]
+        [--short-name <2 to 5>]
 
-It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/_workload.yaml, with
+It writes landing-zones/<workload>/<env>.yaml and, for a new workload, <workload>/workload-defaults.yaml, with
 only what no layer above sets: a required setting given on the command line is written as given, one
 not given is written commented out, so the check names it until someone fills it in. A setting given that
 a layer above already has at the same value is left out, but for the subscription, which is always the
-landing zone's own. It writes nothing over a file that is there, and
+landing zone's own: not written when none is given and a layer above sets billing_scope, as vending then makes
+it. It writes nothing over a file that is there, and
 commits nothing: the files go into a pull request, whose run gives the landing zone its addresses.
 """
 
@@ -20,7 +22,7 @@ from .files import read_setting
 from .merge import ConfigError, layer
 from .yamlout import scalar
 
-# Usually the same in all of a workload's environments, so a new workload's _workload.yaml holds them.
+# Usually the same in all of a workload's environments, so a new workload's workload-defaults.yaml holds them.
 WORKLOAD_SETTINGS = ("owner", "cost_center", "archetype")
 # What each required setting is, as the files say it.
 COMMENTS = {
@@ -29,9 +31,10 @@ COMMENTS = {
     "archetype": "corp, online or sandbox",
     "location": "a region with a hub",
     "subscription": "handed over to vending before this file is merged",
+    "short_name": "2 to 5, in every name of the workload's landing zones",
 }
 PLACEHOLDERS = {"owner": "team@example.com", "cost_center": "\"0000\"", "archetype": "corp", "location": "norwayeast",
-                "subscription": "00000000-0000-0000-0000-000000000000"}
+                "subscription": "00000000-0000-0000-0000-000000000000", "short_name": "abc"}
 
 
 def lines(settings: list[tuple[str, object]]) -> list[str]:
@@ -53,6 +56,9 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
     for name, kind in ((workload, "workload"), (env, "environment")):
         if not vending.NAME.fullmatch(name):
             raise ConfigError(f"{kind} {name!r}: up to 24 lower-case letters, digits and hyphens (it is used in names).")
+    if env in vending.TAKEN_ENVIRONMENTS:
+        raise ConfigError(f"environment {env!r}: that name is taken by {vending.WORKLOAD_DEFAULTS}.yaml or {vending.DEFAULTS}/{vending.ALL_DEFAULTS}.yaml; "
+                          f"choose another.")
     key = f"{workload}-{env}"
     zones = vending.landing_zones(repo)
     if key in zones:
@@ -64,7 +70,8 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
 
     # What the layers above set, merged as the loader merges them.
     above: dict = {}
-    for base in (root / "_defaults" / "all", root / "_defaults" / env, folder / "_workload"):
+    defaults = repo / vending.DEFAULTS
+    for base in (defaults / vending.ALL_DEFAULTS, defaults / f"{env}-defaults", folder / vending.WORKLOAD_DEFAULTS):
         above = layer(above, read_setting(base) or {})
 
     def same(k: str) -> bool:
@@ -86,16 +93,24 @@ def landing_zone(repo: Path, workload: str, env: str, given: dict[str, str | Non
         written.append(path)
 
     written: list[Path] = []
+    short = given.get("short_name")
+    if short is not None and folder.exists():
+        raise ConfigError(f"{workload} is a workload already; its short name is in {folder / f'{vending.WORKLOAD_DEFAULTS}.yaml'}, or its own name when that fits.")
     if not folder.exists():
         folder.mkdir()
-        body = needed(WORKLOAD_SETTINGS)
+        # The workload's own name is its short name when it fits (docs/naming.md); otherwise one is needed.
+        fits = vending.naming.SHORT.fullmatch(workload) is not None and 2 <= len(workload) <= 5
+        body = [("short_name", short)] if short is not None and short != workload or short is None and not fits else []
+        body += needed(WORKLOAD_SETTINGS)
         if body:
-            create(folder / "_workload.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
+            create(folder / f"{vending.WORKLOAD_DEFAULTS}.yaml", "\n".join([f"# The {workload} workload, all its environments.", "", *lines(body)]) + "\n")
         rest = ("location",)
     else:
         rest = (*WORKLOAD_SETTINGS, "location")
-    # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in.
-    body = needed(rest) + [("subscription", given.get("subscription"))]
+    # The subscription is always the landing zone's own, whatever a layer above says: written as given, or to fill in,
+    # unless vending makes it where a layer above's billing_scope says.
+    made = given.get("subscription") is None and above.get("billing_scope") not in (None, "")
+    body = needed(rest) + ([] if made else [("subscription", given.get("subscription"))])
     header = f"# {workload} in {env}, the landing zone {key}: one subscription, one network, one state."
     extra = [
         "",

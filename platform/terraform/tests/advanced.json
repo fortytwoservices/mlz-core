@@ -1,0 +1,246 @@
+{
+  "root_id": "demo",
+  "primary_region": "norwayeast",
+  "connectivity_subscription_id": "c",
+  "management_subscription_id": "m",
+  "identity_subscription_id": null,
+  "workspace_resource_id": "/subscriptions/m/resourceGroups/rg/providers/Microsoft.OperationalInsights/workspaces/law",
+  "hubs": {
+    "northeurope": {
+      "location": "northeurope",
+      "platform_address_space": "10.60.0.0/21",
+      "address_space": [
+        "10.60.0.0/22"
+      ],
+      "landing_zone_ranges": [
+        "10.60.0.0/16"
+      ],
+      "routing_supernet": [
+        "10.60.0.0/16"
+      ],
+      "reserved": [],
+      "firewall": {
+        "sku_tier": "Standard",
+        "subnet_address_prefix": "10.60.0.0/26",
+        "management_subnet_address_prefix": null
+      },
+      "dns_resolver": null,
+      "bastion": {
+        "subnet_address_prefix": "10.60.1.0/26",
+        "name": "bas-demo-hub-pd-ne-01",
+        "public_ip_name": "pip-demo-hub-bas-pd-ne-01"
+      },
+      "gateway_subnet_address_prefix": "10.60.0.128/27",
+      "names": {
+        "resource_group": "rg-demo-hub-pd-ne-01",
+        "virtual_network": "vnet-demo-hub-pd-ne-01",
+        "firewall": "afw-demo-hub-pd-ne-01",
+        "firewall_policy": "afwp-demo-hub-pd-ne-01",
+        "firewall_public_ip": "pip-demo-hub-afw-pd-ne-01",
+        "firewall_management_public_ip": "pip-demo-hub-afwmgmt-pd-ne-01",
+        "firewall_route_table": "rt-demo-hub-afw-pd-ne-01",
+        "bastion": "bas-demo-hub-pd-ne-01",
+        "bastion_public_ip": "pip-demo-hub-bas-pd-ne-01",
+        "dns_resolver": "dnspr-demo-hub-pd-ne-01",
+        "dns_resolver_inbound_endpoint": "in-demo-hub-pd-ne-01",
+        "dns_resolver_outbound_endpoint": "out-demo-hub-pd-ne-01"
+      },
+      "is_primary": false
+    },
+    "norwayeast": {
+      "location": "norwayeast",
+      "platform_address_space": "10.100.0.0/21",
+      "address_space": [
+        "10.100.0.0/22"
+      ],
+      "landing_zone_ranges": [
+        "10.100.0.0/16"
+      ],
+      "routing_supernet": [
+        "10.100.0.0/16"
+      ],
+      "reserved": [],
+      "firewall": {
+        "sku_tier": "Standard",
+        "subnet_address_prefix": "10.100.0.0/26",
+        "management_subnet_address_prefix": null
+      },
+      "dns_resolver": {
+        "inbound_subnet_address_prefix": "10.100.1.64/28",
+        "outbound_subnet_address_prefix": "10.100.1.80/28",
+        "name": "dnspr-demo-hub-pd-nwe-01",
+        "inbound_endpoint_name": "in-demo-hub-pd-nwe-01",
+        "outbound_endpoint_name": "out-demo-hub-pd-nwe-01"
+      },
+      "bastion": {
+        "subnet_address_prefix": "10.100.1.0/26",
+        "name": "bas-demo-hub-pd-nwe-01",
+        "public_ip_name": "pip-demo-hub-bas-pd-nwe-01"
+      },
+      "gateway_subnet_address_prefix": "10.100.0.128/27",
+      "names": {
+        "resource_group": "rg-demo-hub-pd-nwe-01",
+        "virtual_network": "vnet-demo-hub-pd-nwe-01",
+        "firewall": "afw-demo-hub-pd-nwe-01",
+        "firewall_policy": "afwp-demo-hub-pd-nwe-01",
+        "firewall_public_ip": "pip-demo-hub-afw-pd-nwe-01",
+        "firewall_management_public_ip": "pip-demo-hub-afwmgmt-pd-nwe-01",
+        "firewall_route_table": "rt-demo-hub-afw-pd-nwe-01",
+        "bastion": "bas-demo-hub-pd-nwe-01",
+        "bastion_public_ip": "pip-demo-hub-bas-pd-nwe-01",
+        "dns_resolver": "dnspr-demo-hub-pd-nwe-01",
+        "dns_resolver_inbound_endpoint": "in-demo-hub-pd-nwe-01",
+        "dns_resolver_outbound_endpoint": "out-demo-hub-pd-nwe-01"
+      },
+      "is_primary": true
+    },
+    "swedencentral": {
+      "location": "swedencentral",
+      "platform_address_space": "10.200.0.0/21",
+      "address_space": [
+        "10.200.0.0/22"
+      ],
+      "landing_zone_ranges": [
+        "10.200.0.0/16"
+      ],
+      "routing_supernet": [
+        "10.200.0.0/16"
+      ],
+      "reserved": [],
+      "firewall": {
+        "sku_tier": "Standard",
+        "subnet_address_prefix": "10.200.0.0/26",
+        "management_subnet_address_prefix": null
+      },
+      "dns_resolver": {
+        "inbound_subnet_address_prefix": "10.200.1.64/28",
+        "outbound_subnet_address_prefix": "10.200.1.80/28",
+        "name": "dnspr-demo-hub-pd-sdc-01",
+        "inbound_endpoint_name": "in-demo-hub-pd-sdc-01",
+        "outbound_endpoint_name": "out-demo-hub-pd-sdc-01"
+      },
+      "bastion": {
+        "subnet_address_prefix": "10.200.1.0/26",
+        "name": "bas-demo-hub-pd-sdc-01",
+        "public_ip_name": "pip-demo-hub-bas-pd-sdc-01"
+      },
+      "gateway_subnet_address_prefix": "10.200.0.128/27",
+      "names": {
+        "resource_group": "rg-demo-hub-pd-sdc-01",
+        "virtual_network": "vnet-demo-hub-pd-sdc-01",
+        "firewall": "afw-demo-hub-pd-sdc-01",
+        "firewall_policy": "afwp-demo-hub-pd-sdc-01",
+        "firewall_public_ip": "pip-demo-hub-afw-pd-sdc-01",
+        "firewall_management_public_ip": "pip-demo-hub-afwmgmt-pd-sdc-01",
+        "firewall_route_table": "rt-demo-hub-afw-pd-sdc-01",
+        "bastion": "bas-demo-hub-pd-sdc-01",
+        "bastion_public_ip": "pip-demo-hub-bas-pd-sdc-01",
+        "dns_resolver": "dnspr-demo-hub-pd-sdc-01",
+        "dns_resolver_inbound_endpoint": "in-demo-hub-pd-sdc-01",
+        "dns_resolver_outbound_endpoint": "out-demo-hub-pd-sdc-01"
+      },
+      "advanced": {
+        "bastion": {
+          "sku": "Premium",
+          "tunneling_enabled": true
+        },
+        "firewall": {
+          "firewall_policy": {
+            "threat_intelligence_mode": "Deny"
+          },
+          "zones": [
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "virtual_network_dns_servers": [
+          "10.200.1.68"
+        ]
+      },
+      "is_primary": false
+    },
+    "westeurope": {
+      "location": "westeurope",
+      "platform_address_space": "10.50.0.0/21",
+      "address_space": [
+        "10.50.0.0/22"
+      ],
+      "landing_zone_ranges": [
+        "10.50.0.0/16"
+      ],
+      "routing_supernet": [
+        "10.50.0.0/16"
+      ],
+      "reserved": [],
+      "firewall": {
+        "sku_tier": "Standard",
+        "subnet_address_prefix": "10.50.0.0/26",
+        "management_subnet_address_prefix": null
+      },
+      "dns_resolver": {
+        "inbound_subnet_address_prefix": "10.50.1.64/28",
+        "outbound_subnet_address_prefix": "10.50.1.80/28",
+        "name": "dnspr-demo-hub-pd-we-01",
+        "inbound_endpoint_name": "in-demo-hub-pd-we-01",
+        "outbound_endpoint_name": "out-demo-hub-pd-we-01"
+      },
+      "bastion": null,
+      "gateway_subnet_address_prefix": "10.50.0.128/27",
+      "names": {
+        "resource_group": "rg-demo-hub-pd-we-01",
+        "virtual_network": "vnet-demo-hub-pd-we-01",
+        "firewall": "afw-demo-hub-pd-we-01",
+        "firewall_policy": "afwp-demo-hub-pd-we-01",
+        "firewall_public_ip": "pip-demo-hub-afw-pd-we-01",
+        "firewall_management_public_ip": "pip-demo-hub-afwmgmt-pd-we-01",
+        "firewall_route_table": "rt-demo-hub-afw-pd-we-01",
+        "bastion": "bas-demo-hub-pd-we-01",
+        "bastion_public_ip": "pip-demo-hub-bas-pd-we-01",
+        "dns_resolver": "dnspr-demo-hub-pd-we-01",
+        "dns_resolver_inbound_endpoint": "in-demo-hub-pd-we-01",
+        "dns_resolver_outbound_endpoint": "out-demo-hub-pd-we-01"
+      },
+      "is_primary": false
+    }
+  },
+  "networks": {
+    "management": {
+      "norwayeast": {
+        "address_space": "10.100.4.0/24",
+        "subnets": {
+          "github-runners": "10.100.4.0/25",
+          "runners": "10.100.4.128/26",
+          "private-endpoints": "10.100.4.192/27"
+        },
+        "dns_servers": [
+          "10.100.0.4"
+        ],
+        "firewall": "10.100.0.4",
+        "github_runners": true,
+        "names": {
+          "virtual_network": "vnet-demo-mgt-pd-nwe-01",
+          "route_table": "rt-demo-mgt-pd-nwe-01",
+          "github_network_settings": "ghns-demo-mgt-pd-nwe-01",
+          "network_security_groups": {
+            "github-runners": "nsg-demo-mgt-github-runners-pd-nwe-01",
+            "runners": "nsg-demo-mgt-runners-pd-nwe-01",
+            "private-endpoints": "nsg-demo-mgt-private-endpoints-pd-nwe-01"
+          },
+          "subnet": "snet-%s",
+          "peering_to_hub": "peer-management-to-hub",
+          "peering_from_hub": "peer-hub-to-management"
+        }
+      }
+    },
+    "identity": {}
+  },
+  "names": {
+    "dns_resource_group": "rg-demo-dns-pd-nwe-01",
+    "network_resource_groups": {
+      "management": "rg-demo-mgt-net-pd-nwe-01",
+      "identity": "rg-demo-idn-net-pd-nwe-01"
+    },
+    "diagnostic_setting": "to-demo-workspace"
+  }
+}

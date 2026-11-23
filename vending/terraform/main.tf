@@ -1,23 +1,178 @@
 locals {
   # Checked and worked out by `python3 -m mlz vending`: layers merged, the address range and subnets,
-  # the hub to peer with.
+  # the hub to peer with, and every name, from the customer's template or the landing zone's own (docs/naming.md).
   lz = jsondecode(file(var.config_file))
 
-  subscription = "/subscriptions/${local.lz.subscription_id}"
-  names        = module.naming.landing_zone
-  github       = local.lz.github # {organization, repo} when the landing zone has a repo, else null
+  # Handed over (subscription_id), or made here (subscription: its alias, billing scope and name), known once made.
+  subscription_id = local.lz.subscription == null ? local.lz.subscription_id : time_sleep.subscription["made"].triggers.subscription_id
+  subscription    = "/subscriptions/${local.subscription_id}"
+  names           = local.lz.names
+  github          = local.lz.github # {organization, repo, create, team} when the landing zone has a repo, else null
+
+  # decommission: true in the landing zone's file. Nothing vending made is kept: the network, both peerings,
+  # the NSGs, the route table, the deploy identity and its role, the budget and the two resource groups (with
+  # anything else in them) are destroyed, and the subscription goes to Decommissioned (its management group
+  # comes from the config), where ALZ's policies deny new resources.
+  decommission = try(local.lz.decommission, false)
+  live         = local.decommission ? {} : { live = true } # for_each over what only a live landing zone has
+
+  # The workload repo (docs/vending.md): made here, or an existing one the landing zone names (github.repo), which
+  # vending only trusts. A made one is archived, never deleted, when the landing zone is decommissioned.
+  repo_made = local.github != null && try(local.github.create, false) && !local.decommission
+  # Who approves the repo's applies: its team, in the apply environment, on GitHub Enterprise; on GitHub Team, which has
+  # no reviewer on an environment in a private repo, its pull requests' approval. From bootstrap.yaml's github.plan,
+  # through governance's contract (tools/mlz/vending.py).
+  team_plan = try(local.github.approval, null) == "pull-request"
+  repo_id   = local.github == null ? null : (try(local.github.create, false) ? try(github_repository.workload["made"].repo_id, null) : one([for repo in data.github_rest_api.existing : jsondecode(repo.body).id]))
+  # GitHub's immutable subjects, which the customer's organization issues (docs/bootstrap.md): a renamed or
+  # recreated repo never inherits the identities. The deploy identity applies from the repo's apply environment,
+  # the plan identity plans its pull requests.
+  subject = local.github == null || local.decommission ? null : "repo:${local.github.organization}@${one(data.github_organization.customer[*].id)}/${local.github.repo}@${local.repo_id}"
 }
 
-module "naming" {
-  source = "../../modules/naming"
+# IDs only: summary_only, so the provider lists none of the organization's repos and members.
+data "github_organization" "customer" {
+  count        = local.github == null || local.decommission ? 0 : 1
+  name         = local.github.organization
+  summary_only = true
+}
 
-  root_id      = local.lz.root_id
-  region       = local.lz.location
-  landing_zone = local.lz.key
+# An existing repo's ID, by the repo's own API: its metadata, nothing more (the provider's repository data source
+# also reads its Pages settings, which needs a permission vending's tokens do not have).
+data "github_rest_api" "existing" {
+  count    = local.github != null && !try(local.github.create, false) && !local.decommission ? 1 : 0
+  endpoint = "repos/${local.github.organization}/${local.github.repo}"
+}
+
+resource "github_repository" "workload" {
+  for_each = local.repo_made ? { made = true } : {}
+
+  name                   = local.github.repo
+  description            = local.github.description # from the config: tools/mlz/workload.py knows GitHub's first README by it
+  visibility             = "private"
+  auto_init              = true # a main branch, which the apply environment's policy names
+  allow_merge_commit     = false
+  allow_rebase_merge     = false
+  allow_squash_merge     = true
+  delete_branch_on_merge = true
+  archive_on_destroy     = true # decommissioned: archived, the team's code and history kept
+
+  # GitHub returns a repo's merge settings only to a token with Administration: write, which the plan's read-only
+  # token has not: the plan read them as false and empty and showed a change the apply did not, and the apply step refused
+  # every apply (tested 18 November 2026). Set when the repo is made, then left to the team; an update for another
+  # reason still carries them, so tools/ci/summary.py leaves them out of its fingerprint.
+  lifecycle {
+    ignore_changes = [
+      allow_merge_commit, allow_rebase_merge, allow_squash_merge, delete_branch_on_merge,
+      merge_commit_message, merge_commit_title, squash_merge_commit_message, squash_merge_commit_title,
+    ]
+  }
+}
+
+# auto_init makes the organization's default branch, which need not be main: the apply environment allows main alone.
+resource "github_branch_default" "main" {
+  count = local.repo_made ? 1 : 0
+
+  repository      = github_repository.workload["made"].name
+  branch          = "main"
+  rename          = true # whatever the organization's default made, renamed (Contents: write)
+  wait_for_rename = true
+}
+
+data "github_team" "owner" {
+  count        = local.repo_made ? 1 : 0
+  slug         = local.github.team
+  summary_only = true # its ID: none of its members and repos
+}
+
+# The owning team maintains the repo, and approves its applies.
+resource "github_team_repository" "owner" {
+  count = local.repo_made ? 1 : 0
+
+  team_id    = data.github_team.owner[0].id
+  repository = github_repository.workload["made"].name
+  permission = "maintain"
+}
+
+resource "github_repository_environment" "apply" {
+  count = local.repo_made ? 1 : 0
+
+  repository  = github_repository.workload["made"].name
+  environment = "apply"
+  # GitHub takes a reviewer that has access already: the team's, above.
+  depends_on = [github_team_repository.owner]
+
+  dynamic "reviewers" {
+    for_each = local.team_plan ? [] : [true]
+    content {
+      teams = [tonumber(data.github_team.owner[0].id)]
+    }
+  }
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+resource "github_repository_environment_deployment_policy" "main" {
+  count      = local.repo_made ? 1 : 0
+  depends_on = [github_branch_default.main]
+
+  repository     = github_repository.workload["made"].name
+  environment    = github_repository_environment.apply[0].environment
+  branch_pattern = "main"
+}
+
+data "azapi_client_config" "current" {}
+
+# IDs and names only, no secrets. AZURE_CLIENT_ID is the plan identity for the repo, and the deploy identity inside
+# its apply environment, so a workflow always signs in as the identity its job is trusted for.
+resource "github_actions_variable" "workload" {
+  for_each = local.repo_made ? {
+    AZURE_TENANT_ID         = data.azapi_client_config.current.tenant_id
+    AZURE_SUBSCRIPTION_ID   = local.subscription_id
+    AZURE_CLIENT_ID         = module.vending.umi_client_ids["plan"]
+    TFSTATE_RESOURCE_GROUP  = azapi_resource.state_resource_group.name
+    TFSTATE_STORAGE_ACCOUNT = azapi_resource.state.name
+    TFSTATE_CONTAINER       = azapi_resource.state_container.name
+  } : {}
+
+  repository    = github_repository.workload["made"].name
+  variable_name = each.key
+  value         = each.value
+}
+
+# On GitHub Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one
+# refuses (workload.yml): a check against a switch done out of order and against mistakes, not the switch, which is the
+# pipeline's approval input (tools/mlz/workload.py). It names its environment, so it is made after the environment
+# (GitHub refuses a variable on a new repo's environment that does not exist yet, 404) and, on the way to Team, after
+# the reviewer goes, by the time between two calls. Back on Enterprise, create_before_destroy has the reviewer come back
+# before the variable goes (tested with terraform_data, 23 November).
+resource "github_actions_environment_variable" "approval" {
+  count = local.repo_made && local.team_plan ? 1 : 0
+
+  repository    = github_repository.workload["made"].name
+  environment   = github_repository_environment.apply[0].environment
+  variable_name = "MLZ_APPROVAL"
+  value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "github_actions_environment_variable" "deploy_identity" {
+  count = local.repo_made ? 1 : 0
+
+  repository    = github_repository.workload["made"].name
+  environment   = github_repository_environment.apply[0].environment
+  variable_name = "AZURE_CLIENT_ID"
+  value         = module.vending.umi_client_ids["deploy"]
 }
 
 resource "azapi_resource" "resource_group" {
-  for_each = {
+  for_each = local.decommission ? {} : {
     network  = local.names.network_resource_group
     identity = local.names.identity_resource_group
   }
@@ -31,9 +186,146 @@ resource "azapi_resource" "resource_group" {
   response_export_values = []
 }
 
+# The workload repo's Terraform state, in the landing zone's own subscription: its plan identity reads it, its deploy
+# identity writes it. Kept when the landing zone is decommissioned, in a group of its own (the other two go), since the
+# team's resources may outlive the landing zone, and a state account renamed would lose the state: prevent_destroy.
+resource "azapi_resource" "state_resource_group" {
+  type      = "Microsoft.Resources/resourceGroups@2024-11-01"
+  name      = local.names.state_resource_group
+  parent_id = local.subscription
+  location  = local.lz.location
+  tags      = local.lz.tags
+
+  response_export_values = []
+}
+
+# ALZ denies public network access to PaaS services in a corp landing zone (the assignment Deny-Public-Endpoints, on its
+# management group), and so the state account below, which the pipelines reach over its public endpoint with Entra ID
+# only, as they reach the bootstrap's. The state's group is exempt from that one rule of the assignment. None where the
+# assignment is not: an online or sandbox landing zone, or one whose archetype customer.yaml's
+# policy_assignments_to_remove takes it from.
+data "azapi_resource" "public_endpoints_deny" {
+  type                   = "Microsoft.Authorization/policyAssignments@2024-04-01"
+  name                   = "Deny-Public-Endpoints"
+  parent_id              = "/providers/Microsoft.Management/managementGroups/${local.lz.management_group_id}"
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_exemption" {
+  count     = data.azapi_resource.public_endpoints_deny.exists ? 1 : 0
+  type      = "Microsoft.Authorization/policyExemptions@2022-07-01-preview"
+  name      = "mlz-state-public-endpoint"
+  parent_id = azapi_resource.state_resource_group.id
+  body = {
+    properties = {
+      policyAssignmentId           = data.azapi_resource.public_endpoints_deny.id
+      policyDefinitionReferenceIds = ["StorageDenyPaasPublicIP"] # Storage accounts should disable public network access
+      exemptionCategory            = "Waiver"
+      displayName                  = "Terraform state over its public endpoint"
+      description                  = "The landing zone's Terraform state account takes Entra ID only, and the pipelines reach it over its public endpoint, as they reach the bootstrap's state account. Made by mlz-core's vending."
+    }
+  }
+  # Azure refuses an exemption outside its assignment's scope, and a handed-over subscription is in Corp only once
+  # module.vending has placed it there.
+  depends_on = [module.vending]
+
+  response_export_values = []
+}
+
+resource "azapi_resource" "state" {
+  type      = "Microsoft.Storage/storageAccounts@2024-01-01"
+  name      = local.names.state_account
+  parent_id = azapi_resource.state_resource_group.id
+  location  = local.lz.location
+  tags      = local.lz.tags
+  body = {
+    kind = "StorageV2"
+    sku  = { name = "Standard_LRS" }
+    properties = {
+      allowSharedKeyAccess         = false # Entra ID only, as the bootstrap's
+      defaultToOAuthAuthentication = true
+      allowBlobPublicAccess        = false
+      allowCrossTenantReplication  = false
+      isLocalUserEnabled           = false
+      minimumTlsVersion            = "TLS1_2"
+      supportsHttpsTrafficOnly     = true
+    }
+  }
+  # A new exemption can take minutes to reach the policy that denies the account (Microsoft gives about five for a new
+  # assignment). A deny that stays fails after ten minutes.
+  retry      = { error_message_regex = ["RequestDisallowedByPolicy"] }
+  depends_on = [module.vending, azapi_resource.state_exemption] # module.vending registers Microsoft.Storage in a new subscription
+
+  timeouts {
+    create = "10m"
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+# Every storage account comes with its blob service, so this sets it rather than creating it.
+resource "azapi_update_resource" "state_blob_service" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices@2024-01-01"
+  name      = "default"
+  parent_id = azapi_resource.state.id
+  body = {
+    properties = {
+      isVersioningEnabled            = true
+      deleteRetentionPolicy          = { enabled = true, days = 30 }
+      containerDeleteRetentionPolicy = { enabled = true, days = 30 }
+    }
+  }
+}
+
+resource "azapi_resource" "state_container" {
+  type      = "Microsoft.Storage/storageAccounts/blobServices/containers@2024-01-01"
+  name      = "tfstate"
+  parent_id = azapi_update_resource.state_blob_service.id
+  body      = { properties = { publicAccess = "None" } }
+}
+
+# The identities' roles, given here rather than by sub-vending: the plan identity reads the subscription and the state's
+# container, the deploy identity changes the subscription and writes the state.
+resource "azapi_resource" "identity_role" {
+  for_each = local.decommission ? {} : {
+    "plan/subscription"   = { identity = "plan", scope = local.subscription, role = "acdd72a7-3385-48ef-bd42-f606fba81ae7" }                  # Reader
+    "deploy/subscription" = { identity = "deploy", scope = local.subscription, role = "b24988ac-6180-42a0-ab88-20f7382dd24c" }                # Contributor
+    "plan/state"          = { identity = "plan", scope = azapi_resource.state_container.id, role = "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1" }   # Storage Blob Data Reader
+    "deploy/state"        = { identity = "deploy", scope = azapi_resource.state_container.id, role = "ba92f5b4-2d11-453d-a403-e96b0029c9fe" } # Storage Blob Data Contributor
+  }
+
+  type = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  # Unique in the tenant, as Azure needs: the scope and the identity's resource ID, never its principal ID. A tag change
+  # updates an identity, and azapi knows its principal ID only after the apply: a name made from it would replace the
+  # assignment, the identity without its role meanwhile. The ID stays known, and the assignment is put again
+  # unchanged, which Azure accepts (checked 19 November 2026). A replaced identity's ID is known only after the apply,
+  # so its assignments are replaced with it (an assignment's principal never changes).
+  name      = uuidv5("url", "mlz-core/${each.value.scope}/${module.vending.umi_resource_ids[each.value.identity]}")
+  parent_id = each.value.scope
+  body = {
+    properties = {
+      # A role's ID in the subscription's own form, as Azure stores it there: plans stay clean.
+      roleDefinitionId = "${local.subscription}/providers/Microsoft.Authorization/roleDefinitions/${each.value.role}"
+      principalId      = module.vending.umi_principal_ids[each.value.identity]
+      principalType    = "ServicePrincipal"
+    }
+  }
+  # PrincipalNotFound: a new identity takes a while to reach every Entra replica. RoleAssignmentExists: the same role
+  # under another name, deleted in the same apply, as sub-vending's were on the upgrade from mlz-core v0.11.
+  retry = { error_message_regex = ["PrincipalNotFound", "RoleAssignmentExists"] }
+
+  timeouts {
+    create = "10m"
+  }
+}
+
 # Everything leaves the spoke through the hub's firewall.
 module "route_table" {
-  source = "git::https://github.com/fortytwoservices/az-tf-mlz-route-table.git?ref=v0.1.1"
+  for_each = local.live
+  source   = "git::https://github.com/fortytwoservices/az-tf-mlz-route-table.git?ref=v0.1.1"
 
   name                          = local.names.route_table
   parent_id                     = azapi_resource.resource_group["network"].id
@@ -43,37 +335,70 @@ module "route_table" {
   tags                          = local.lz.tags
 }
 
+# Before decommissioning existed, the route table was the module itself.
+moved {
+  from = module.route_table
+  to   = module.route_table["live"]
+}
+
+# A subscription vending makes: one PUT of its alias, by this apply's identity, which the customer's billing owner lets
+# make subscriptions where the billing scope says (docs/vending.md); Azure makes it the subscription's owner. Not
+# sub-vending's alias, which every plan reads back: Azure lets only those who may make an alias read it
+# (Microsoft.Subscription/aliases/write, tested in TCAF on 13 November 2026), and the plan identity may not. An action
+# is never read back, and destroyed it does nothing, so vending never cancels a subscription. The alias is the root
+# and the landing zone's key, which never change, so it is made once; Azure keeps an alias's properties as made, so
+# a changed body is not sent again, and sub-vending names and tags the subscription from then on.
+resource "azapi_resource_action" "subscription" {
+  for_each = local.lz.subscription == null ? {} : { made = local.lz.subscription }
+
+  type        = "Microsoft.Subscription/aliases@2021-10-01"
+  resource_id = "/providers/Microsoft.Subscription/aliases/${each.value.alias}"
+  method      = "PUT"
+  when        = "apply" # only: nothing on destroy
+  body = {
+    properties = {
+      displayName  = each.value.name
+      workload     = "Production"
+      billingScope = each.value.billing_scope
+      additionalProperties = {
+        managementGroupId = "/providers/Microsoft.Management/managementGroups/${local.lz.management_group_id}"
+        tags              = local.lz.tags
+      }
+    }
+  }
+  response_export_values = ["properties.subscriptionId"]
+
+  lifecycle {
+    ignore_changes = [body]
+  }
+}
+
+# A new subscription takes a while to take its first writes: its ID goes on only after this, as sub-vending waits too.
+resource "time_sleep" "subscription" {
+  for_each = azapi_resource_action.subscription
+
+  create_duration = "30s"
+  triggers        = { subscription_id = each.value.output.properties.subscriptionId }
+}
+
 # Budgets start on the first of the month the landing zone was vended, and stay there.
 resource "time_static" "budget_start" {}
 
-module "vending" {
-  source  = "Azure/avm-ptn-alz-sub-vending/azure"
-  version = "0.3.4"
-
-  location         = local.lz.location
-  enable_telemetry = false
-
-  # The subscription exists: it is placed and tagged, not created.
-  subscription_alias_enabled                        = false
-  subscription_id                                   = local.lz.subscription_id
-  subscription_management_group_association_enabled = true
-  subscription_management_group_id                  = local.lz.management_group_id
-  subscription_tags                                 = local.lz.tags
-  subscription_register_resource_providers_enabled  = true
-
-  network_security_group_enabled = true
+# What sub-vending is given beside its own inputs, as locals so tests/ can check it. The landing zone's advanced: goes
+# in first in each object and mlz-core's values over it, so it only adds (tools/mlz/advanced.py).
+locals {
+  # A filter, not a conditional: with advanced: on one subnet's NSG only, the entries differ in shape, which a
+  # conditional's {} cannot be unified with.
   network_security_groups = {
-    for name, _ in local.lz.network.subnets : name => {
-      name                         = format(local.names.network_security_group, name)
+    for name, _ in local.lz.network.subnets : name => merge(try(local.lz.advanced.network_security_groups[name], {}), {
+      name                         = local.names.network_security_groups[name]
       resource_group_name_existing = azapi_resource.resource_group["network"].name
       location                     = local.lz.location
       tags                         = local.lz.tags
-    }
+    }) if !local.decommission
   }
-
-  virtual_network_enabled = true
-  virtual_networks = {
-    spoke = {
+  virtual_networks = local.decommission ? {} : {
+    spoke = merge(try(local.lz.advanced.virtual_networks.spoke, {}), {
       name                         = local.names.virtual_network
       address_space                = [local.lz.network.address_space]
       resource_group_name_existing = azapi_resource.resource_group["network"].name
@@ -82,12 +407,12 @@ module "vending" {
       tags                         = local.lz.tags
 
       subnets = {
-        for name, prefix in local.lz.network.subnets : name => {
+        for name, prefix in local.lz.network.subnets : name => merge(try(local.lz.advanced.virtual_networks.spoke.subnets[name], {}), {
           name                   = format(local.names.subnet, name)
           address_prefix         = prefix
           network_security_group = { key_reference = name }
-          route_table            = { id = module.route_table.resource_id }
-        }
+          route_table            = { id = module.route_table["live"].resource_id }
+        })
       }
 
       hub_network_resource_id  = local.lz.network.hub_virtual_network_id
@@ -97,54 +422,107 @@ module "vending" {
       # The hubs have no VPN or ExpressRoute gateway yet, so neither side uses one.
       hub_peering_options_tohub   = { use_remote_gateways = false }
       hub_peering_options_fromhub = { allow_gateway_transit = false }
-    }
+    })
   }
-
-  # The landing zone's own deploy identity: Contributor on its subscription, signed in from its repo.
-  umi_enabled = true
-  user_managed_identities = {
-    deploy = {
-      name                         = local.names.deploy_identity
-      resource_group_name_existing = azapi_resource.resource_group["identity"].name
-      location                     = local.lz.location
-      tags                         = local.lz.tags
-      role_assignments = {
-        contributor = { definition = "Contributor" }
-      }
-      federated_credentials_github = local.github == null ? {} : {
-        main = {
-          organization = local.github.organization
-          repository   = local.github.repo
-          entity       = "branch"
-          value        = "main"
-        }
-      }
-    }
-  }
-
-  budget_enabled = try(local.lz.budget.monthly, null) != null
-  budgets = try(local.lz.budget.monthly, null) == null ? {} : {
-    monthly = {
+  budgets = local.decommission || try(local.lz.budget.monthly, null) == null ? {} : {
+    monthly = merge(try(local.lz.advanced.budgets.monthly, {}), {
       name              = local.names.budget
       amount            = local.lz.budget.monthly
       time_grain        = "Monthly"
       time_period_start = formatdate("YYYY-MM-01'T'00:00:00Z", time_static.budget_start.rfc3339)
       time_period_end   = "2099-12-31T00:00:00Z"
       notifications = {
-        actual_80 = {
+        actual_80 = merge(try(local.lz.advanced.budgets.monthly.notifications.actual_80, {}), {
           enabled        = true
           operator       = "GreaterThan"
           threshold      = 80
           contact_emails = local.lz.budget.contacts
-        }
-        forecast_100 = {
+        })
+        forecast_100 = merge(try(local.lz.advanced.budgets.monthly.notifications.forecast_100, {}), {
           enabled        = true
           operator       = "GreaterThan"
           threshold      = 100
           threshold_type = "Forecasted"
           contact_emails = local.lz.budget.contacts
+        })
+      }
+    })
+  }
+}
+
+module "vending" {
+  source  = "Azure/avm-ptn-alz-sub-vending/azure"
+  version = "0.3.4"
+
+  location         = local.lz.location
+  enable_telemetry = false
+
+  # A subscription handed over is placed, not changed; one vending made (azapi_resource_action.subscription) is named
+  # and tagged too.
+  subscription_alias_enabled                        = false
+  subscription_id                                   = local.subscription_id
+  subscription_update_existing                      = local.lz.subscription != null
+  subscription_display_name                         = try(local.lz.subscription.name, null)
+  subscription_management_group_association_enabled = true
+  subscription_management_group_id                  = local.lz.management_group_id
+  subscription_tags                                 = local.lz.tags
+  subscription_register_resource_providers_enabled  = true
+
+  # The landing zone's advanced: (tools/mlz/advanced.py: only inputs the input map calls open, checked against the
+  # module's types). Its own inputs: null, or the module's default, when it sets none, so a landing zone without
+  # advanced: is planned as it always was (two are nullable = false at 0.3.4: null is their default).
+  subscription_register_resource_providers_and_features = try(local.lz.advanced.subscription_register_resource_providers_and_features, null)
+  wait_for_subscription_before_subscription_operations  = try(local.lz.advanced.wait_for_subscription_before_subscription_operations, {})
+  # A decommission takes them away with the rest.
+  role_assignment_enabled = !local.decommission && length(try(local.lz.advanced.role_assignments, {})) > 0
+  role_assignments        = local.decommission ? null : try(local.lz.advanced.role_assignments, null)
+
+  network_security_group_enabled = !local.decommission
+  network_security_groups        = local.network_security_groups
+
+  virtual_network_enabled = !local.decommission
+  virtual_networks        = local.virtual_networks
+
+  # The landing zone's own identities for its repo: deploy, Contributor on its subscription, signed in from its repo's
+  # apply environment; plan, Reader, for its pull requests' plans.
+  umi_enabled = !local.decommission
+  # Two entries of different shapes: each its own conditional, merged, so neither has to match the other's type.
+  user_managed_identities = merge(local.decommission ? {} : {
+    plan = {
+      name                         = local.names.plan_identity
+      resource_group_name_existing = azapi_resource.resource_group["identity"].name
+      location                     = local.lz.location
+      tags                         = local.lz.tags
+      # Its pull requests, and main, where every run plans too before the apply (.github/workflows/workload.yml).
+      federated_credentials_advanced = local.subject == null ? {} : {
+        pull_request = {
+          name               = "github-pull-request"
+          subject_identifier = "${local.subject}:pull_request"
+          issuer_url         = "https://token.actions.githubusercontent.com"
+        }
+        main = {
+          name               = "github-main"
+          subject_identifier = "${local.subject}:ref:refs/heads/main"
+          issuer_url         = "https://token.actions.githubusercontent.com"
         }
       }
     }
-  }
+    }, local.decommission ? {} : {
+    deploy = {
+      name                         = local.names.deploy_identity
+      resource_group_name_existing = azapi_resource.resource_group["identity"].name
+      location                     = local.lz.location
+      tags                         = local.lz.tags
+      federated_credentials_advanced = local.subject == null ? {} : {
+        apply = {
+          name               = "github-environment-apply"
+          subject_identifier = "${local.subject}:environment:apply"
+          issuer_url         = "https://token.actions.githubusercontent.com"
+        }
+      }
+    }
+  })
+
+  budget_enabled = !local.decommission && try(local.lz.budget.monthly, null) != null
+  budgets        = local.budgets
 }

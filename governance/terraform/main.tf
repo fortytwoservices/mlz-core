@@ -1,35 +1,49 @@
 locals {
-  # Defaults and customer.yaml, merged and checked by scripts/render_library.py.
+  # Defaults and customer.yaml, merged and checked by mlz governance (tools/mlz/governance.py).
   config = jsondecode(file("${var.rendered_library_path}/config.json"))
 
   subscriptions = local.config.subscriptions
   region        = local.config.primary_region
   tags          = { ManagedBy = "mlz-core" }
+  # From the customer's naming template, worked out by mlz governance (tools/mlz/names.py).
+  names = local.config.names
+  # customer.yaml's advanced:, checked by mlz governance; absent when it sets nothing.
+  advanced = try(local.config.advanced, {})
 
   # Resource IDs built from names, so the policies know them at plan time, before management is applied.
-  management_resource_group_id = "/subscriptions/${local.subscriptions.management}/resourceGroups/${module.naming.management.resource_group}"
+  management_resource_group_id = "/subscriptions/${local.subscriptions.management}/resourceGroups/${local.names.management.resource_group}"
   management_ids = {
-    workspace = "${local.management_resource_group_id}/providers/Microsoft.OperationalInsights/workspaces/${module.naming.management.workspace}"
-    identity  = "${local.management_resource_group_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${module.naming.management.ama_identity}"
+    workspace = "${local.management_resource_group_id}/providers/Microsoft.OperationalInsights/workspaces/${local.names.management.workspace}"
+    identity  = "${local.management_resource_group_id}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${local.names.management.ama_identity}"
     rules = {
-      for kind, name in module.naming.management.data_collection_rules :
+      for kind, name in local.names.management.data_collection_rules :
       kind => "${local.management_resource_group_id}/providers/Microsoft.Insights/dataCollectionRules/${name}"
     }
   }
 
-  # The Private Link DNS zones, from the platform's contract once they exist.
-  platform = var.platform_contract_file == null ? null : yamldecode(file(var.platform_contract_file))
-  private_dns_defaults = local.platform == null ? {} : {
-    private_dns_zone_subscription_id     = jsonencode({ value = local.platform.private_dns.subscription })
-    private_dns_zone_resource_group_name = jsonencode({ value = local.platform.private_dns.resource_group })
-    private_dns_zone_region              = jsonencode({ value = local.platform.private_dns.region })
+  # The Private Link DNS zones, where the platform makes them: the connectivity subscription and the group
+  # tools/mlz/names.py names there, in the primary region. Known from the first run, before the zones exist.
+  private_dns_defaults = {
+    private_dns_zone_subscription_id     = jsonencode({ value = local.subscriptions.connectivity })
+    private_dns_zone_resource_group_name = jsonencode({ value = local.names.dns_resource_group })
+    private_dns_zone_region              = jsonencode({ value = local.region })
   }
+  # The policy that links landing zones' private endpoints to those zones needs rights on them. ALZ would give its
+  # identity Network Contributor on each zone, which fails while the zones do not exist yet (53 role assignments,
+  # met in the canary), and forced a second governance run after the platform's first. Instead it gets Private
+  # DNS Zone Contributor on the connectivity subscription, below, and none on each zone: every zone parameter of
+  # ALZ's Deploy-Private-DNS-Zones set, worked out from that set in the ALZ library (57; avm-ptn-alz's own list
+  # has only some of them). Check it again when the library changes.
+  private_dns_zone_parameters = jsondecode(file("${path.module}/private-dns-zone-parameters.json"))
+  # Where the policy looks for the zones, after any override in policy_default_values: the role goes there.
+  private_dns_subscription = jsondecode(merge(local.private_dns_defaults, var.policy_default_values).private_dns_zone_subscription_id).value
 
   # Vending's rights on the groups landing zone subscriptions go into, for its pipeline identities from
-  # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them.
+  # the bootstrap: the apply identity owns every vended subscription, the plan identity reads them. Decommissioned
+  # too: a decommissioned landing zone's subscription moves there, and its stack still plans and applies.
   bootstrap = var.bootstrap_contract_file == null ? null : yamldecode(file(var.bootstrap_contract_file))
   vending_rights = local.bootstrap == null ? {} : merge([
-    for group in ["landing-zones", "sandboxes"] : {
+    for group in ["landing-zones", "sandboxes", "decommissioned"] : {
       "vending-apply/${group}" = {
         scope     = "/providers/Microsoft.Management/managementGroups/${local.config.root_id}-${group}"
         role      = "/providers/Microsoft.Authorization/roleDefinitions/8e3af657-a8ff-443c-a75c-2fe8c4bcb635" # Owner
@@ -55,18 +69,11 @@ locals {
 
 data "azapi_client_config" "current" {}
 
-module "naming" {
-  source = "../../modules/naming"
-
-  root_id = local.config.root_id
-  region  = local.region
-}
-
 # Central management: the Log Analytics workspace, the Azure Monitor Agent's identity and the data
 # collection rules the ALZ policies point machines at.
 resource "azapi_resource" "management_resource_group" {
   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
-  name      = module.naming.management.resource_group
+  name      = local.names.management.resource_group
   parent_id = "/subscriptions/${local.subscriptions.management}"
   location  = local.region
   tags      = local.tags
@@ -77,16 +84,30 @@ resource "azapi_resource" "management_resource_group" {
 module "management" {
   source = "git::https://github.com/fortytwoservices/az-tf-mlz-management.git?ref=v0.2.0"
 
-  name      = module.naming.management.workspace
+  name      = local.names.management.workspace
   parent_id = azapi_resource.management_resource_group.id
   location  = local.region
+  # customer.yaml's advanced.management (tools/mlz/advanced.py: only inputs the input map calls open, checked against
+  # the module's types): each given, or the module's default when it sets none, so governance without it is planned
+  # as it always was (null is the default of a nullable = false input, or the default itself). In the objects it goes
+  # in first and mlz-core's values over it.
   data_collection_rules = {
-    change_tracking = { name = module.naming.management.data_collection_rules.change_tracking }
-    vm_insights     = { name = module.naming.management.data_collection_rules.vm_insights }
-    defender_sql    = { name = module.naming.management.data_collection_rules.defender_sql }
+    for rule, name in local.names.management.data_collection_rules : rule => merge(try(local.advanced.management.data_collection_rules[rule], {}), { name = name })
   }
-  user_assigned_identity = { name = module.naming.management.ama_identity }
-  tags                   = local.tags
+  user_assigned_identity              = { name = local.names.management.ama_identity }
+  tags                                = local.tags
+  daily_quota_gb                      = try(local.advanced.management.daily_quota_gb, null)
+  retention_in_days                   = try(local.advanced.management.retention_in_days, null)
+  public_network_access_for_ingestion = try(local.advanced.management.public_network_access_for_ingestion, null)
+  public_network_access_for_query     = try(local.advanced.management.public_network_access_for_query, null)
+  resource_permissions_enabled        = try(local.advanced.management.resource_permissions_enabled, null)
+  permanently_delete_on_destroy       = try(local.advanced.management.permanently_delete_on_destroy, null)
+  sentinel_onboarding                 = try(local.advanced.management.sentinel_onboarding, null)
+  diagnostic_settings                 = try(local.advanced.management.diagnostic_settings, null)
+  lock                                = try(local.advanced.management.lock, null)
+  role_assignments                    = try(local.advanced.management.role_assignments, null)
+  retry                               = try(local.advanced.management.retry, {})
+  timeouts                            = try(local.advanced.management.timeouts, null)
 }
 
 module "alz" {
@@ -104,7 +125,7 @@ module "alz" {
       allowed_locations                           = jsonencode({ value = local.config.allowed_regions })
       log_analytics_workspace_id                  = jsonencode({ value = local.management_ids.workspace })
       ama_user_assigned_managed_identity_id       = jsonencode({ value = local.management_ids.identity })
-      ama_user_assigned_managed_identity_name     = jsonencode({ value = module.naming.management.ama_identity })
+      ama_user_assigned_managed_identity_name     = jsonencode({ value = local.names.management.ama_identity })
       ama_change_tracking_data_collection_rule_id = jsonencode({ value = local.management_ids.rules.change_tracking })
       ama_vm_insights_data_collection_rule_id     = jsonencode({ value = local.management_ids.rules.vm_insights })
       ama_mdfc_sql_data_collection_rule_id        = jsonencode({ value = local.management_ids.rules.defender_sql })
@@ -115,6 +136,9 @@ module "alz" {
     var.policy_default_values,
   )
 
+  # No role assignment on each Private Link zone: private_dns_zone_role below covers them all.
+  override_policy_definition_parameter_assign_permissions_unset = local.private_dns_zone_parameters
+
   # The policies point at management's resources, so they are assigned after those exist.
   policy_assignments_dependencies = [
     module.management.resource_id,
@@ -123,6 +147,42 @@ module "alz" {
   ]
 
   subscription_placement = local.placement
+
+  # customer.yaml's advanced.alz, as advanced.management above: each given, or the module's default.
+  management_group_role_assignments                                = try(local.advanced.alz.management_group_role_assignments, null)
+  management_group_hierarchy_settings                              = try(local.advanced.alz.management_group_hierarchy_settings, null)
+  role_assignment_definition_lookup_enabled                        = try(local.advanced.alz.role_assignment_definition_lookup_enabled, true)
+  policy_assignment_non_compliance_message_settings                = try(local.advanced.alz.policy_assignment_non_compliance_message_settings, null)
+  policy_assignments_to_modify                                     = try(local.advanced.alz.policy_assignments_to_modify, {})
+  subscription_placement_destroy_behavior                          = try(local.advanced.alz.subscription_placement_destroy_behavior, null)
+  subscription_placement_destroy_custom_target_management_group_id = try(local.advanced.alz.subscription_placement_destroy_custom_target_management_group_id, null)
+  delays                                                           = try(local.advanced.alz.delays, null)
+  retries                                                          = try(local.advanced.alz.retries, {})
+  timeouts                                                         = try(local.advanced.alz.timeouts, {})
+}
+
+# Deploy-Private-DNS-Zones' identity may manage every Private Link zone in the subscription it looks in, the
+# connectivity subscription unless policy_default_values says otherwise, before and after the zones exist (see
+# private_dns_zone_parameters).
+resource "azapi_resource" "private_dns_zone_role" {
+  for_each = { for key, id in module.alz.policy_assignment_resource_ids : key => id if endswith(key, "/Deploy-Private-DNS-Zones") }
+
+  type = "Microsoft.Authorization/roleAssignments@2022-04-01"
+  # Azure cannot change an assignment's principal, so a new identity (a policy assignment made again) makes a new one.
+  name      = uuidv5("url", "mlz-core/${local.config.root_id}/private-dns-zone-role/${each.key}/${module.alz.policy_assignment_identity_ids[each.key]}")
+  parent_id = "/subscriptions/${local.private_dns_subscription}"
+  body = {
+    properties = {
+      roleDefinitionId = "/subscriptions/${local.private_dns_subscription}/providers/Microsoft.Authorization/roleDefinitions/b12aa53e-6015-4669-85d0-8515ebb3ae7f" # Private DNS Zone Contributor
+      principalId      = module.alz.policy_assignment_identity_ids[each.key]
+      principalType    = "ServicePrincipal"
+      description      = "mlz-core governance: ${each.key} links private endpoints to the Private Link zones."
+    }
+  }
+  # A policy assignment's new identity can take a minute to reach every Entra ID replica.
+  retry = { error_message_regex = ["PrincipalNotFound"] }
+
+  response_export_values = []
 }
 
 # Diagnostic settings need the Microsoft.Insights provider registered in their subscription, and a new

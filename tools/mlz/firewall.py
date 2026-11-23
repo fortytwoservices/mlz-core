@@ -1,20 +1,25 @@
-"""Firewall rules: firewall/ in the platform repo into one config for the rules root.
+"""Firewall rules: firewall-rules/ in the platform repo into one config for the rules root.
 
-    firewall/platform.yaml                  rules for every landing zone (from all landing zone ranges)
-    firewall/landing-zones/<key>.yaml       one landing zone's rules (from its own range)
+    firewall-rules/platform.yaml                  rules for every landing zone (from all landing zone ranges)
+    firewall-rules/landing-zones/<key>.yaml       one landing zone's rules (from its own range)
+    firewall-rules/management.yaml                management's network, the runners' among them (from its range)
+    firewall-rules/identity.yaml                  identity's network in every region that builds it (from its range)
 
 A rule names what it reaches, never where it starts: the source is the landing zone's range, from the
-vending contract (_generated/vending.yaml), or every landing zone range of the hub for platform rules.
+vending contract (_generated/vending.yaml), every landing zone range of the hub for platform rules, or the
+network's own range, from the platform's config, for management's and identity's.
 
     outbound:
       - name: card-processor
+        description: Card payments. # what the rule is for: required, as a person approves each rule
         to: [api.stripe.com]        # a name (lower case), *.name, an address or range, another landing zone,
                                     # an FQDN tag (WindowsUpdate) or a service tag (AzureMonitor, Storage.NorwayEast)
         ports: [https]              # https, http, a TCP port, or udp:<port>
 
 The firewall policy holds a fixed set of rule collection groups, whatever the number of landing zones:
-`platform` for the shared rules, and PARTITIONS groups for the landing zones. The `platform` group always
-holds REQUIRED too: what governance's own policies install on every machine needs to reach. A landing zone's rules are
+`platform` for the shared rules, management's and identity's, and PARTITIONS groups for the landing zones. The
+`platform` group always holds REQUIRED too: what governance's own policies install on every machine needs to
+reach, and RUNNERS, what the pipelines need from the runners' subnets. A landing zone's rules are
 collections in group `lz-<nn>`, nn = sha256(key) mod PARTITIONS: the same group for ever, so adding one
 landing zone never moves another's rules. Azure caps a policy's rule collection groups, so PARTITIONS
 must never change once rules exist.
@@ -22,9 +27,14 @@ must never change once rules exist.
 
 from __future__ import annotations
 
+import datetime
 import hashlib
+import json
 import re
 import sys
+import time
+import urllib.error
+import urllib.request
 from ipaddress import IPv4Network
 from pathlib import Path
 
@@ -32,8 +42,12 @@ from .files import read_setting, setting_names
 from .merge import ConfigError
 
 PARTITIONS = 30
-# A rules file holds `outbound`, a list of rules; a rule has these settings, the first three required.
-RULE_KEYS = ("name", "to", "ports", "description")
+# A rules file holds `outbound`, a list of rules; a rule has all of these. Every rule is approved by a person (the
+# platform repo's code owner), who reads why it is needed in its description.
+RULES = "firewall-rules"  # the rules' folder, after their stack
+RULE_KEYS = ("name", "description", "to", "ports")
+# A rule may not reach the whole internet, or nearly: name what it needs instead.
+WIDEST_RANGE = 8
 PLATFORM_PRIORITY = 500
 FIRST_PARTITION_PRIORITY = 1000
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,48}[a-z0-9])?$")
@@ -63,6 +77,82 @@ REQUIRED = [
     },
 ]
 
+# In the primary hub's platform group, from management's two runner subnets: what the three pipelines reach
+# once they run there. GitHub's own names come first, from its meta endpoint (github_actions_domains).
+RUNNERS = [
+    {
+        "name": "azure",
+        "description": "mlz-core: Entra ID and Azure Resource Manager, for the pipelines' sign-in, plans and applies.",
+        "to": ["AzureActiveDirectory", "AzureResourceManager"],
+        "ports": ["https"],
+    },
+    {
+        "name": "terraform",
+        "description": "mlz-core: Terraform, its providers and modules.",
+        "to": ["registry.terraform.io", "releases.hashicorp.com"],
+        "ports": ["https"],
+    },
+    {
+        # Not among GitHub's Actions domains: self-hosted runners fetch it once, at boot (az-tf-mlz-github-runners).
+        "name": "runner-registration",
+        "description": "mlz-core: Fortytwo's runner registration script, pinned to a commit and checked against its hash.",
+        "to": ["raw.githubusercontent.com"],
+        "ports": ["https"],
+    },
+]
+RUNNER_SUBNETS = ("github-runners", "runners")
+# Management's and identity's own rules, after the required ones and firewall-rules/platform.yaml's.
+NETWORK_PRIORITIES = {"management": 300, "identity": 400}
+GITHUB_META = "https://api.github.com/meta"
+
+
+def rate_limit_reset(status: int, headers) -> str | None:
+    """When GitHub's answer says its API rate limit is used up: the time the limit resets, in UTC; None for any other
+    answer. headers: a mapping whose get() finds the lower-case names (an HTTP message's, or gh api --include's)."""
+    if status not in (403, 429) or headers.get("x-ratelimit-remaining") != "0":
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(int(headers.get("x-ratelimit-reset")), datetime.timezone.utc).strftime("%H:%M UTC")
+    except (TypeError, ValueError, OverflowError, OSError):
+        return "it resets (within the hour)"
+
+
+def github_actions_domains(saved: Path | None = None) -> list[str]:
+    """The names GitHub's runners reach, from GitHub's meta endpoint (or a saved copy of it): domains.actions,
+    the list GitHub keeps between the exact names and the wildcards. GitHub lists a name there at least a week
+    before using it, and lists no date, so it is read on every run: a change then plans the runners' rule anew,
+    and the daily drift check fails until it is applied. A name one label below a wildcard in the same list
+    is left out, so a host GitHub adds under one changes nothing here."""
+    try:
+        if saved is not None:
+            meta = json.loads(saved.read_text())
+        else:
+            request = urllib.request.Request(GITHUB_META, headers={"Accept": "application/vnd.github+json", "User-Agent": "mlz-core"})
+            for attempt in range(3):
+                try:
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        meta = json.load(response)
+                    break
+                except OSError as error:
+                    # Anonymous, the limit is 60 requests an hour per address, which a runner may share: once it is used
+                    # up, nothing helps until it resets, so it is not retried. The pipeline reads a saved copy instead,
+                    # fetched with the job's token (tools/ci/github_meta.py).
+                    reset = rate_limit_reset(error.code, error.headers) if isinstance(error, urllib.error.HTTPError) else None
+                    if reset:
+                        raise ConfigError(f"GitHub's API rate limit for anonymous requests from this address is used up until {reset}, "
+                                          f"so {GITHUB_META} could not be read: the runners' rule is never planned without it. Run again "
+                                          "then, or give a saved copy with --github-meta.") from error
+                    if attempt == 2:
+                        raise
+                    time.sleep(5 * (attempt + 1))
+        domains = meta["domains"]["actions"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ConfigError(f"GitHub's Actions domains could not be read from {saved or GITHUB_META}: {error}. The runners' rule is never planned without them.") from error
+    if not isinstance(domains, list) or not domains or not all(isinstance(d, str) and FQDN.fullmatch(d) for d in domains):
+        raise ConfigError(f"{saved or GITHUB_META}: domains.actions is not a list of names; the runners' rule is never planned from it.")
+    wildcards = {d[2:].lower() for d in domains if d.startswith("*.")}
+    return sorted({d.lower() for d in domains if d.startswith("*.") or d.lower().split(".", 1)[1] not in wildcards})
+
 
 def partition(key: str) -> int:
     return int(hashlib.sha256(key.encode()).hexdigest(), 16) % PARTITIONS
@@ -85,9 +175,11 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     names, kept = set(), []
     for index, rule in enumerate(rules):
         at = f"{where}: outbound[{index}]"
-        if not isinstance(rule, dict) or set(rule) - set(RULE_KEYS) or not set(RULE_KEYS[:3]) <= set(rule):
-            problems.append(f"{at}: a rule has name, to and ports (and optionally description).")
+        if not isinstance(rule, dict) or set(rule) != set(RULE_KEYS):
+            problems.append(f"{at}: a rule has name, description, to and ports.")
             continue
+        if not isinstance(rule["description"], str) or not rule["description"].strip():
+            problems.append(f"{at}: description says what the rule is for, for whoever approves it.")
         name = rule["name"]
         if not isinstance(name, str) or not NAME.fullmatch(name):
             problems.append(f"{at}: name {name!r} is lower-case letters, digits and hyphens.")
@@ -105,7 +197,7 @@ def read_rules(where: str, data: dict, problems: list[str]) -> list[dict]:
     return kept
 
 
-def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str, problems: list[str]) -> tuple[dict | None, dict[str, dict]]:
+def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str, problems: list[str], held: dict | None = None) -> tuple[dict | None, dict[str, dict]]:
     """One rule as the firewall module takes it: an application rule for names and FQDN tags on https or
     http, and network rules for addresses, landing zones, service tags and other ports (one for TCP, one
     for UDP). Returns (application rule or None, {suffix: network rule})."""
@@ -121,6 +213,13 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             continue
         if zones is not None and target in zones:
             addresses.append(zones[target]["range"])
+        elif target in (held or {}):
+            problems.append(f"{at}: {target} is decommissioned or removed, and its range is no longer its own; take it out of this rule.")
+        elif target == "*" or target.lower() == "internet":  # Azure reads service tags in any case
+            problems.append(f"{at}: {target} is the whole internet; name what the rule needs instead.")
+        elif zones is not None and LANDING_ZONE.fullmatch(target):
+            # A rule goes only to what exists: the file's own landing zone may wait for vending, its destinations not.
+            problems.append(f"{at}: {target} is no landing zone in the vending contract (_generated/vending.yaml), nor a name, an address or a tag.")
         elif target in FQDN_TAGS or target.startswith("Office365."):
             tags.append(target)
         elif SERVICE_TAG.fullmatch(target):
@@ -129,9 +228,14 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
             names.append(target.lower())
         else:
             try:
-                addresses.append(str(IPv4Network(target)))
+                network = IPv4Network(target)
             except ValueError:
                 problems.append(f"{at}: {target!r} is not a name, an address or range, a landing zone or a tag.")
+                continue
+            if network.prefixlen < WIDEST_RANGE:
+                problems.append(f"{at}: {target} is wider than a /{WIDEST_RANGE}, nearly the whole internet; name what the rule needs instead.")
+            else:
+                addresses.append(str(network))
     web, tcp, udp = set(), set(), set()
     for port in rule["ports"]:
         text = str(port).lower()
@@ -192,11 +296,11 @@ def shape(rule: dict, sources: list[str], at: str, zones: dict | None, tier: str
     return application, network
 
 
-def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict | None, priority: int, tier: str, problems: list[str]) -> dict:
+def collections(rules: list[dict], sources: list[str], where: str, owner: str, zones: dict | None, priority: int, tier: str, problems: list[str], held: dict | None = None) -> dict:
     """The owner's rules as at most two collections: <owner>-network and <owner>-application."""
     application, network, made_by = {}, {}, {}
     for index, rule in enumerate(rules):
-        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, tier, problems)
+        app, net = shape(rule, sources, f"{where}: outbound[{index}]", zones, tier, problems, held)
         if app:
             application[rule["name"]] = app
         for suffix, one in net.items():
@@ -215,49 +319,74 @@ def collections(rules: list[dict], sources: list[str], where: str, owner: str, z
     return out
 
 
-def build(repo: Path, platform: dict, vending: dict | None) -> dict | None:
+def build(repo: Path, platform: dict, vending: dict | None, github: list[str]) -> dict | None:
     """The rules root's config: per hub region, the rule collection groups and what is in them. None, once
-    every file is checked, while vending has published no contract yet."""
-    folder = repo / "firewall"
+    every file is checked, while vending has published no contract yet. github is GitHub's Actions domains
+    (github_actions_domains)."""
+    folder = repo / RULES
     problems: list[str] = []
     # None until vending publishes its first contract: then landing zones are not known yet (see below).
     zones = None if vending is None else (vending.get("landing_zones") or {})
+    # Removed or decommissioned landing zones whose ranges are not released yet: their rules no longer apply.
+    held = {} if vending is None else (vending.get("held") or {})
     hubs = platform["hubs"]
+    networks = platform["networks"]  # management's and identity's, by region, as the platform builds them
     groups: dict[str, dict] = {region: {} for region in hubs}
 
     shared = read_setting(folder / "platform") or {}
-    shared_rules = read_rules("firewall/platform", shared, problems)
+    shared_rules = read_rules(f"{RULES}/platform", shared, problems)
+    own = {name: read_rules(f"{RULES}/{name}", read_setting(folder / name) or {}, problems) for name in NETWORK_PRIORITIES}
+    if own["identity"] and not networks["identity"]:  # management's is always built, in the primary region
+        problems.append(f"{RULES}/identity: no region builds identity's network (identity/<region>.yaml), so its rules would have no source.")
+    runners = [{"name": "github-actions", "description": "mlz-core: GitHub Actions, as GitHub's meta endpoint lists it (domains.actions).", "to": github, "ports": ["https"]}, *RUNNERS]
     for region, hub in hubs.items():
         tier = (hub.get("firewall") or {}).get("sku_tier", "Standard")
-        required = collections(REQUIRED, hub["landing_zone_ranges"], "mlz-core", "required", zones, 100, tier, problems)
-        found = collections(shared_rules, hub["landing_zone_ranges"], "firewall/platform", "platform", zones, 200, tier, problems)
+        built = {name: networks[name][region] for name in NETWORK_PRIORITIES if region in networks[name]}
+        # Governance's agent runs on the platform's own machines too: domain controllers, self-hosted runners.
+        required = collections(REQUIRED, hub["landing_zone_ranges"] + [net["address_space"] for net in built.values()], "mlz-core", "required", zones, 100, tier, problems)
+        parts = [required]
+        if "management" in built:
+            subnets = [built["management"]["subnets"][subnet] for subnet in RUNNER_SUBNETS]
+            parts.append(collections(runners, subnets, "mlz-core", "runners", zones, 110, tier, problems))
+        parts.append(collections(shared_rules, hub["landing_zone_ranges"], f"{RULES}/platform", "platform", zones, 200, tier, problems, held))
+        parts += [collections(own[name], [net["address_space"]], f"{RULES}/{name}", name, zones, NETWORK_PRIORITIES[name], tier, problems, held) for name, net in built.items()]
         groups[region]["platform"] = {
             "priority": PLATFORM_PRIORITY,
-            "application": {**required["application"], **found["application"]},
-            "network": {**required["network"], **found["network"]},
+            "application": {k: v for part in parts for k, v in part["application"].items()},
+            "network": {k: v for part in parts for k, v in part["network"].items()},
         }
 
     keys = setting_names(folder / "landing-zones")
+    # A landing zone not known yet has no hub yet either: Basic's limits apply when every hub is Basic.
+    tiers = {(hub.get("firewall") or {}).get("sku_tier", "Standard") for hub in hubs.values()}
+    unknown_tier = "Basic" if tiers == {"Basic"} else "Standard"
     if zones is None:
         # The platform's first deployment comes before any landing zone, and vending needs the platform's
         # contract first, so refusing these files would stop the hub for good (met rebuilding the canary,
         # 2026-11-11). They are checked like any other, with landing zones by key left unresolved, and go into
-        # no group: check.sh leaves the rules stack out of the run until vending's contract exists, so nothing
+        # no group: mlz check leaves the rules stack out of the run until vending's contract exists, so nothing
         # in Azure changes, not even when the contract has gone missing from a platform already deployed.
-        # The zone's hub is not known yet: Basic's limits apply when every hub is Basic, and wait otherwise.
-        tiers = {(hub.get("firewall") or {}).get("sku_tier", "Standard") for hub in hubs.values()}
-        tier = "Basic" if tiers == {"Basic"} else "Standard"
         for key in keys:
-            where = f"firewall/landing-zones/{key}"
+            where = f"{RULES}/landing-zones/{key}"
             rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
-            collections(rules, [f"<landing zone {key}>"], where, key, None, 100, tier, problems)
+            collections(rules, [f"<landing zone {key}>"], where, key, None, 100, unknown_tier, problems)
         if keys and not problems:
             print(f"mlz firewall: no vending contract yet (_generated/vending.yaml): the rules for {', '.join(keys)} are checked, and wait for it", file=sys.stderr)
         keys = []
     for key in keys:
-        where = f"firewall/landing-zones/{key}"
+        where = f"{RULES}/landing-zones/{key}"
+        if key in held:
+            # Its rules leave Azure with this run, before its range can be given to another landing zone; the
+            # file goes in a pull request of its own (docs/vending.md, decommissioning).
+            print(f"mlz firewall: {where}.yaml is for {key}, decommissioned or removed: its rules are no longer applied; delete the file", file=sys.stderr)
+            continue
         if key not in zones:
-            problems.append(f"{where}: no landing zone {key} in the vending contract (_generated/vending.yaml).")
+            # Its rules may come before the landing zone (docs/platform.md): checked now, merged, and applied by the
+            # first run after vending publishes it. A key vending never publishes waits for ever, named here each run.
+            rules = read_rules(where, read_setting(folder / "landing-zones" / key) or {}, problems)
+            collections(rules, [f"<landing zone {key}>"], where, key, zones, 100, unknown_tier, problems, held)
+            print(f"mlz firewall: {where}.yaml is for {key}, which the vending contract does not list yet: its rules are checked, "
+                  "and wait until vending publishes it (a mistyped key waits for ever)", file=sys.stderr)
             continue
         region = zones[key]["region"]
         if region not in hubs:
@@ -272,32 +401,37 @@ def build(repo: Path, platform: dict, vending: dict | None) -> dict | None:
         # shift these priorities.
         place = sorted(k for k in keys if k in zones and zones[k]["region"] == region and partition(k) == number).index(key)
         tier = (hubs[region].get("firewall") or {}).get("sku_tier", "Standard")
-        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems)
+        found = collections(rules, [zones[key]["range"]], where, key, zones, 100 + 10 * place, tier, problems, held)
         group["application"].update(found["application"])
         group["network"].update(found["network"])
     if problems:
         raise ConfigError("firewall rules are not valid:\n  " + "\n  ".join(dict.fromkeys(problems)))
     if zones is None:
         # Checked, but not a config anyone may plan with: without the landing zones it would plan their rules
-        # away. The rules stack waits for vending's contract (check.sh).
+        # away. The rules stack waits for vending's contract (mlz check).
         return None
     return {
         "root_id": platform["root_id"],
         "connectivity_subscription_id": platform["connectivity_subscription_id"],
+        # Each hub's policy, by the names the platform root gives it (tools/mlz/names.py).
+        "policy_ids": {region: f"/subscriptions/{platform['connectivity_subscription_id']}/resourceGroups/{hub['names']['resource_group']}"
+                                f"/providers/Microsoft.Network/firewallPolicies/{hub['names']['firewall_policy']}" for region, hub in platform["hubs"].items()},
         "policies": {region: {name: group for name, group in found.items() if group["application"] or group["network"]} for region, found in groups.items()},
     }
 
 
 def vending_contract(zones: dict, plan: dict) -> dict:
     """What the platform needs from vending: each landing zone's region and range, for firewall rules, and
-    the ranges of landing zones removed but not yet released, which the platform must not build over."""
+    the ranges of landing zones removed or decommissioned but not yet released, which the platform must not
+    build over, and whose rules it no longer applies."""
+    live = {key: zone for key, zone in zones.items() if zone["settings"].get("decommission") is not True}
     contract = {
         "landing_zones": {
             key: {"region": zone["settings"]["location"], "range": str(plan[key]["range"])}
-            for key, zone in sorted(zones.items()) if key in plan
+            for key, zone in sorted(live.items()) if key in plan
         }
     }
-    held = {key: str(plan[key]["range"]) for key in sorted(set(plan) - set(zones))}
+    held = {key: str(plan[key]["range"]) for key in sorted(set(plan) - set(live))}
     if held:  # left out when empty, so a contract without removed landing zones reads as before
         contract["held"] = held
     return contract

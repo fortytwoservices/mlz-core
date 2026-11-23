@@ -1,0 +1,214 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MLZ connectivity",
+  "description": "The hub and the platform's range in one region: connectivity/<region>.yaml, or the chunks in connectivity/<region>/.",
+  "type": "object",
+  "properties": {
+    "platform_address_space": {
+      "type": "string",
+      "description": "The region's platform range, a /21: the hub (its first /22, its subnets carved from it), management's /24, identity's /24 and a spare /23. No landing zone gets an address in it.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+    },
+    "landing_zone_ranges": {
+      "description": "Where landing zone networks get their address ranges.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+          },
+          "minItems": 1
+        }
+      ]
+    },
+    "reserved": {
+      "description": "Ranges never given to a landing zone: existing networks, on-premises sites, partner links.",
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(0*([0-9]|[12][0-9]|3[0-2])|((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])))?$"
+          }
+        }
+      ]
+    },
+    "firewall": {
+      "type": "string",
+      "description": "The hub's Azure Firewall tier.",
+      "enum": [
+        "Standard",
+        "Premium",
+        "Basic"
+      ],
+      "default": "Standard"
+    },
+    "dns_resolver": {
+      "description": "A DNS resolver for Private Link names, for landing zones and on-premises.",
+      "type": "boolean",
+      "default": true
+    },
+    "bastion": {
+      "description": "Azure Bastion, for VMs in any landing zone.",
+      "type": "boolean",
+      "default": false
+    },
+    "names": {
+      "description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.",
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "resource_group",
+          "virtual_network",
+          "firewall",
+          "firewall_policy",
+          "firewall_public_ip",
+          "firewall_management_public_ip",
+          "firewall_route_table",
+          "bastion",
+          "bastion_public_ip",
+          "dns_resolver",
+          "dns_resolver_inbound_endpoint",
+          "dns_resolver_outbound_endpoint"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "advanced": {
+      "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/platform.md lists them). Anything else is refused with what owns it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "virtual_network_dns_servers": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "firewall": {
+          "type": "object",
+          "properties": {
+            "zones": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "firewall_policy": {
+              "type": "object",
+              "properties": {
+                "base_policy_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "threat_intelligence_mode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dns_servers": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "bastion": {
+          "type": "object",
+          "properties": {
+            "sku": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "zones": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "scale_units": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "copy_paste_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "file_copy_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "ip_connect_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "kerberos_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "shareable_link_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "tunneling_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -2,6 +2,13 @@ locals {
   customer = yamldecode(file(var.customer_file))
   settings = yamldecode(file(var.bootstrap_file))
   github   = local.settings.github
+  # Who approves an apply (docs/bootstrap.md, GitHub plan): on Enterprise, github.reviewers in each role's environment;
+  # on Team, which allows a reviewer on an environment in a private repo only on Enterprise, the pull request's approval,
+  # which then covers the plan applied. mlz install checks the setting; enterprise unless set.
+  team = try(local.github.plan, "enterprise") == "team"
+  # The bootstrap's names, and the platform's it points at: worked out by mlz install from customer.yaml's naming
+  # and bootstrap.yaml's names: (tools/mlz/names.py), on every run.
+  names = jsondecode(file(var.names_file))
 
   root          = local.customer.root_id
   region        = local.customer.primary_region
@@ -19,16 +26,16 @@ locals {
   # Identity's only when customer.yaml names an identity subscription.
   network_subscriptions = { for network in ["management", "identity"] : network => local.subscriptions[network] if contains(keys(local.subscriptions), network) }
 
+  # Where the state account's private endpoint goes, once the platform has built them: management's
+  # private endpoint subnet, and the hub's zone for blob names (tools/mlz/platform.py, tools/mlz/names.py).
+  management_network_id = "${local.management}/resourceGroups/${local.names.network_resource_groups.management}/providers/Microsoft.Network/virtualNetworks/${local.names.management_network}"
+  state_endpoint_subnet = "${local.management_network_id}/subnets/${local.names.state_endpoint_subnet}"
+  blob_zone             = "${local.connectivity}/resourceGroups/${local.names.dns_resource_group}/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net"
+  state_endpoint        = data.azapi_resource.state_endpoint_subnet.exists && data.azapi_resource.blob_zone.exists
+
   # One read-only identity per role for pull request plans, and one for approved applies.
   roles      = toset(["governance", "platform", "vending"])
   identities = { for pair in setproduct(local.roles, ["plan", "apply"]) : "${pair[0]}-${pair[1]}" => { role = pair[0], kind = pair[1] } }
-
-  names = {
-    resource_group = "rg-${local.root}-bootstrap-${module.naming.region_code}"
-    # Globally unique, at most 24 letters and digits: the first 4 hex characters of a hash keep it stable.
-    storage_account = "st${substr(replace(local.root, "-", ""), 0, 11)}state${substr(sha256("${local.management}/${local.root}"), 0, 4)}"
-    identity        = { for key, _ in local.identities : key => "id-${local.root}-${key}-${module.naming.region_code}" }
-  }
 
   # Built-in roles by ID. Azure stores a role's ID in the form of the assignment's scope: the
   # subscription's own form inside a subscription, the bare form on a management group. role_id below
@@ -72,16 +79,11 @@ locals {
 
 data "azapi_client_config" "current" {}
 
-module "naming" {
-  source = "../../modules/naming"
-
-  root_id = local.root
-  region  = local.region
-}
-
-# The management subscription may be new: the state account and the identities need their providers.
+# The management subscription may be new: the state account and the identities need their providers, GitHub's
+# hosted runners join management's network through a GitHub.Network resource, and self-hosted runners need a
+# vault, a scale set and their image's terms (main.runners.tf; mlz install runners accepts them).
 resource "azapi_resource_action" "register" {
-  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity"])
+  for_each = toset(["Microsoft.Storage", "Microsoft.ManagedIdentity", "GitHub.Network", "Microsoft.KeyVault", "Microsoft.Compute", "Microsoft.MarketplaceOrdering"])
 
   type        = "Microsoft.Resources/providers@2021-04-01"
   resource_id = "${local.management}/providers/${each.key}"
@@ -126,14 +128,15 @@ resource "azapi_resource" "network_resource_group" {
   for_each = local.network_subscriptions
 
   type      = "Microsoft.Resources/resourceGroups@2024-11-01"
-  name      = module.naming.platform_networks[each.key].resource_group
+  name      = local.names.network_resource_groups[each.key]
   parent_id = each.value
   location  = local.region
   tags      = local.tags
 }
 
 # Terraform state for every role. Entra ID only: account keys and key-signed SAS are refused. Versions
-# and soft delete keep earlier states. The public endpoint stays on until the private runners exist.
+# and soft delete keep earlier states. The public endpoint stays on until the private runners use the
+# private endpoint below.
 resource "azapi_resource" "state" {
   type      = "Microsoft.Storage/storageAccounts@2024-01-01"
   name      = local.names.storage_account
@@ -155,6 +158,12 @@ resource "azapi_resource" "state" {
     }
   }
   depends_on = [azapi_resource_action.register]
+
+  # Every role's state is in it. A changed name (customer.yaml's naming) would replace it, and lose them all: the
+  # plan stops here instead. To keep it, set its name in bootstrap.yaml's names.storage_account (docs/naming.md).
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Every storage account comes with its blob service, so this sets it rather than creating it.
@@ -181,11 +190,85 @@ resource "azapi_resource" "container" {
   body      = { properties = { publicAccess = "None" } }
 }
 
+# The private runners reach the state through management's network: a private endpoint for blobs, and its
+# name in the hub's zone, which the runners resolve through the hub. Both are built by the platform's first
+# run, after the first bootstrap, so the bootstrap run again after it adds the endpoint; until then there
+# is none, and nothing waits. The endpoint is the state account's, so it lives beside it, never in the
+# network's group, where the platform's pipeline may change things.
+data "azapi_resource" "state_endpoint_subnet" {
+  type                   = "Microsoft.Network/virtualNetworks/subnets@2024-07-01"
+  resource_id            = local.state_endpoint_subnet
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+data "azapi_resource" "blob_zone" {
+  type                   = "Microsoft.Network/privateDnsZones@2024-06-01"
+  resource_id            = local.blob_zone
+  ignore_not_found       = true
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_endpoint" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateEndpoints@2024-07-01"
+  name      = local.names.state_endpoint
+  parent_id = azapi_resource.resource_group.id
+  location  = local.region
+  tags      = local.tags
+  body = {
+    properties = {
+      subnet                     = { id = local.state_endpoint_subnet }
+      customNetworkInterfaceName = local.names.state_endpoint_nic
+      privateLinkServiceConnections = [{
+        name       = "blob"
+        properties = { privateLinkServiceId = azapi_resource.state.id, groupIds = ["blob"] }
+      }]
+    }
+  }
+  response_export_values = []
+}
+
+resource "azapi_resource" "state_endpoint_dns" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01"
+  name      = "default"
+  parent_id = azapi_resource.state_endpoint[0].id
+  body = {
+    properties = {
+      privateDnsZoneConfigs = [{ name = "blob", properties = { privateDnsZoneId = local.blob_zone } }]
+    }
+  }
+}
+
+# The zone answers only networks linked to it, and the hub links it to the hubs. Management resolves through
+# the hub (its firewall's DNS proxy, or its resolver) except behind a Basic firewall without a resolver, where
+# it asks Azure's own DNS from its own network: this link makes the endpoint's name resolve there too, and
+# changes nothing when management resolves through the hub.
+resource "azapi_resource" "state_endpoint_zone_link" {
+  count = local.state_endpoint ? 1 : 0
+
+  type      = "Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01"
+  name      = local.names.management_network
+  parent_id = local.blob_zone
+  location  = "global"
+  tags      = local.tags
+  body = {
+    properties = {
+      virtualNetwork      = { id = local.management_network_id }
+      registrationEnabled = false
+    }
+  }
+  response_export_values = []
+}
+
 resource "azapi_resource" "identity" {
   for_each = local.identities
 
   type                   = "Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31"
-  name                   = local.names.identity[each.key]
+  name                   = local.names.identities[each.key]
   parent_id              = azapi_resource.resource_group.id
   location               = local.region
   tags                   = local.tags
@@ -303,7 +386,7 @@ resource "azapi_resource" "state_operator" {
   }
 }
 
-# GitHub: the repos, the people who approve applies, and the settings the workflows read.
+# GitHub: the repos, the people who approve applies (on Enterprise), and the settings the workflows read.
 
 data "github_organization" "customer" {
   name         = local.github.organization
@@ -316,19 +399,22 @@ data "github_repository" "role" {
 }
 
 data "github_user" "reviewer" {
-  for_each = toset(local.github.reviewers)
+  for_each = local.team ? toset([]) : toset(try(local.github.reviewers, []))
   username = each.key
 }
 
-# The environment each apply runs in: a reviewer approves it, and only main may use it.
+# The environment each apply runs in: only main may use it, and on Enterprise a reviewer approves it.
 resource "github_repository_environment" "apply" {
   for_each = local.roles
 
   repository  = local.github.repositories[each.key]
   environment = each.key
 
-  reviewers {
-    users = [for user in data.github_user.reviewer : tonumber(user.id)]
+  dynamic "reviewers" {
+    for_each = local.team ? [] : [true]
+    content {
+      users = [for user in data.github_user.reviewer : tonumber(user.id)]
+    }
   }
 
   deployment_branch_policy {
@@ -338,8 +424,8 @@ resource "github_repository_environment" "apply" {
 
   lifecycle {
     precondition {
-      condition     = length(local.github.reviewers) > 0
-      error_message = "github.reviewers in bootstrap.yaml is empty: every apply needs someone to approve it."
+      condition     = local.team || length(try(local.github.reviewers, [])) > 0
+      error_message = "github.reviewers in bootstrap.yaml is empty: on GitHub Enterprise every apply needs someone to approve it."
     }
   }
 }
@@ -370,6 +456,25 @@ resource "github_actions_variable" "role" {
   repository    = local.github.repositories[each.value.role]
   variable_name = each.value.name
   value         = each.value.value
+}
+
+# On Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one refuses
+# (role.yml): a check against a switch done out of order and against mistakes, not the switch, which is the caller's
+# approval input. It names its environment, so it is made after the environment (GitHub refuses a variable on an
+# environment that does not exist yet, 404) and, on the way to Team, after the reviewer goes, by the time between two
+# calls; mlz install bootstrap applies that only once every pipeline passes approval: pull-request. Back on Enterprise,
+# create_before_destroy has the reviewer come back before the variable goes (tested with terraform_data, 23 November).
+resource "github_actions_environment_variable" "approval" {
+  for_each = local.team ? local.roles : toset([])
+
+  repository    = local.github.repositories[each.key]
+  environment   = github_repository_environment.apply[each.key].environment
+  variable_name = "MLZ_APPROVAL"
+  value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "github_actions_environment_variable" "apply_identity" {

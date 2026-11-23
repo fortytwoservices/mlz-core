@@ -1,6 +1,6 @@
 variable "rendered_library_path" {
   type        = string
-  description = "The output folder of scripts/render_library.py for this customer: its library files and config.json."
+  description = "The output folder of mlz governance (tools/mlz/governance.py) for this customer: its library files and config.json."
   nullable    = false
 }
 
@@ -11,16 +11,6 @@ variable "bootstrap_contract_file" {
     The bootstrap's contract, `_generated/bootstrap.yaml`: the pipeline identities. Governance grants the
     vending identities their rights on the Landing Zones and Sandboxes groups it creates. Without it,
     for example when someone deploys by hand, no such rights are granted.
-  EOT
-}
-
-variable "platform_contract_file" {
-  type        = string
-  default     = null
-  description = <<-EOT
-    The platform's published contract, `_generated/platform.yaml`, once the platform has been applied. Until then the
-    Private Link DNS policy keeps the library's placeholders, so no rights are granted on zones that do
-    not exist yet; the next run after the platform publishes its contract points it at the real zones.
   EOT
 }
 

@@ -5,14 +5,16 @@ from __future__ import annotations
 import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
 import unittest.mock
+import urllib.error
 from pathlib import Path
 
-from mlz import install
+from mlz import install, mirror
 from mlz.github import GitHub
 from mlz.merge import ConfigError
 
@@ -27,39 +29,122 @@ subscriptions:
 """
 BOOTSTRAP = """github:
   organization: acme
+  app: acme-mlz
   repositories:
     governance: mlz-governance
     platform: mlz-platform
     vending: mlz-vending
+  platform_team: platform
+  bypass_team: mlz-admins
   reviewers: [acme-lead]
 """
 REPOS = {"governance": "acme/mlz-governance", "platform": "acme/mlz-platform", "vending": "acme/mlz-vending"}
+CORE_COPY = "acme/mlz-core"  # the organization's copy of mlz-core
 
 
 WORKFLOW = ".github/workflows/mlz.yml"
+TEAM_IDS = {"platform": 11, "mlz-admins": 12}
+ENTERPRISE_ENVIRONMENT = {"protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User", "reviewer": {"login": "acme-lead"}}]},
+                                               {"type": "branch_policy"}],
+                          "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+# A role repo's caller on GitHub Team: the approval in the with: of the job that calls role.yml.
+TEAM_CALLER = "jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n      role: platform\n      approval: pull-request\n"
+TEAM_ENVIRONMENT = {"protection_rules": [{"type": "branch_policy"}], "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True}}
+APP = {"id": 77, "slug": "acme-mlz", "client_id": "Iv23liAcme", "owner": {"login": "acme"},
+       "permissions": {"actions": "read", "actions_variables": "write", "administration": "write", "contents": "write", "environments": "write",
+                       "members": "read", "metadata": "read", "pull_requests": "write", "workflows": "write"}}  # abc's App's, 23 November  # the MLZ App, as GET /apps/<slug> answers
 
 
 class FakeGitHub:
     def __init__(self, existing=(), private=True, variables=(), secrets=(), prefixes=None, files=None, open_pull=None,
-                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=()):
+                 org_branch="main", existing_branch="main", half_made=(), rulesets=(), empty=(), org_plan="enterprise",
+                 teams=("platform", "mlz-admins"), secret=(), writers=None, owner_errors=None, ruleset_review=True, dismiss_stale=True, owned=True,
+                 required_check=True, strict=True, core=True, not_executable=(), push_guard=True, can_bypass="always", main_bypass=True,
+                 generated_guard=True, apps=(APP,), environments=None, environment_variables=None):
+        self.org_plan = org_plan
+        # Code owners: the organization's teams, the (team, repo) pairs with write access, GitHub's errors in each
+        # repo's CODEOWNERS (None: not read yet), and whether the main ruleset requires a code owner's review.
+        self.teams, self.secret, self.granted = set(teams), set(secret), []
+        self.writers = {("platform", repo) for repo in REPOS.values()} if writers is None else set(writers)
+        self.owner_errors, self.ruleset_review = owner_errors or {}, ruleset_review
+        self.dismiss_stale = dismiss_stale  # whether the repo's main dismisses an approval on a later push
+        # And whether it requires the role's check to pass.
+        self.required_check, self.strict = required_check, strict
         self.repos = {repo: {"private": private, "default_branch": existing_branch} for repo in existing}
         self.org_branch = org_branch
         # An existing MLZ repo has its workflow, unless it is half-made (created, its starter commit failed).
         self.files = {(repo, WORKFLOW): ("on: push\n", "sha") for repo in existing if repo not in half_made}
+        # And its CODEOWNERS, unless it was set up before code owners (owned=False).
+        self.files.update({(repo, ".github/CODEOWNERS"): (install.owners.render("acme", "platform"), "sha") for repo in existing if owned and repo not in half_made})
+        # role.yml in the organization's copy, at any release: this release's, which takes the approval input.
+        self.files[(CORE_COPY, ".github/workflows/role.yml")] = ((install.CORE / ".github/workflows/role.yml").read_text(), "sha")
         self.files.update(files or {})
         self.renamed, self.empty = [], set(empty)
         self.existing_rulesets = set(rulesets)
+        # The organization's copy of mlz-core (tools/mlz/mirror.py): made already, at this release, unless core=False.
+        self.tags, self.access = set(), {}
+        if core:
+            self.repos[CORE_COPY] = {"private": True, "default_branch": "releases"}
+            self.tags.add((CORE_COPY, install.release()))
+            self.access[CORE_COPY] = "organization"
+            self.existing_rulesets |= {(CORE_COPY, "releases"), (CORE_COPY, "releases-branch"), (CORE_COPY, "no-release-branches")}
         self.variables, self.secrets = set(variables), set(secrets)
         self.prefixes = prefixes or {repo: f"repo:acme@1/{repo.split('/')[1]}@2" for repo in REPOS.values()}
         self._open_pull = open_pull
-        self.created, self.commits, self.rulesets, self.pulls, self.branches = [], [], [], [], []
+        self.created, self.commits, self.made_rulesets, self.pulls, self.branches, self.executable = [], [], [], [], [], []
+        self.unexecutable = set(not_executable)  # (repo, path): on main without its mode, as a stopped run left it
+        self.ruleset_bodies = {}
+        # The push ruleset that guards .github/ (finding 17), as GitHub would answer for the person signed in.
+        self.push_guard, self.can_bypass = push_guard, can_bypass
+        self.main_bypass = main_bypass  # whether the ruleset main (ID 7) lets the bypass team merge without the approval
+        # The push ruleset that guards _generated/ (review S1), and the GitHub Apps the person can see.
+        self.generated_guard, self.apps = generated_guard, {app["slug"]: app for app in apps}
+        # Each repo's environment, named after its role, as the bootstrap makes it on Enterprise: a reviewer, main only.
+        self.environments = {repo: ENTERPRISE_ENVIRONMENT for repo in REPOS.values()} if environments is None else environments
+        self.environment_variables = environment_variables or {}  # (repo, environment, name): value
+
+    def folder(self, repo, path, ref):
+        # A file on every branch is keyed (repo, path); one on a single branch (repo, path, ref).
+        return sorted({k[1] for k in self.files if k[0] == repo and k[1].startswith(path + "/") and (len(k) == 2 or k[2] == ref)})
+
+
+    def environment(self, repo, name):
+        return self.environments.get(repo)
+
+    def environment_variable(self, repo, environment, name):
+        return self.environment_variables.get((repo, environment, name))
+
+    def branch_policies(self, repo, environment):
+        return [("main", "branch")] if ((self.environments.get(repo) or {}).get("deployment_branch_policy") or {}).get("custom_branch_policies") else []
+
+    def app(self, slug):
+        return self.apps.get(slug)
+
+    def variable(self, repo, name):
+        return APP["client_id"] if (repo, name) in self.variables else None
 
     def repo(self, repo):
         return self.repos.get(repo)
 
-    def create_repo(self, owner, name):
-        self.created.append(f"{owner}/{name}")
+    def plan(self, org):
+        return self.org_plan
+
+    def create_repo(self, owner, name, first_commit=True):
+        self.created.append(f"{owner}/{name}" + ("" if first_commit else " (empty)"))
         self.repos[f"{owner}/{name}"] = {"private": True, "default_branch": self.org_branch}
+
+    def tag_exists(self, repo, tag):
+        return (repo, tag) in self.tags
+
+    def compare(self, repo, base, head):
+        # The copy's branch holds each release it has a tag for, here.
+        return "identical" if (repo, base) in self.tags else None
+
+    def actions_access(self, repo):
+        return self.access.get(repo)
+
+    def set_actions_access(self, repo, level):
+        self.access[repo] = level
 
     def is_empty(self, repo):
         return repo in self.empty
@@ -77,14 +162,49 @@ class FakeGitHub:
     def commit_files(self, repo, branch, head, files, message):
         self.commits.append((repo, branch, head, files, message))
 
+    def not_executable(self, repo, ref, paths):
+        return sorted(path for path in paths if (repo, path) in self.unexecutable)
+
+    def make_executable(self, repo, branch, paths, message):
+        self.executable.append((repo, branch, tuple(paths)))
+        return True
+
     def add_ruleset(self, repo, ruleset):
         if (repo, ruleset["name"]) in self.existing_rulesets:
             return False
-        self.rulesets.append((repo, ruleset["name"]))
+        self.made_rulesets.append((repo, ruleset["name"]))
+        self.ruleset_bodies[(repo, ruleset["name"])] = ruleset
         return True
 
     def has_variable(self, repo, name):
         return (repo, name) in self.variables
+
+    def team(self, org, slug):
+        return {"slug": slug, "id": TEAM_IDS.get(slug, 1), "privacy": "secret" if slug in self.secret else "closed"} if slug in self.teams else None
+
+    def rulesets(self, repo):
+        main = {**install.main_ruleset("platform", TEAM_IDS["mlz-admins"] if self.main_bypass else None), "id": 7}
+        guards = [{**install.push_ruleset(TEAM_IDS["mlz-admins"]), "id": 9, "current_user_can_bypass": self.can_bypass}] if self.push_guard else []
+        if self.generated_guard:
+            guards.append({**install.generated_ruleset(TEAM_IDS["mlz-admins"], APP["id"]), "id": 10, "current_user_can_bypass": self.can_bypass})
+        return [main, *guards]
+
+    def team_can_write(self, org, slug, repo):
+        return (slug, repo) in self.writers
+
+    def grant_team(self, org, slug, repo):
+        self.granted.append((slug, repo))
+        self.writers.add((slug, repo))
+
+    def codeowners_errors(self, repo, ref):
+        return self.owner_errors.get(repo, [])
+
+    def branch_rules(self, repo, branch):
+        role = next(role for role, name in REPOS.items() if name == repo)
+        checks = [{"context": f"{role} / check", "integration_id": 15368}] if self.required_check is True else self.required_check(role)
+        return [{"type": "deletion", "ruleset_id": 7}, {"type": "pull_request", "ruleset_id": 7, "parameters": {"require_code_owner_review": self.ruleset_review,
+                                                                                          "dismiss_stale_reviews_on_push": self.dismiss_stale}},
+                {"type": "required_status_checks", "ruleset_id": 8, "parameters": {"strict_required_status_checks_policy": self.strict, "required_status_checks": checks}}]
 
     def has_secret(self, repo, name):
         return (repo, name) in self.secrets
@@ -114,12 +234,24 @@ class FakeGitHub:
         return f"https://github.com/{repo}/pull/1"
 
 
-class FakeTerraform:
-    """Answers like terraform would. migrate_failures: how many state moves fail before one succeeds."""
+# The JSON of a plan as terraform show -json gives it: one resource to add, or nothing (tools/ci/summary.py reads it).
+ONE_CHANGE = {"applyable": True, "complete": True, "errored": False, "output_changes": {}, "resource_changes": [
+    {"address": "azapi_resource.x", "type": "azapi_resource", "change": {"actions": ["create"], "before": None, "after": {"name": "x"}, "after_unknown": {}}}]}
+NO_CHANGE = {"applyable": False, "complete": True, "errored": False, "output_changes": {}, "resource_changes": []}
 
-    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None):
+
+class FakeTerraform:
+    """Answers like terraform would. plan_status: 1 for a plan that fails, 2 for one with a change, 0 for one without;
+    plan_json, a plan of its own; show_fails, a saved plan that show cannot read. migrate_failures: how many state moves
+    fail before one succeeds."""
+
+    def __init__(self, work: Path, plan_status=2, migrate_failures=0, subjects=None, state_endpoint=False, contract_identities=None, plan_json=None,
+                 show_fails=False):
         self.work, self.root = work, work / "bootstrap" / "terraform"
-        self.plan_status, self.migrate_failures = plan_status, migrate_failures
+        self.contract_identities = contract_identities or {}
+        self.plan_json = plan_json if plan_json is not None else ONE_CHANGE if plan_status == 2 else NO_CHANGE
+        self.plan_status, self.migrate_failures, self.show_fails = plan_status, migrate_failures, show_fails
+        self.state_endpoint = state_endpoint
         self.subjects = subjects or {f"{role}-plan": f"repo:acme@1/mlz-{role}@2:pull_request" for role in install.ROLES}
         self.calls: list[tuple] = []
 
@@ -128,26 +260,35 @@ class FakeTerraform:
 
     def run(self, *arguments, capture=False):
         self.calls.append(arguments)
-        status = 0
-        if arguments[0] == "plan":
-            status = self.plan_status
+        status, shown, error = 0, "", ""
+        if arguments[0] == "plan":  # exits 0 or 1 only: no -detailed-exitcode
+            status = 1 if self.plan_status == 1 else 0
+            if not status:
+                Path(next(a for a in arguments if a.startswith("-out="))[len("-out="):]).write_text("plan")
+        elif arguments[:2] == ("show", "-json"):
+            if self.show_fails:
+                status, error = 1, "Error: Failed to read the given file as a state or plan file\n"
+            else:
+                shown = json.dumps(self.plan_json)
         elif "-migrate-state" in arguments:
             status = 1 if self.migrate_failures > 0 else 0
             self.migrate_failures -= 1
-        return subprocess.CompletedProcess(arguments, status, "", "")
+        return subprocess.CompletedProcess(arguments, status, shown, error)
 
     def output(self, name):
         return json.dumps({
             "backend_config": 'storage_account_name = "stacmestate1234"\ncontainer_name = "bootstrap"\nkey = "bootstrap.tfstate"\n',
             "oidc_subjects": self.subjects,
+            "state_private_endpoint": self.state_endpoint,
             "contract": {"top_management_group": "acme", "state": {"subscription": "00000000-0000-0000-0000-000000000001",
-                         "resource_group": "rg-acme-bootstrap-nwe", "storage_account": "stacmestate1234"}, "identities": {}},
+                         "resource_group": "rg-acme-bootstrap-nwe", "storage_account": "stacmestate1234"}, "identities": self.contract_identities},
         }[name])
 
 
 class FakeAzure:
-    def __init__(self, parents):
-        self._parents = parents
+    def __init__(self, parents=None, resources=None):
+        self._parents = parents or {}
+        self.resources = resources or {}
         self.moves = []
 
     def parents(self):
@@ -155,6 +296,177 @@ class FakeAzure:
 
     def move(self, group, subscription):
         self.moves.append((group, subscription))
+
+    def resource(self, resource_id, api_version):
+        return self.resources.get(resource_id)
+
+
+TENANT = "00000000-0000-0000-0000-0000000000aa"
+PRINCIPAL = "11111111-1111-1111-1111-111111111111"
+EA = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
+MCA = "/providers/Microsoft.Billing/billingAccounts/a1b2:c3d4_2019-05-31/billingProfiles/AB12-CD34/invoiceSections/EF56-GH78"
+VENDING_IDENTITY = {"vending": {"apply": {"name": "id-acme-vending-apply-nwe", "client_id": "c", "principal_id": PRINCIPAL}}}
+
+
+class BillingAzure:
+    """The billing API, as a sign-in that may or may not read and give billing roles sees it."""
+
+    def __init__(self, assignments=(), readable=True, grantable=True, shows_after=0):
+        self.assignments, self.readable, self.grantable = list(assignments), readable, grantable
+        # A grant shows in the role assignments after this many reads, as an MCA grant answers 202 and finishes later;
+        # None: never, as one that failed later.
+        self.shows_after, self.pending = shows_after, None
+        self.calls = []
+
+    def request(self, method, url, body=None):
+        self.calls.append((method, url, body))
+        if method == "GET" and not self.readable or method != "GET" and not self.grantable:
+            raise urllib.error.HTTPError(url, 403, "Forbidden", {}, None)
+        if method != "GET":
+            assignment = body.get("properties", body)
+            self.pending = (self.shows_after, {"properties": {"principalId": assignment["principalId"], "roleDefinitionId": assignment["roleDefinitionId"]}})
+            return {}
+        if self.pending is not None and self.pending[0] is not None:
+            reads, assignment = self.pending
+            if reads <= 0:
+                self.assignments.append(assignment)
+                self.pending = None
+            else:
+                self.pending = (reads - 1, assignment)
+        return {"value": self.assignments}
+
+
+class RunnersGitHub(FakeGitHub):
+    """The organization's runner settings, as an owner (or not) sees them."""
+
+    def __init__(self, owner=True, configurations=(), groups=(), runners=(), fail_configuration=False, pins=None, **kwargs):
+        super().__init__(existing=REPOS.values(), **kwargs)
+        # Each repo's workflow calls mlz-core's role.yml at the release it pins (this one, unless given).
+        for repo in REPOS.values():
+            pin = (pins or {}).get(repo, install.release())
+            core = CORE_COPY if "/" not in pin else pin.split("@")[0]
+            ref = pin if "/" not in pin else pin.split("@")[1]
+            self.files[(repo, WORKFLOW)] = (f"jobs:\n  check:\n    uses: {core}/.github/workflows/role.yml@{ref} # x\n", "sha")
+        for number, repo in enumerate(REPOS.values()):
+            self.repos[repo]["id"] = 101 + number
+        self.owner, self.fail_configuration = owner, fail_configuration
+        self.configurations, self.groups, self.runners = list(configurations), list(groups), list(runners)
+        self.group_repositories, self.values, self.calls = {}, {}, []
+        self.online = []  # the self-hosted runners registered in the group
+
+    def is_owner(self, org):
+        return self.owner
+
+    def network_configuration(self, org, name):
+        return next((c for c in self.configurations if c["name"] == name), None)
+
+    def create_network_configuration(self, org, body):
+        if self.fail_configuration:
+            raise ConfigError("gh api POST orgs/acme/settings/network-configurations: HTTP 403")
+        self.calls.append(("configuration", body))
+        self.configurations.append({**body, "id": "CONFIG"})
+        return self.configurations[-1]
+
+    def runner_group(self, org, name):
+        return next((g for g in self.groups if g["name"] == name), None)
+
+    def create_runner_group(self, org, body):
+        self.calls.append(("group", body))
+        self.groups.append({**body, "id": 7})
+        self.group_repositories[7] = set(body["selected_repository_ids"])
+        return self.groups[-1]
+
+    def update_runner_group(self, org, group, body):
+        self.calls.append(("update group", body))
+        for found in self.groups:
+            if found["id"] == group:
+                found.update(body)  # as GitHub keeps it
+
+    def runner_group_repositories(self, org, group):
+        return self.group_repositories.get(group, set())
+
+    def set_runner_group_repositories(self, org, group, repositories):
+        self.calls.append(("group repositories", repositories))
+        self.group_repositories[group] = set(repositories)  # as GitHub keeps it
+
+    def hosted_runner(self, org, name):
+        return next((r for r in self.runners if r["name"] == name), None)
+
+    def group_runners(self, org, group):
+        return self.online
+
+    def create_hosted_runner(self, org, body):
+        self.calls.append(("runner", body))
+
+    def variable(self, repo, name):
+        return self.values.get((repo, name))
+
+    def set_variable(self, repo, name, value):
+        self.calls.append(("variable", repo, name, value))
+        self.values[(repo, name)] = value
+
+
+MANAGEMENT = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups"
+# By the names tools/mlz/names.py gives them, from the customer's template.
+NETWORK_SETTINGS = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/GitHub.Network/networkSettings/ghns-acme-mgt-pd-nwe-01"
+STATE_ENDPOINT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.Network/privateEndpoints/pep-acme-mlz-state-pd-nwe-01"
+
+
+VAULT = f"{MANAGEMENT}/rg-acme-mlz-pd-nwe-01/providers/Microsoft.KeyVault/vaults/kv-acme-mlz-pd-nwe-01"
+RUNNERS_SUBNET = f"{MANAGEMENT}/rg-acme-mgt-net-pd-nwe-01/providers/Microsoft.Network/virtualNetworks/vnet-acme-mgt-pd-nwe-01/subnets/snet-runners"
+APP_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIEnotarealkey\n-----END RSA PRIVATE KEY-----\n"
+UPLOAD = "https://kv-acme-mlz-pd-nwe-01.vault.azure.net/secrets/github-runner-app-key?api-version=7.4"
+# GitHub's labels on one of the bootstrap's runners: its own three, and the one MLZ_RUNS_ON names.
+LABELS = [{"name": "self-hosted"}, {"name": "linux"}, {"name": "x64"}, {"name": "mlz"}]
+
+
+def refused(code, message, status=403):
+    """Key Vault's answer to a refused write, as its data plane sends it."""
+    body = json.dumps({"error": {"code": "Forbidden", "message": message, "innererror": {"code": code}}}).encode()
+    return urllib.error.HTTPError(UPLOAD, status, "Forbidden", {}, io.BytesIO(body))
+
+
+class SelfHostedAzure(FakeAzure):
+    """Management's network, the bootstrap's vault, Key Vault's data plane and the subscription's prerequisites."""
+
+    def __init__(self, secret=False, endpoint=True, refusals=(), feature="Registered", accepted=False, vault=True, subnet=True):
+        resources = {}
+        if subnet:
+            resources[RUNNERS_SUBNET] = {"name": "snet-runners"}
+        if vault:
+            resources[VAULT] = {"properties": {"vaultUri": "https://kv-acme-mlz-pd-nwe-01.vault.azure.net/",
+                                               "networkAcls": {"defaultAction": "Deny", "bypass": "None", "ipRules": []}}}
+        if secret:
+            resources[f"{VAULT}/secrets/github-runner-app-key"] = {"name": "github-runner-app-key"}
+        if endpoint:
+            resources[STATE_ENDPOINT] = {"properties": {"provisioningState": "Succeeded"}}
+        super().__init__(resources=resources)
+        self.refusals, self.feature, self.accepted = list(refusals), feature, accepted
+        self.calls, self.uploads = [], []
+
+    def object_id(self):
+        return "33333333-3333-3333-3333-333333333333"
+
+    def request(self, method, url, body=None):
+        self.calls.append((method, url.split("?")[0], body))
+        if method == "GET" and url.split("?")[0].endswith("/agreements/current"):
+            return {"name": "ubuntu-latest-gen2", "properties": {"accepted": self.accepted, "signature": "SIGNED"}}
+        if method == "GET" and "/features/EncryptionAtHost" in url:
+            return {"properties": {"state": self.feature}}
+        return {}
+
+    def vault(self, method, url, body=None):
+        if self.refusals:
+            raise self.refusals.pop(0)
+        self.uploads.append((method, url, body))
+        return {}
+
+
+def runners_azure(endpoint=True):
+    resources = {NETWORK_SETTINGS: {"tags": {"GitHubId": "GHID123"}}}
+    if endpoint:
+        resources[STATE_ENDPOINT] = {"properties": {"provisioningState": "Succeeded"}}
+    return FakeAzure(resources=resources)
 
 
 class InstallTest(unittest.TestCase):
@@ -186,9 +498,30 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(governance["bootstrap.yaml"], BOOTSTRAP)
         workflow = commits["acme/mlz-vending"][".github/workflows/mlz.yml"]
         self.assertIn("role: vending", workflow)
+        # The layout of folders named after their stacks; vending's examples outside landing-zones/.
+        self.assertTrue({"defaults/landing-zone-defaults.yaml", "landing-zones/README.md", "examples/payments/prod.yaml",
+                         "examples/payments/workload-defaults.yaml"} <= set(commits["acme/mlz-vending"]))
+        self.assertTrue({"connectivity/norwayeast.yaml", "firewall-rules/platform.yaml"} <= set(install.starter_files("platform", self.folder)))
         self.assertNotIn("x-release-please", workflow)
-        self.assertEqual(github.rulesets, [(repo, "main") for repo in REPOS.values()])
+        # ./mlz, which the commit cannot make executable: a commit of its own, on the new repo's main.
+        self.assertTrue(all(commits[repo]["mlz"].startswith("#!/bin/sh\n") for repo in commits))
+        self.assertEqual(github.executable, [("acme/mlz-governance", "main", ("mlz",)), ("acme/mlz-vending", "main", ("mlz",))])
+        # main lets the bypass team merge without the approval, pull requests only (decision D8).
+        self.assertEqual(github.ruleset_bodies[("acme/mlz-vending", "main")]["bypass_actors"], [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}])
+        self.assertNotIn("bypass_actors", github.ruleset_bodies[("acme/mlz-vending", "main-checks")])  # the check binds the team too
+        # The push rulesets first, after the starter's first commit; then main.
+        self.assertEqual(github.made_rulesets, [(repo, name) for repo in REPOS.values() for name in ("pipeline-files", "generated-files", "main", "main-checks")])
+        # _generated/ from the MLZ App, by the ID GitHub gives its slug, and the bypass team (review S1).
+        self.assertEqual(github.ruleset_bodies[("acme/mlz-vending", "generated-files")]["bypass_actors"],
+                         [{"actor_id": APP["id"], "actor_type": "Integration", "bypass_mode": "always"},
+                          {"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "always"}])
+        self.assertIn("acme/mlz-vending: ruleset generated-files (changes under _generated/ refused on every branch, but from the MLZ App "
+                      "acme-mlz and acme/mlz-admins)", self.printed)
         self.assertIn("acme/mlz-platform: exists, files left as they are", self.printed)
+        # Only the repo that existed: its branches may predate the push rulesets.
+        warned = [line for line in self.printed if "pushed before the ruleset" in line]
+        self.assertEqual(warned, ["acme/mlz-platform: its branches pushed before the ruleset keep any change under .github/ they have; delete those you do not know",
+                                  "acme/mlz-platform: its branches pushed before the ruleset keep any change under _generated/ they have; delete those you do not know"])
 
     def test_an_existing_public_repo_is_named_not_changed(self):
         github = FakeGitHub(existing=REPOS.values(), private=False)
@@ -201,6 +534,27 @@ class InstallTest(unittest.TestCase):
         install.step_repos(github, self.folder, self.out)
         self.assertEqual(github.renamed, [(repo, "master", "main") for repo in REPOS.values()])
         self.assertEqual({branch for _, branch, _, _, _ in github.commits}, {"main"})
+
+    def test_the_bootstrap_s_names_come_from_the_template_or_bootstrap_yaml(self):
+        customer, bootstrap = install.settings(self.folder)
+        named = install.bootstrap_names(customer, bootstrap)
+        self.assertEqual((named["resource_group"], named["storage_account"], named["identities"]["governance-plan"], named["state_endpoint"]),
+                         ("rg-acme-mlz-pd-nwe-01", "stacmemlzstatepdnwe01", "id-acme-mlz-govplan-pd-nwe-01", "pep-acme-mlz-state-pd-nwe-01"))
+        self.assertEqual(sorted(named["identities"]), sorted(f"{role}-{kind}" for role in install.ROLES for kind in ("plan", "apply")))
+        # The platform's it points at, as the platform names them.
+        self.assertEqual(named["network_resource_groups"], {"management": "rg-acme-mgt-net-pd-nwe-01", "identity": "rg-acme-idn-net-pd-nwe-01"})
+        self.assertEqual((named["management_network"], named["state_endpoint_subnet"], named["dns_resource_group"]),
+                         ("vnet-acme-mgt-pd-nwe-01", "snet-private-endpoints", "rg-acme-dns-pd-nwe-01"))
+        # A name taken elsewhere in Azure, or one to keep: bootstrap.yaml's names:.
+        named = install.bootstrap_names(customer, {**bootstrap, "names": {"storage_account": "stacmestate1234"}})
+        self.assertEqual(named["storage_account"], "stacmestate1234")
+        for wrong, message in (({"storage_account": "st-acme"}, "names.storage_account: storage_account name st-acme"),
+                               ({"identity": "id-x"}, "names.identity is not one the bootstrap takes; use resource_group, storage_account"),
+                               (["st"], "names maps resource_group or storage_account")):
+            with self.assertRaisesRegex(ConfigError, message):
+                install.bootstrap_names(customer, {**bootstrap, "names": wrong})
+        with self.assertRaisesRegex(ConfigError, "set naming.org"):
+            install.bootstrap_names({**customer, "root_id": "acme-corp"}, bootstrap)
 
     def test_an_unknown_bootstrap_setting_is_refused(self):
         (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "state_operator: {}\n")
@@ -228,8 +582,9 @@ class InstallTest(unittest.TestCase):
     def test_an_existing_ruleset_named_main_is_left_alone(self):
         github = FakeGitHub(existing=REPOS.values(), rulesets=[("acme/mlz-platform", "main")])
         install.step_repos(github, self.folder, self.out)
-        self.assertNotIn(("acme/mlz-platform", "main"), github.rulesets)  # the customer's own may be stricter
-        self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests", self.printed)
+        self.assertNotIn(("acme/mlz-platform", "main"), github.made_rulesets)  # the customer's own may be stricter
+        self.assertIn("acme/mlz-platform: has a ruleset named main already, left as it is; check that it allows changes only through pull requests, "
+                      "and requires a code owner's review (mlz install check says)", self.printed)
 
     def test_an_adopted_repo_without_the_workflow_keeps_its_own_files(self):
         own = ("acme/mlz-governance", "customer.yaml")
@@ -239,6 +594,15 @@ class InstallTest(unittest.TestCase):
         self.assertIn(WORKFLOW, added)
         self.assertNotIn("customer.yaml", added)  # already there: never replaced
         self.assertIn("bootstrap.yaml", added)
+
+    def test_an_adopted_repo_s_own_gitignore_keeps_its_lines_and_gets_the_starter_s(self):
+        own = ("acme/mlz-governance", ".gitignore")
+        github = FakeGitHub(existing=REPOS.values(), half_made=["acme/mlz-governance"], files={own: (".terraform/\n*.tfstate\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        added = github.commits[0][3]
+        self.assertIn(".idea/jsonSchemas.xml", added)
+        self.assertTrue(added[".gitignore"].startswith(".terraform/\n*.tfstate\n\n# JetBrains"), added[".gitignore"])
+        self.assertTrue(added[".gitignore"].endswith("/.idea/*\n!/.idea/jsonSchemas.xml\n"), added[".gitignore"])
 
     def test_an_adopted_repo_on_another_default_branch_is_named(self):
         install.step_repos(FakeGitHub(existing=REPOS.values(), existing_branch="master"), self.folder, self.out)
@@ -260,15 +624,642 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(terraform.root, terraform.work / "bootstrap" / "terraform")
 
     def test_the_main_ruleset_allows_changes_through_pull_requests_only(self):
-        rules = {rule["type"] for rule in install.MAIN_RULESET["rules"]}
+        ruleset = install.main_ruleset("platform")
+        rules = {rule["type"] for rule in ruleset["rules"]}
         self.assertEqual(rules, {"deletion", "non_fast_forward", "pull_request"})
-        self.assertNotIn("bypass_actors", install.MAIN_RULESET)
+        self.assertNotIn("bypass_actors", ruleset)
+        # The check in a ruleset of its own, which the bypass team's pull request bypass does not reach.
+        checks = install.checks_ruleset("platform")
+        self.assertEqual(([rule["type"] for rule in checks["rules"]], checks["conditions"]), (["required_status_checks"], ruleset["conditions"]))
+        self.assertNotIn("bypass_actors", checks)
+
+    def test_a_merge_waits_for_the_role_s_check(self):
+        github = FakeGitHub()
+        install.step_repos(github, self.folder, self.out)
+        for role, repo in REPOS.items():
+            required = next(rule["parameters"] for rule in github.ruleset_bodies[(repo, "main-checks")]["rules"] if rule["type"] == "required_status_checks")
+            # By GitHub Actions, as the canary's runs named it; strict, so a pull request checked before a code owner
+            # handover merged is checked again against the new owners.
+            self.assertEqual(required["required_status_checks"], [{"context": f"{role} / check", "integration_id": 15368}])
+            self.assertTrue(required["strict_required_status_checks_policy"])
+        self.assertIn("acme/mlz-vending: ruleset main (pull requests only, a code owner's approval, which a later push takes back; no "
+                      "force push or deletion; acme/mlz-admins may merge a pull request without the approval)", self.printed)
+        review = next(rule["parameters"] for rule in github.ruleset_bodies[("acme/mlz-vending", "main")]["rules"] if rule["type"] == "pull_request")
+        self.assertTrue(review["dismiss_stale_reviews_on_push"])  # as in the workload repos (decision of 19 November)
+        self.assertFalse(review["require_last_push_approval"])
+        self.assertIn("acme/mlz-vending: ruleset main-checks (vending / check passed on a branch up to date with main, before any merge; "
+                      "nobody bypasses it)", self.printed)
+        # The starter workflow's job gives the check its name.
+        for role in REPOS:
+            workflow = (install.CORE / "starter" / f"mlz-{role}" / WORKFLOW).read_text()
+            self.assertRegex(workflow, rf"\njobs:\n(?:  #.*\n)*  {role}:\n")
 
     def test_check_passes_when_the_app_is_set_everywhere(self):
         github = FakeGitHub(existing=REPOS.values(),
                             variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
         install.step_check(github, self.folder, self.out)
-        self.assertEqual(len(self.printed), 3)
+        self.assertEqual(self.printed[0], "names: the state account will be stacmemlzstatepdnwe01")
+        self.assertEqual(self.printed[1], "acme: on GitHub Enterprise")
+        # Per repo: the MLZ App, its code owners, its two push rulesets, its check, and its pipeline and environment; then
+        # what is not checked.
+        self.assertEqual(len(self.printed), 21)
+        self.assertIn("acme/mlz-vending: its pipeline and its environment vending are GitHub Enterprise's: an apply waits for a reviewer, "
+                      "from main only", self.printed)
+        self.assertIn("acme/mlz-vending: changes under .github/ are refused on every branch, but from acme/mlz-admins (ruleset pipeline-files)", self.printed)
+        self.assertIn("acme/mlz-vending: changes under _generated/ are refused on every branch, but from the MLZ App acme-mlz and acme/mlz-admins "
+                      "(ruleset generated-files)", self.printed)
+        self.assertTrue(self.printed[-1].startswith("acme: not checked here: that the MLZ App is installed on all its repos, acme/mlz-core included."))
+        self.assertIn("acme/mlz-vending: vending / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
+        self.assertIn("acme/mlz-vending: acme/platform may write, GitHub reads its CODEOWNERS whole, "
+                      "and a code owner's review is required on main, which a later push takes back", self.printed)
+
+    def test_check_fails_while_an_approval_survives_a_later_push(self):
+        # A repo made before 19 November: its main keeps an approval after new commits, until the box is ticked.
+        github = FakeGitHub(existing=REPOS.values(), dismiss_stale=False,
+                            variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        self.assertIn("acme/mlz-vending: an approval on main stays after a later push, so an approved change can become another before it "
+                      "merges; turn on 'Dismiss stale pull request approvals when new commits are pushed' in its ruleset main", str(caught.exception))
+
+    # code owners
+
+    def test_new_repos_get_the_platform_team_as_code_owner(self):
+        github = FakeGitHub(writers=())
+        install.step_repos(github, self.folder, self.out)
+        for repo in REPOS.values():
+            files = next(files for r, _, _, files, _ in github.commits if r == repo)
+            self.assertIn("*             @acme/platform\n", files[".github/CODEOWNERS"])
+            self.assertIn("\n/_generated/\n", files[".github/CODEOWNERS"])
+        self.assertEqual(sorted(github.granted), sorted(("platform", repo) for repo in REPOS.values()))
+        self.assertTrue(install.main_ruleset("platform")["rules"][2]["parameters"]["require_code_owner_review"])
+
+    def test_a_team_that_can_write_already_keeps_its_access(self):
+        github = FakeGitHub(existing=REPOS.values())
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.granted, [])  # never lowered: one with maintain or admin keeps it
+        self.assertIn("acme/mlz-platform: acme/platform may write, as its code owner", self.printed)
+
+    def test_the_organization_s_copy_of_mlz_core_comes_first_and_the_starters_call_it(self):
+        github = FakeGitHub(core=False)
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out, run=None: pushed.append((core, tag))):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.created[0], "acme/mlz-core (empty)")  # before the repos whose first runs call it
+        self.assertEqual(pushed, [("acme/mlz-core", install.release())])
+        self.assertEqual(github.access["acme/mlz-core"], "organization")
+        self.assertEqual([name for repo, name in github.made_rulesets if repo == "acme/mlz-core"], ["releases", "releases-branch", "no-release-branches"])
+        workflow = next(files for repo, _, _, files, _ in github.commits if repo == "acme/mlz-platform")[".github/workflows/mlz.yml"]
+        self.assertIn(f"    uses: acme/mlz-core/.github/workflows/role.yml@{install.release()}\n", workflow)
+        self.assertNotIn("fortytwoservices/mlz-core", workflow)
+
+    def test_the_copy_may_have_a_name_of_its_own(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("    vending: mlz-vending\n", "    vending: mlz-vending\n    core: platform-mlz-core\n"))
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.core_repository(bootstrap), "acme/platform-mlz-core")
+        self.assertEqual(install.repositories(bootstrap), REPOS)
+
+    def test_the_platform_team_must_exist_and_be_named(self):
+        with self.assertRaisesRegex(ConfigError, "acme has no team platform"):
+            install.step_repos(FakeGitHub(teams=()), self.folder, self.out)
+        # GitHub skips a secret team in CODEOWNERS; it is refused before any repo changes.
+        github = FakeGitHub(secret=("platform",), core=False)
+        with self.assertRaisesRegex(ConfigError, "acme/platform is a secret team"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.repos, github.commits), ({}, []))  # not even the copy of mlz-core
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  platform_team: platform\n", ""))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.platform_team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+
+    def test_the_push_ruleset_refuses_github_changes_but_from_the_bypass_team(self):
+        ruleset = install.push_ruleset(12)
+        self.assertEqual((ruleset["target"], ruleset["enforcement"]), ("push", "active"))
+        self.assertEqual(ruleset["bypass_actors"], [{"actor_id": 12, "actor_type": "Team", "bypass_mode": "always"}])
+        self.assertEqual(ruleset["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}])
+        for path in (".github/workflows/mlz.yml", ".github/CODEOWNERS", ".github/actions/x/action.yml"):
+            self.assertTrue(install.matches(".github/**/*", path), path)
+        for path in ("customer.yaml", "mlz", "_generated/governance.yaml", "docs/.github/x", ".githubx/y"):
+            self.assertFalse(install.matches(".github/**/*", path), path)
+        self.assertTrue(install.matches(".github/**", ".github/CODEOWNERS"))
+        self.assertFalse(install.matches(".github/**", ".github/workflows/mlz.yml"))  # ** without its slash is *
+
+    def test_the_bypass_team_is_required_visible_and_not_the_platform_team(self):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  bypass_team: mlz-admins\n", ""))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml needs github.bypass_team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("bypass_team: mlz-admins", "bypass_team: platform"))
+        with self.assertRaisesRegex(ConfigError, "github.bypass_team is platform, the platform team"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
+        with self.assertRaisesRegex(ConfigError, "acme has no team mlz-admins"):
+            install.step_repos(FakeGitHub(teams=("platform",)), self.folder, self.out)
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-admins is a secret team"):
+            install.step_repos(FakeGitHub(secret=("mlz-admins",)), self.folder, self.out)
+
+    def test_check_finds_a_missing_push_ruleset_and_a_bypass_without_the_team(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(FakeGitHub(push_guard=False, **everywhere), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: no active push ruleset refuses changes under .github/", str(caught.exception))
+
+        def check(*rulesets):
+            class Guarded(FakeGitHub):
+                def rulesets(self, repo):
+                    return [{"id": n, "current_user_can_bypass": "never", **r} for n, r in enumerate(rulesets)]
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(Guarded(**everywhere), self.folder, self.out)
+            return str(caught.exception)
+
+        guard = install.push_ruleset(TEAM_IDS["mlz-admins"])
+        # Another team instead of the bypass team: nobody can run mlz upgrade, and someone else reaches the key.
+        found = check(install.push_ruleset(99))
+        self.assertIn("acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz upgrade", found)
+        self.assertIn("its ruleset pipeline-files also lets the team with ID 99 change .github/", found)
+        # The bypass team and the platform team, or the repository's admins: finding 17 stays open for them.
+        both = {**guard, "bypass_actors": guard["bypass_actors"] + [{"actor_id": TEAM_IDS["platform"], "actor_type": "Team", "bypass_mode": "always"},
+                                                                    {"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}
+        self.assertIn("also lets the platform team, the repository's admins change .github/", check(both))
+        # Two files only, or the folder with an exception: not the whole folder.
+        files = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/workflows/mlz.yml", ".github/CODEOWNERS"]}}]}
+        self.assertIn("no active push ruleset refuses every change (not .github/workflows/zz-mlz-probe.yml, .github/zz-mlz-probe, "
+                      ".github/actions/zz-mlz-probe/action.yml) under .github/", check(files))
+        # .github/** reaches the folder's top only: a ** without its slash is one *, in Ruby's fnmatch.
+        top_only = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**"]}}]}
+        self.assertIn("(not .github/workflows/mlz.yml, .github/workflows/zz-mlz-probe.yml, .github/actions/zz-mlz-probe/action.yml)", check(top_only))
+        excepted = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"], "ignored_file_paths": [".github/workflows/*"]}}]}
+        self.assertIn("(not .github/workflows/mlz.yml, .github/workflows/zz-mlz-probe.yml)", check(excepted))
+        # GitHub applies every ruleset: one more, from the organization, that the team may not bypass refuses its upgrade.
+        org_guard = {**install.push_ruleset(99), "name": "org-pipeline", "bypass_actors": []}
+        self.assertIn("its ruleset org-pipeline refuses changes under .github/, and acme/mlz-admins", check(guard, org_guard))
+
+    def test_the_generated_ruleset_refuses_changes_but_from_the_app_and_the_bypass_team(self):
+        ruleset = install.generated_ruleset(12, 77)
+        self.assertEqual((ruleset["name"], ruleset["target"], ruleset["enforcement"]), ("generated-files", "push", "active"))
+        self.assertEqual(ruleset["rules"], [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/**/*"]}}])
+        for path in ("_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/names.yaml", "_generated/x/y.yaml"):
+            self.assertTrue(install.restricts(ruleset, path), path)
+        for path in ("generated/x.yaml", "landing-zones/_generated/x.yaml", ".github/CODEOWNERS", "_generatedx/y.yaml"):
+            self.assertFalse(install.restricts(ruleset, path), path)
+        # Not in pipeline-files, whose bypass is the team's alone: the App must not change .github/.
+        self.assertEqual([a["actor_type"] for a in install.push_ruleset(12)["bypass_actors"]], ["Team"])
+
+    def test_the_mlz_app_is_named_seen_and_the_customer_s_own(self):
+        def refused(github, bootstrap=BOOTSTRAP):
+            (self.folder / "bootstrap.yaml").write_text(bootstrap)
+            with self.assertRaises(ConfigError) as caught:
+                install.step_repos(github, self.folder, self.out)
+            self.assertEqual((github.created, github.made_rulesets), ([], []))  # stopped before any repo or ruleset
+            return str(caught.exception)
+        self.assertIn("bootstrap.yaml needs github.app: the slug of the customer's MLZ App, the last part of its page's address "
+                      "(https://github.com/apps/<slug>). With the bypass team", refused(FakeGitHub(core=False), BOOTSTRAP.replace("  app: acme-mlz\n", "")))
+        self.assertIn("(https://github.com/apps/<slug>), not 'Acme MLZ'", refused(FakeGitHub(core=False), BOOTSTRAP.replace("app: acme-mlz", "app: Acme MLZ")))
+        self.assertIn("no GitHub App acme-mlz that you can see (bootstrap.yaml's github.app)", refused(FakeGitHub(core=False, apps=())))
+        stranger = {**APP, "owner": {"login": "someone-else"}}
+        self.assertIn("the GitHub App acme-mlz (bootstrap.yaml's github.app) belongs to someone-else, not acme", refused(FakeGitHub(core=False, apps=(stranger,))))
+
+    def test_check_finds_a_missing_generated_ruleset_and_its_wrong_bypass(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(FakeGitHub(generated_guard=False, **everywhere), self.folder, self.out)
+        self.assertIn("acme/mlz-vending: no active push ruleset refuses changes under _generated/, so anyone who may push can change a "
+                      "contract, the IP plan or the names and merge it without a review; mlz install repos makes the ruleset generated-files", str(caught.exception))
+
+        def check(*rulesets):
+            class Guarded(FakeGitHub):
+                def rulesets(self, repo):
+                    return [{"id": n, "current_user_can_bypass": "never", **r} for n, r in enumerate((install.push_ruleset(TEAM_IDS["mlz-admins"]), *rulesets))]
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(Guarded(**everywhere), self.folder, self.out)
+            return str(caught.exception)
+
+        guard = install.generated_ruleset(TEAM_IDS["mlz-admins"], APP["id"])
+        # Without the App the contracts stop; without the team mlz install publish does.
+        no_app = {**guard, "bypass_actors": guard["bypass_actors"][1:]}
+        self.assertIn("its ruleset generated-files refuses changes under _generated/, and the MLZ App acme-mlz may not bypass it, so no "
+                      "contract, IP plan or names reach this repo", check(no_app))
+        no_team = {**guard, "bypass_actors": guard["bypass_actors"][:1]}
+        self.assertIn("and acme/mlz-admins (bootstrap.yaml's github.bypass_team) may not bypass it, so nobody can run mlz install publish", check(no_team))
+        # Anyone else let through could change a contract.
+        more = {**guard, "bypass_actors": guard["bypass_actors"] + [{"actor_id": TEAM_IDS["platform"], "actor_type": "Team", "bypass_mode": "always"},
+                                                                    {"actor_id": 5, "actor_type": "Integration", "bypass_mode": "always"}]}
+        self.assertIn("its ruleset generated-files also lets the platform team, the App with ID 5 change _generated/; only the MLZ App and "
+                      "acme/mlz-admins should", check(more))
+        # One named file only, or every file but some: not the whole folder.
+        one_file = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/governance.yaml"]}}]}
+        self.assertIn("no active push ruleset refuses every change (not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, "
+                      "_generated/ip-plan.yaml, _generated/names.yaml, _generated/zz-mlz-probe.yaml, _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, "
+                      "_generated/zz-mlz-probe/x.yaml, _generated/zz-mlz-probe/x.yml) under _generated/", check(one_file))
+        some = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [
+            "_generated/governance.yaml", "_generated/ip-plan.yaml", "_generated/zz-mlz-probe*", "_generated/zz-mlz-probe/**/*"]}}]}
+        self.assertIn("(not _generated/bootstrap.yaml, _generated/platform.yaml, _generated/vending.yaml, _generated/names.yaml) under _generated/", check(some))
+        # .yaml files only: the loaders read <name>.yml too (files.read_setting), so a second definition could be added.
+        yaml_only = {**guard, "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/**/*.yaml"]}}]}
+        self.assertIn("(not _generated/zz-mlz-probe.yml, _generated/zz-mlz-probe, _generated/zz-mlz-probe/x.yml) under _generated/", check(yaml_only))
+        # A second rule on one file there, beside the right one: it too must let the App through, or the allocator's commits stop.
+        names_only = {**install.push_ruleset(99), "name": "names-file", "bypass_actors": guard["bypass_actors"][1:],
+                      "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": ["_generated/names.yaml"]}}]}
+        self.assertIn("its ruleset names-file refuses changes under _generated/, and the MLZ App acme-mlz may not bypass it", check(guard, names_only))
+        # The App let past pipeline-files too reaches .github/: said there.
+        both = {**install.push_ruleset(TEAM_IDS["mlz-admins"]), "name": "both",
+                "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*", "_generated/**/*"]}}],
+                "bypass_actors": guard["bypass_actors"]}
+        self.assertIn("its ruleset both also lets the App with ID 77 change .github/", check(both))
+
+    def test_check_fails_when_the_repos_write_as_another_app(self):
+        class Other(FakeGitHub):
+            def variable(self, repo, name):
+                return "Iv23liOther" if repo == "acme/mlz-platform" else super().variable(repo, name)
+        github = Other(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                       secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        self.assertIn("acme/mlz-platform: its MLZ_RELEASE_APP_CLIENT_ID is not the client ID of acme-mlz, the MLZ App bootstrap.yaml's "
+                      "github.app names (Iv23liAcme), so the App its pipeline writes as may not change _generated/", str(caught.exception))
+        self.assertNotIn("acme/mlz-vending: its MLZ_RELEASE_APP_CLIENT_ID", str(caught.exception))
+
+    def test_an_offer_under_github_stops_before_its_branch_when_the_person_may_not_bypass(self):
+        github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"], can_bypass="never")
+        with self.assertRaisesRegex(ConfigError, "its ruleset pipeline-files refuses changes to .github/CODEOWNERS, .github/workflows/mlz.yml"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.commits, github.branches), ([], []))  # nothing pushed, no branch made
+
+    def test_check_notes_a_review_ruleset_on_main_the_bypass_team_cannot_pass(self):
+        everywhere = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                          secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        install.step_check(FakeGitHub(main_bypass=False, **everywhere), self.folder, self.out)  # only noted: it passes
+        self.assertIn("acme/mlz-vending: acme/mlz-admins may not merge a pull request without a code owner's approval past ruleset main. "
+                      "mlz install repos gives a new repo's ruleset main that bypass. For an existing one: first run mlz install repos, so "
+                      "that main-checks, without bypass actors, requires the check on an up-to-date branch, and take the check out of main; "
+                      "then add the team to main as a bypass actor, pull requests only", "\n".join(self.printed))
+        self.printed.clear()
+        install.step_check(FakeGitHub(**everywhere), self.folder, self.out)
+        self.assertFalse([line for line in self.printed if "may not merge a pull request" in line])
+
+    def test_a_wrapper_left_without_its_mode_is_offered_the_mode(self):
+        # An earlier run made the repo and its starter commit, and stopped before the commit that makes ./mlz executable.
+        github = FakeGitHub(existing=REPOS.values(), not_executable=[("acme/mlz-vending", "mlz")])
+        install.step_repos(github, self.folder, self.out)
+        self.assertEqual(github.executable, [("acme/mlz-vending", "mlz/executable", ("mlz",))])
+        self.assertEqual([(repo, branch) for repo, branch, *_ in github.pulls], [("acme/mlz-vending", "mlz/executable")])
+        self.assertIn("acme/mlz-vending: mlz is not executable; the fix is offered in https://github.com/acme/mlz-vending/pull/1", self.printed)
+
+    def test_a_repo_set_up_before_code_owners_is_offered_the_file(self):
+        github = FakeGitHub(existing=REPOS.values(), owned=False)
+        install.step_repos(github, self.folder, self.out)
+        repo, branch, _, files, message = github.commits[0]
+        self.assertEqual((branch, list(files), message), ("mlz/code-owners", [".github/CODEOWNERS"], "chore: the platform team as code owner"))
+        self.assertIn("acme/mlz-governance: .github/CODEOWNERS is offered in https://github.com/acme/mlz-governance/pull/1", self.printed)
+
+    def test_an_adopted_repo_keeps_its_own_code_owners(self):
+        # Its CODEOWNERS at the root: a .github/ one beside it would be read first, and replace it.
+        github = FakeGitHub(existing=["acme/mlz-governance"], half_made=["acme/mlz-governance"],
+                            files={("acme/mlz-governance", "CODEOWNERS"): ("* @acme/own\n", "sha")})
+        install.step_repos(github, self.folder, self.out)
+        offered = next(files for repo, branch, _, files, _ in github.commits if repo == "acme/mlz-governance" and branch == "mlz/starter")
+        self.assertNotIn(".github/CODEOWNERS", offered)
+        self.assertIn(".github/workflows/mlz.yml", offered)
+        self.assertIn(("acme/mlz-governance", "mlz/starter", ("mlz",)), github.executable)  # on the offer's branch
+
+    def test_check_lists_what_stops_the_code_owners(self):
+        github = FakeGitHub(existing=REPOS.values(), writers=(), ruleset_review=False, required_check=lambda role: [],
+                            variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()],
+                            owner_errors={"acme/mlz-vending": [{"line": 3, "kind": "Unknown owner", "path": ".github/CODEOWNERS",
+                                                                 "message": "Unknown owner on line 3: make sure the team @acme/network exists\n\n  /x @acme/network"}]})
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(github, self.folder, self.out)
+        message = str(caught.exception)
+        self.assertIn("acme/mlz-governance: acme/platform cannot write to it, so it cannot be its code owner", message)
+        self.assertIn("acme/mlz-platform: no active ruleset requires a code owner's review on main", message)
+        self.assertIn("acme/mlz-governance: no active ruleset requires governance / check to pass on main, so a change the check "
+                      "refuses can still be merged; mlz install repos makes the ruleset main-checks, without bypass actors, which requires "
+                      "it from GitHub Actions on a branch up to date with main.", message)
+        self.assertIn("acme/mlz-vending: .github/CODEOWNERS line 3: Unknown owner on line 3: make sure the team @acme/network exists. "
+                      "The platform team must be a visible team of acme that can write to acme/mlz-vending", message)
+
+    def test_check_counts_only_a_required_check_from_github_actions(self):
+        # Another app's check never comes; one from any source can be passed by any token that may write statuses.
+        for source in ({"integration_id": 12345}, {}):
+            github = FakeGitHub(existing=REPOS.values(), required_check=lambda role: [{"context": f"{role} / check", **source}],
+                                variables=[(r, install.APP_VARIABLE) for r in REPOS.values()], secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+            with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: no active ruleset requires vending / check to pass on main"):
+                install.step_check(github, self.folder, self.out)
+
+    def test_check_wants_the_required_check_on_an_up_to_date_branch(self):
+        ready = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                     secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on "
+                                                 "a branch up to date with it"):
+            install.step_check(FakeGitHub(**ready, strict=False), self.folder, self.out)
+        install.step_check(FakeGitHub(**ready), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
+
+        # Another ruleset, such as the organization's, strict about a check of its own keeps the branch up to date too.
+        class Layered(FakeGitHub):
+            def branch_rules(self, repo, branch):
+                return super().branch_rules(repo, branch) + [{"type": "required_status_checks", "parameters": {
+                    "strict_required_status_checks_policy": True, "required_status_checks": [{"context": "security / scan"}]}}]
+        self.printed.clear()
+        install.step_check(Layered(**ready, strict=False), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: platform / check must pass, on a branch up to date with main, before any merge into main; nobody may bypass it", self.printed)
+
+        # Required only by a ruleset its bypass actors may skip, as an existing repo's own main-checks, or the old main, may be.
+        class Bypassable(FakeGitHub):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{**install.checks_ruleset("platform"), "id": 8,
+                                                  "bypass_actors": [{"actor_id": TEAM_IDS["mlz-admins"], "actor_type": "Team", "bypass_mode": "pull_request"}]}]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check is required only by ruleset main-checks, whose bypass "
+                                                 "actors may merge without it; require it in a ruleset without bypass actors"):
+            install.step_check(Bypassable(**ready), self.folder, self.out)
+
+        # The check from a bypass-free ruleset, but up to date only by a ruleset someone may bypass: not up to date for them.
+        class StrictOnlyBypassable(Layered):
+            def rulesets(self, repo):
+                return super().rulesets(repo) + [{"id": 99, "name": "org-strict", "bypass_actors": [{"actor_id": 5, "actor_type": "RepositoryRole", "bypass_mode": "always"}]}]
+
+            def branch_rules(self, repo, branch):
+                return [{**rule, "ruleset_id": 99} if (rule.get("parameters") or {}).get("required_status_checks") == [{"context": "security / scan"}] else rule
+                        for rule in super().branch_rules(repo, branch)]
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: platform / check must pass before a merge into main, but not on a branch up to date"):
+            install.step_check(StrictOnlyBypassable(**ready, strict=False), self.folder, self.out)
+
+    def team(self):
+        """bootstrap.yaml on GitHub Team: github.plan team, and no reviewers."""
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  reviewers: [acme-lead]\n", "").replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: team\n"))
+
+    def ready(self, plan="enterprise", **more):
+        """A repo set as install repos and the bootstrap leave it, for the plan."""
+        given = dict(existing=REPOS.values(), variables=[(r, install.APP_VARIABLE) for r in REPOS.values()],
+                     secrets=[(r, install.APP_SECRET) for r in REPOS.values()])
+        if plan == "team":
+            given.update(required_check=lambda role: [{"context": f"{role} / {job}", "integration_id": 15368} for job in ("check", "planned")],
+                         files={**{(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()},
+                                **{(r, ".github/CODEOWNERS"): (install.owners.render("acme", "platform", "team"), "sha") for r in REPOS.values()}},
+                         environments={r: TEAM_ENVIRONMENT for r in REPOS.values()},
+                         environment_variables={(r, role, "MLZ_APPROVAL"): "pull-request" for role, r in REPOS.items()})
+        return {**given, **more}
+
+    def test_on_team_a_new_repo_gets_team_s_pipeline_code_owners_and_checks(self):
+        self.team()
+        github = FakeGitHub()
+        install.step_repos(github, self.folder, self.out)
+        for role, repo in REPOS.items():
+            files = next(files for r, _, _, files, _ in github.commits if r == repo)
+            self.assertIn(f"      role: {role}\n      approval: pull-request ", files[WORKFLOW])
+            self.assertIn("\n/_generated/  @acme/platform\n", files[".github/CODEOWNERS"])  # a person approves each contract
+            checks = github.ruleset_bodies[(repo, "main-checks")]["rules"][0]["parameters"]["required_status_checks"]
+            self.assertEqual([c["context"] for c in checks], [f"{role} / check", f"{role} / planned"])
+        self.assertIn("acme/mlz-vending: ruleset main-checks (vending / check and vending / planned passed on a branch up to date with main, "
+                      "before any merge; nobody bypasses it)", self.printed)
+        # Enterprise's are as before: no approval, no owner for the contracts, the check alone.
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
+        github = FakeGitHub()
+        install.step_repos(github, self.folder, self.out)
+        files = next(files for r, _, _, files, _ in github.commits if r == "acme/mlz-vending")
+        self.assertEqual(files[WORKFLOW], install.starter_text((install.CORE / "starter/mlz-vending" / WORKFLOW).read_text(), CORE_COPY))
+        self.assertIn("\n/_generated/\n", files[".github/CODEOWNERS"])
+        self.assertEqual(len(github.ruleset_bodies[("acme/mlz-vending", "main-checks")]["rules"][0]["parameters"]["required_status_checks"]), 1)
+
+    def test_an_existing_repo_on_the_other_plan_is_offered_the_switch_as_one_pull_request(self):
+        enterprise_owners = install.owners.render("acme", "platform")
+        role_caller = install.starter_text((install.CORE / "starter/mlz-platform" / WORKFLOW).read_text(), CORE_COPY)
+        files = {(r, WORKFLOW): (role_caller, "sha") for r in REPOS.values()}
+        files.update({(r, ".github/CODEOWNERS"): (enterprise_owners, "sha") for r in REPOS.values()})
+        self.team()
+        github = FakeGitHub(existing=REPOS.values(), files=files)
+        install.step_repos(github, self.folder, self.out)
+        offered = [(repo, branch, files) for repo, branch, _, files, _ in github.commits if branch == "mlz/github-plan"]
+        self.assertEqual([repo for repo, _, _ in offered], list(REPOS.values()))
+        _, _, changed = offered[0]
+        self.assertEqual(install.approval_of(changed[WORKFLOW]), "pull-request")
+        self.assertEqual(changed[".github/CODEOWNERS"], install.owners.render("acme", "platform", "team"))
+        self.assertIn("acme/mlz-governance: GitHub Team's way is offered in https://github.com/acme/mlz-governance/pull/1", self.printed)
+        self.assertEqual(github.pulls[0][3], "chore: GitHub Team's way: each apply approved on its pull request")
+        # /_generated/ with another owner, on a Team caller: the installer's file is offered, Team's rule in it.
+        other = {**files, **{(r, WORKFLOW): (install.caller(role_caller, "team"), "sha") for r in REPOS.values()},
+                 **{(r, ".github/CODEOWNERS"): ("* @acme/platform\n/_generated/ @acme/other\n", "sha") for r in REPOS.values()}}
+        github = FakeGitHub(existing=REPOS.values(), files=other)
+        install.step_repos(github, self.folder, self.out)
+        offered = [f for _, b, _, f, _ in github.commits if b == "mlz/github-plan"]
+        self.assertEqual(offered[0], {".github/CODEOWNERS": install.owners.render("acme", "platform", "team")})
+
+        # An open switch that no longer holds this plan's files is closed; with nothing left to switch, nothing new is opened.
+        class Open(FakeGitHub):
+            def open_pull(self, repo, branch):
+                return f"https://github.com/{repo}/pull/9" if branch == "mlz/github-plan" else None
+        done = {**{(r, WORKFLOW): (install.caller(role_caller, "team"), "sha") for r in REPOS.values()},
+                **{(r, ".github/CODEOWNERS"): (install.owners.render("acme", "platform", "team"), "sha") for r in REPOS.values()},
+                **{(r, ".github/CODEOWNERS", "mlz/github-plan"): (install.owners.render("acme", "platform"), "sha") for r in REPOS.values()}}
+        github = Open(existing=REPOS.values(), files=done, open_pull="https://github.com/acme/x/pull/9")
+        install.step_repos(github, self.folder, self.out)
+        self.assertIn("no longer holds that plan's files", github.closed[0][2])
+        self.assertFalse([b for _, b, _, _, _ in github.commits if b == "mlz/github-plan"])
+        # A repo pinned to a release whose role.yml takes no approval input is told to upgrade first, and offered nothing.
+        older = FakeGitHub(existing=REPOS.values(), files=files)
+        older.files[(CORE_COPY, ".github/workflows/role.yml")] = ("on:\n  workflow_call:\n    inputs:\n      role:\n        type: string\njobs: {}\n", "sha")
+        install.step_repos(older, self.folder, self.out)
+        self.assertFalse([b for _, b, _, _, _ in older.commits if b == "mlz/github-plan"])
+        self.assertIn("which has no approval input, so it cannot take GitHub Team's way yet; move it to a release with GitHub Team's gate first "
+                      "(mlz upgrade), then run this step again.", "\n".join(self.printed))
+        # Back on Enterprise, a repo on Enterprise's way is offered nothing.
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
+        github = FakeGitHub(existing=REPOS.values(), files=files)
+        install.step_repos(github, self.folder, self.out)
+        self.assertFalse([b for _, b, _, _, _ in github.commits if b == "mlz/github-plan"])
+        # Whoever may not change .github/ is stopped before a branch is made.
+        self.team()
+        github = FakeGitHub(existing=REPOS.values(), files=files, can_bypass="never")
+        with self.assertRaisesRegex(ConfigError, "its ruleset pipeline-files refuses changes to .github/CODEOWNERS, .github/workflows/mlz.yml from you"):
+            install.step_repos(github, self.folder, self.out)
+        self.assertEqual((github.commits, github.branches), ([], []))
+
+    def test_on_team_code_owners_are_offered_team_s_way_wherever_github_reads_them(self):
+        self.team()
+        role_caller = install.starter_text((install.CORE / "starter/mlz-platform" / WORKFLOW).read_text(), CORE_COPY)
+        team_caller = install.caller(role_caller, "team")
+        # An adopted repo's own CODEOWNERS at the top: switched there, not added in .github/.
+        files = {(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()}
+        files.update({(r, "CODEOWNERS"): (install.owners.render("acme", "platform"), "sha") for r in REPOS.values()})
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files=files)
+        install.step_repos(github, self.folder, self.out)
+        offered = [files for _, branch, _, files, _ in github.commits if branch == "mlz/github-plan"]
+        self.assertEqual([set(f) for f in offered], [{"CODEOWNERS"}] * 3)
+        self.assertIn("/_generated/  @acme/platform", offered[0]["CODEOWNERS"])
+        # A repo with no CODEOWNERS at all is offered Team's, not Enterprise's.
+        github = FakeGitHub(existing=REPOS.values(), owned=False, files={(r, WORKFLOW): (team_caller, "sha") for r in REPOS.values()})
+        install.step_repos(github, self.folder, self.out)
+        added = [files for _, branch, _, files, _ in github.commits if branch == "mlz/code-owners"]
+        self.assertEqual(added[0][".github/CODEOWNERS"], install.owners.render("acme", "platform", "team"))
+        self.assertIn("and `_generated/` too, on GitHub Team, so a person approves each contract", github.pulls[0][4])
+
+    def test_on_team_the_bootstrap_waits_until_team_s_gate_holds_in_every_role_repo(self):
+        self.team()
+        (self.work).mkdir(parents=True)
+        ready = self.ready("team")
+        enterprise_caller = TEAM_CALLER.replace("      approval: pull-request\n", "")
+
+        def refused(github):
+            terraform = FakeTerraform(self.work)
+            with self.assertRaises(ConfigError) as caught:
+                install.step_bootstrap(github, terraform, self.folder, yes=True, out=self.out, wait=lambda _: None)
+            self.assertEqual(terraform.calls, [])  # stopped before Terraform
+            self.assertIn("this apply would take each role environment's reviewer away; Team's gate must hold first in every role repo",
+                          str(caught.exception))
+            return str(caught.exception)
+        # A pipeline not yet passing the approval.
+        files = {**ready["files"], ("acme/mlz-platform", WORKFLOW): (enterprise_caller, "sha")}
+        self.assertIn("acme/mlz-platform: its pipeline does not pass approval: pull-request yet", refused(FakeGitHub(**{**ready, "files": files})))
+        # _generated/ still without an owner, or another team's.
+        files = {**ready["files"], ("acme/mlz-vending", ".github/CODEOWNERS"): (install.owners.render("acme", "platform"), "sha"),
+                 ("acme/mlz-governance", ".github/CODEOWNERS"): ("* @acme/platform\n/_generated/ @acme/other\n", "sha")}
+        found = refused(FakeGitHub(**{**ready, "files": files}))
+        self.assertIn("acme/mlz-vending: its CODEOWNERS has `/_generated/`, but on GitHub Team /_generated/ has @acme/platform as owner", found)
+        self.assertIn("acme/mlz-governance: its CODEOWNERS has `/_generated/ @acme/other`", found)
+        # No code owner's review required, or no planned check.
+        self.assertIn("no active ruleset requires a code owner's review on main", refused(FakeGitHub(**{**ready, "ruleset_review": False})))
+        self.assertIn("no active ruleset requires platform / planned to pass on main", refused(FakeGitHub(**{**ready, "required_check": True})))
+        # The platform team without write access, or GitHub unable to read CODEOWNERS: no code owner would decide.
+        self.assertIn("acme/platform cannot write to it, so it cannot be its code owner", refused(FakeGitHub(**{**ready, "writers": ()})))
+        unknown = {r: [{"kind": "Unknown owner", "line": 4, "message": "Unknown owner on line 4"}] for r in REPOS.values()}
+        self.assertIn("line 4: Unknown owner on line 4", refused(FakeGitHub(**{**ready, "owner_errors": unknown})))
+        # A default branch other than main, from which nothing deploys.
+        self.assertIn("its default branch is develop, but MLZ deploys from main", refused(FakeGitHub(**{**ready, "existing_branch": "develop"})))
+        # Every gate in place: the apply goes on.
+        install.step_bootstrap(FakeGitHub(**ready), FakeTerraform(self.work), self.folder, yes=True, out=self.out, wait=lambda _: None)
+
+    def test_the_approval_is_read_from_the_with_of_the_job_that_calls_mlz_core(self):
+        approval_of = install.approval_of
+        self.assertEqual(approval_of(TEAM_CALLER), "pull-request")
+        self.assertEqual(approval_of(TEAM_CALLER.replace("    with:\n      role: platform\n      approval: pull-request\n",
+                                                         "    with: {role: platform, approval: pull-request} # inline\n")), "pull-request")
+        # An approval: anywhere else is not the input: a step's env, another job, a comment.
+        elsewhere = ("jobs:\n  lint:\n    runs-on: ubuntu-latest\n    env:\n      approval: pull-request\n    steps: []\n"
+                     "  platform:\n    # approval: pull-request\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n      role: platform\n"
+                     "    secrets:\n      approval: pull-request\n")
+        self.assertEqual(approval_of(elsewhere), "environment")
+        # A comment inside the with: is not an input, on a line of its own or after a key, and does not hide one after it.
+        block = "jobs:\n  platform:\n    uses: acme/mlz-core/.github/workflows/role.yml@v1\n    with:\n"
+        self.assertEqual(approval_of(block + "      # approval: pull-request\n      role: platform\n"), "environment")
+        self.assertEqual(approval_of(block + "      role: platform # approval: pull-request\n"), "environment")
+        self.assertEqual(approval_of(block + "      # approval: environment\n      approval: pull-request\n"), "pull-request")
+        # A quoted key, in either form.
+        self.assertEqual(approval_of(block + "      \"approval\": pull-request\n"), "pull-request")
+        self.assertEqual(approval_of(block.replace("    with:\n", "    with: {'approval': pull-request}\n")), "pull-request")
+        # A flow mapping over several lines.
+        self.assertEqual(approval_of(block.replace("    with:\n", "    with: {\n") + "      role: platform,\n      approval: pull-request\n    }\n"),
+                         "pull-request")
+        self.assertEqual(approval_of("on: push\n"), "environment")
+        # The with: may come before uses:, and a workload caller calls workload.yml.
+        self.assertEqual(approval_of("jobs:\n  workload:\n    with:\n      approval: pull-request\n    uses: o/mlz-core/.github/workflows/workload.yml@v1\n"),
+                         "pull-request")
+
+    def test_the_plan_is_enterprise_or_team_and_team_takes_no_reviewers(self):
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.github_plan(bootstrap), "enterprise")  # the default: an existing bootstrap.yaml is Enterprise's
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: [team]\n"))
+        with self.assertRaisesRegex(ConfigError, "github.plan is the organization's GitHub plan, enterprise or team, not \\['team'\\]"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: business\n"))
+        with self.assertRaisesRegex(ConfigError, "bootstrap.yaml: github.plan is the organization's GitHub plan, enterprise or team, not 'business'"):
+            install.step_repos(FakeGitHub(), self.folder, self.out)
+        # On Team nobody would wait for a reviewer: the setting is refused, by every step, with why.
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP.replace("  app: acme-mlz\n", "  app: acme-mlz\n  plan: team\n"))
+        with self.assertRaisesRegex(ConfigError, "github.reviewers is for GitHub Enterprise. GitHub allows a reviewer on an environment in a "
+                                                 "private repo only on Enterprise, so on Team nobody would wait for them"):
+            install.step_check(FakeGitHub(**self.ready()), self.folder, self.out)
+        self.team()
+        _, bootstrap = install.settings(self.folder)
+        self.assertEqual(install.github_plan(bootstrap), "team")
+
+    def test_check_compares_the_organization_s_plan_with_the_setting(self):
+        # Enterprise's way on a Team organization leaves every apply without a gate: refused.
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub Team, but bootstrap.yaml's github.plan says enterprise. GitHub allows a reviewer "
+                                                 "on an environment in a private repo only on Enterprise, so no apply would wait for anyone"):
+            install.step_check(FakeGitHub(**self.ready(), org_plan="team"), self.folder, self.out)
+        with self.assertRaisesRegex(ConfigError, "acme: on GitHub's free plan. MLZ needs GitHub Team or Enterprise"):
+            install.step_check(FakeGitHub(**self.ready(), org_plan="free"), self.folder, self.out)
+        # Not shown to this sign-in: said, not refused.
+        install.step_check(FakeGitHub(**self.ready(), org_plan=None), self.folder, self.out)
+        self.assertIn("acme: GitHub did not show its plan to this sign-in (it shows it to an owner, and to a sign-in with the admin:org scope), "
+                      "so it is not checked here; bootstrap.yaml says enterprise.", self.printed)
+        self.team()
+        self.printed.clear()
+        install.step_check(FakeGitHub(**self.ready("team"), org_plan="team"), self.folder, self.out)
+        self.assertEqual(self.printed[1], "acme: on GitHub Team, so each apply is approved on its pull request")
+        self.assertIn("acme/mlz-platform: its pipeline and its environment platform are GitHub Team's: no reviewer, each apply approved on its "
+                      "pull request, from main only", self.printed)
+        # Team's way on an Enterprise organization works, and is how it is proved: allowed, and said.
+        self.printed.clear()
+        install.step_check(FakeGitHub(**self.ready("team")), self.folder, self.out)
+        self.assertEqual(self.printed[1], "acme: on GitHub Enterprise, with bootstrap.yaml's github.plan: team, so each apply is approved on its "
+                                          "pull request and no environment waits for a reviewer. Set github.plan: enterprise for the reviewer.")
+
+    def test_on_team_the_mlz_app_must_ask_for_what_the_gate_reads_with(self):
+        self.team()
+        install.step_check(FakeGitHub(**self.ready("team")), self.folder, self.out)
+        self.assertIn("the MLZ App acme-mlz asks for what the gate on GitHub Team reads with (actions, pull_requests, administration, contents, "
+                      "members); whether an owner accepted each on its installation only an owner sees", self.printed)
+        lacking = {**APP, "permissions": {k: v for k, v in APP["permissions"].items() if k not in ("actions", "members")}}
+        with self.assertRaisesRegex(ConfigError, "the MLZ App acme-mlz does not ask for actions \\(read\\), members \\(read\\), which the pipeline's "
+                                                 "gate on GitHub Team reads with"):
+            install.step_check(FakeGitHub(**self.ready("team"), apps=(lacking,)), self.folder, self.out)
+        # On Enterprise the gate does not run: not checked, nothing said.
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP)
+        self.printed.clear()
+        install.step_check(FakeGitHub(**self.ready(), apps=(lacking,)), self.folder, self.out)
+        self.assertFalse([line for line in self.printed if "reads with" in line])
+
+    def test_check_compares_each_pipeline_and_environment_with_the_plan_both_ways(self):
+        def found(plan="enterprise", **change):
+            with self.assertRaises(ConfigError) as caught:
+                install.step_check(FakeGitHub(**self.ready(plan, **change)), self.folder, self.out)
+            return str(caught.exception)
+        team_pipeline = {(r, WORKFLOW): (TEAM_CALLER, "sha") for r in REPOS.values()}
+        # Enterprise: a pipeline in Team's way, an environment without its reviewer or with Team's variable, or open to any branch.
+        self.assertIn("acme/mlz-governance: its pipeline (.github/workflows/mlz.yml) passes approval: pull-request, but bootstrap.yaml's "
+                      "github.plan is enterprise, whose approval is environment. mlz install repos offers the change", found(files=team_pipeline))
+        self.assertIn("acme/mlz-platform: its environment platform has no reviewer, so an apply there waits for nobody",
+                      found(environments={**{r: ENTERPRISE_ENVIRONMENT for r in REPOS.values()}, "acme/mlz-platform": TEAM_ENVIRONMENT}))
+        self.assertIn("acme/mlz-vending: its environment vending has the variable MLZ_APPROVAL, left from GitHub Team's way, so every apply "
+                      "there refuses", found(environment_variables={("acme/mlz-vending", "vending", "MLZ_APPROVAL"): "pull-request"}))
+        anywhere = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": None}
+        self.assertIn("acme/mlz-vending: its environment vending is not limited to main (it accepts any branch), so a run on another branch "
+                      "could apply. GitHub has branch policies on an environment in a private repo on Team and Enterprise",
+                      found(environments={r: anywhere for r in REPOS.values()}))
+        # main and more is not main only, and neither is any protected branch.
+
+        class Wider(FakeGitHub):
+            def branch_policies(self, repo, environment):
+                return [("feature/*", "branch"), ("main", "branch")]
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(Wider(**self.ready()), self.folder, self.out)
+        self.assertIn("acme/mlz-platform: its environment platform is not limited to main (it accepts feature/*, main)", str(caught.exception))
+
+        # A tag named main is not the branch main: deployments from main would be refused.
+        class Tag(FakeGitHub):
+            def branch_policies(self, repo, environment):
+                return [("main", "tag")]
+        with self.assertRaises(ConfigError) as caught:
+            install.step_check(Tag(**self.ready()), self.folder, self.out)
+        self.assertIn("is not limited to main (it accepts main (a tag))", str(caught.exception))
+        # No pipeline at all: nothing deploys and no check runs, so not ready.
+        self.assertIn("acme/mlz-vending: no .github/workflows/mlz.yml on main, so nothing deploys and no check runs; mlz install repos "
+                      "offers the starter's files", found(half_made=REPOS.values()))
+        protected = {**ENTERPRISE_ENVIRONMENT, "deployment_branch_policy": {"protected_branches": True, "custom_branch_policies": False}}
+        self.assertIn("is not limited to main (it accepts any protected branch)", found(environments={r: protected for r in REPOS.values()}))
+        # Before the bootstrap there is no environment: said, not refused.
+        install.step_check(FakeGitHub(**self.ready(environments={})), self.folder, self.out)
+        self.assertIn("acme/mlz-governance: no environment governance yet; mlz install bootstrap makes it", self.printed)
+        # Team: a pipeline still in Enterprise's way, a reviewer still there, the variable missing.
+        self.team()
+        self.assertIn("acme/mlz-vending: its pipeline (.github/workflows/mlz.yml) passes approval: environment, but bootstrap.yaml's "
+                      "github.plan is team, whose approval is pull-request", found("team", files={}))
+        self.assertIn("acme/mlz-governance: its environment governance still has a reviewer, so the switch to GitHub Team's way is not "
+                      "finished. mlz install bootstrap removes it, once every repo's pipeline passes approval: pull-request",
+                      found("team", environments={r: ENTERPRISE_ENVIRONMENT for r in REPOS.values()}))
+        self.assertIn("acme/mlz-platform: its environment platform has no variable MLZ_APPROVAL: pull-request, which makes an apply refuse "
+                      "whose pipeline still expects a reviewer", found("team", environment_variables={}))
 
     def test_check_lists_every_missing_piece(self):
         github = FakeGitHub(existing=["acme/mlz-governance", "acme/mlz-platform"],
@@ -301,6 +1292,16 @@ class InstallTest(unittest.TestCase):
         self.assertTrue((self.work / "backend.hcl").exists())
         self.assertFalse((self.work / "backend.hcl.pending").exists())
         self.assertFalse((terraform.root / "backend_override.tf").exists())
+        # The names, worked out on this run, go to the root in a file of their own.
+        plan = next(call for call in terraform.calls if call[0] == "plan")
+        self.assertIn(f"names_file={self.work / 'names.json'}", plan)
+        self.assertEqual(json.loads((self.work / "names.json").read_text())["storage_account"], "stacmemlzstatepdnwe01")
+        # So do the runner settings, checked and with their defaults: the root never reads them raw.
+        self.assertIn(f"runners_file={self.work / 'runners.json'}", plan)
+        self.assertEqual(json.loads((self.work / "runners.json").read_text()),
+                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None, "image": {
+                             "publisher": "amestofortytwoas1653635920536", "offer": "self_hosted_runner_github", "sku": "ubuntu-latest-gen2",
+                             "plan": {"name": "ubuntu-latest-gen2", "product": "self_hosted_runner_github", "publisher": "amestofortytwoas1653635920536"}}})
         self.assertIn("bootstrap: all 3 subjects match what GitHub issues", self.printed)
 
     def test_a_state_that_will_not_move_stays_local_and_the_next_run_moves_it(self):
@@ -321,7 +1322,50 @@ class InstallTest(unittest.TestCase):
         terraform = FakeTerraform(self.work, plan_status=0)
         install.step_bootstrap(FakeGitHub(), terraform, self.folder, out=self.out)
         self.assertIn(f"-backend-config={self.work / 'backend.hcl'}", terraform.calls[0])
-        self.assertEqual([c[0] for c in terraform.calls], ["init", "plan"])
+        self.assertEqual([c[0] for c in terraform.calls], ["init", "plan", "show"])
+        self.assertNotIn("-detailed-exitcode", terraform.calls[1])  # never relied on (D12)
+        self.assertIn("**bootstrap**: no changes.", self.printed)
+
+    def test_an_import_or_a_move_alone_is_applied(self):
+        # Terraform's exit code once decided; an import alone changes nothing in Azure, but the state must record it.
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        imported = {**NO_CHANGE, "applyable": True, "resource_changes": [
+            {"address": "azapi_resource.vault", "type": "azapi_resource", "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {},
+                                                                                     "importing": {"id": "/subscriptions/s/resourceGroups/g"}}},
+            {"address": "azapi_resource.group", "previous_address": "azapi_resource.rg", "type": "azapi_resource",
+             "change": {"actions": ["no-op"], "before": {}, "after": {}, "after_unknown": {}}}]}
+        terraform = FakeTerraform(self.work, plan_json=imported)
+        install.step_bootstrap(FakeGitHub(), terraform, self.folder, yes=True, out=self.out)
+        self.assertIn("apply", [call[0] for call in terraform.calls])
+        summary = "\n".join(self.printed)
+        self.assertIn("**bootstrap**: no resource changes.", summary)
+        self.assertIn("- imports `azapi_resource.vault`", summary)
+        self.assertIn("- moves `azapi_resource.rg` to `azapi_resource.group`", summary)
+
+    def test_a_plan_that_failed_that_terraform_cannot_show_or_that_errored_stops(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        failed = FakeTerraform(self.work, plan_status=1)
+        with self.assertRaisesRegex(ConfigError, "terraform plan failed"):
+            install.step_bootstrap(FakeGitHub(), failed, self.folder, yes=True, out=self.out)
+        self.assertEqual([call[0] for call in failed.calls], ["init", "plan"])
+        unreadable = FakeTerraform(self.work, show_fails=True)
+        with self.assertRaisesRegex(ConfigError, "terraform show could not read the plan: Error: Failed to read"):
+            install.step_bootstrap(FakeGitHub(), unreadable, self.folder, yes=True, out=self.out)
+        self.assertEqual([call[0] for call in unreadable.calls], ["init", "plan", "show"])
+        errored = FakeTerraform(self.work, plan_json={**ONE_CHANGE, "errored": True})
+        with self.assertRaisesRegex(ConfigError, "the bootstrap's plan is not one to apply"):
+            install.step_bootstrap(FakeGitHub(), errored, self.folder, yes=True, out=self.out)
+        self.assertNotIn("apply", [call[0] for call in errored.calls])
+
+    def test_it_says_whether_the_state_has_its_private_endpoint(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text('storage_account_name = "x"\n')
+        install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=0), self.folder, out=self.out)
+        self.assertIn("bootstrap: the state account's private endpoint waits for management's network and the hub's blob zone: run this step again after the platform's first apply.", self.printed)
+        install.step_bootstrap(FakeGitHub(), FakeTerraform(self.work, plan_status=0, state_endpoint=True), self.folder, out=self.out)
+        self.assertIn("bootstrap: the state account has its private endpoint in management's network.", self.printed)
 
     def test_the_plan_waits_for_a_yes(self):
         terraform = FakeTerraform(self.work)
@@ -381,6 +1425,15 @@ class InstallTest(unittest.TestCase):
         self.assertIn("stacmestate1234", files["_generated/bootstrap.yaml"])
         self.assertIn("Written by Fortytwo after running the bootstrap", files["_generated/bootstrap.yaml"])
 
+    def test_publish_stops_before_its_branch_when_the_person_may_not_change_generated_files(self):
+        (self.work).mkdir(parents=True)
+        (self.work / "backend.hcl").write_text("x")
+        github = FakeGitHub(can_bypass="never")
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-governance: its ruleset generated-files refuses changes to _generated/bootstrap.yaml from "
+                                                 "you. Only its bypass team"):
+            install.step_publish(github, FakeTerraform(self.work), self.folder, self.out)
+        self.assertEqual((github.commits, github.branches, github.pulls), ([], [], []))  # no stray branch
+
     def test_publish_does_nothing_when_main_already_has_it(self):
         (self.work).mkdir(parents=True)
         (self.work / "backend.hcl").write_text("x")
@@ -425,6 +1478,482 @@ class InstallTest(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "run mlz install bootstrap first"):
             install.step_publish(FakeGitHub(), FakeTerraform(self.work), self.folder, self.out)
 
+    # subscriptions
+
+    def subscriptions(self, azure, scope=EA, yes=False, answer="", contract=VENDING_IDENTITY):
+        (self.work).mkdir(parents=True, exist_ok=True)
+        (self.work / "backend.hcl").write_text("x")
+        terraform = FakeTerraform(self.work, contract_identities=contract)
+        self.waits = []
+        return install.step_subscriptions(azure, terraform, self.folder, scope, TENANT, yes, self.out, lambda question: answer, self.waits.append)
+
+    def test_an_identity_with_the_role_needs_nothing(self):
+        role = f"{EA}/billingRoleDefinitions/a0bcee42-bf30-4d1b-926a-48d21664ef71"
+        azure = BillingAzure(assignments=[{"properties": {"principalId": "someone-else", "roleDefinitionId": role}},
+                                          {"properties": {"principalId": PRINCIPAL, "roleDefinitionId": role}}])
+        self.assertTrue(self.subscriptions(azure))
+        self.assertEqual([c[0] for c in azure.calls], ["GET"])
+        self.assertIn("subscriptions: it has it; vending can make them.", self.printed)
+
+    def test_ea_the_role_is_given_when_the_sign_in_may(self):
+        azure = BillingAzure()
+        self.assertTrue(self.subscriptions(azure, answer="y"))
+        self.assertEqual([c[0] for c in azure.calls], ["GET", "PUT", "GET"])  # done once the role assignments show it
+        method, path, body = azure.calls[1]
+        # Named after the scope and the identity: given again, it is the same assignment.
+        name = path.split("/billingRoleAssignments/")[1].split("?")[0]
+        self.assertEqual(path, f"{EA}/billingRoleAssignments/{name}?api-version=2019-10-01-preview")
+        self.assertEqual(install.grant_request("EA", EA, PRINCIPAL, TENANT)[1], path)
+        self.assertEqual(body, {"properties": {"principalId": PRINCIPAL, "principalTenantId": TENANT,
+                                               "roleDefinitionId": f"{EA}/billingRoleDefinitions/a0bcee42-bf30-4d1b-926a-48d21664ef71"}})
+
+    def test_mca_the_role_is_given_on_the_invoice_section(self):
+        # Answered 202, and shown in the role assignments two reads later: done only then.
+        azure = BillingAzure(shows_after=2)
+        self.assertTrue(self.subscriptions(azure, scope=MCA, yes=True))
+        grant = next(call for call in azure.calls if call[0] == "POST")
+        self.assertEqual(grant, ("POST", f"{MCA}/createBillingRoleAssignment?api-version=2024-04-01", {
+            "principalId": PRINCIPAL, "principalTenantId": TENANT,
+            "roleDefinitionId": f"{MCA}/billingRoleDefinitions/30000000-aaaa-bbbb-cccc-100000000006"}))
+        self.assertEqual([c[0] for c in azure.calls], ["GET", "POST", "GET", "GET", "GET"])
+        self.assertEqual(self.waits, [install.GRANT_WAIT] * 2)
+
+    def test_a_grant_azure_took_but_never_shows_is_not_reported_done(self):
+        azure = BillingAzure(shows_after=None)
+        self.assertFalse(self.subscriptions(azure, scope=MCA, yes=True))
+        self.assertEqual(len(self.waits), install.GRANT_CHECKS)
+        text = "\n".join(self.printed)
+        self.assertIn("Azure took the request, but its role assignments do not show the role yet", text)
+        self.assertNotIn("subscriptions: done", text)
+        self.assertIn("subscriptions: an owner of the invoice section, of its billing profile or of the billing account gives it", text)
+        self.assertTrue(any(line.startswith("  az rest --method get") for line in self.printed))
+
+    def test_without_the_billing_role_the_person_who_has_it_gets_the_command(self):
+        # The engineer may neither read nor give billing roles there, as usually only the customer's billing owner may.
+        azure = BillingAzure(readable=False, grantable=False)
+        self.assertFalse(self.subscriptions(azure, answer="y"))
+        text = "\n".join(self.printed)
+        self.assertIn("the EA role SubscriptionCreator on the enrollment account", text)
+        self.assertIn("Azure refused it (HTTP 403)", text)
+        self.assertIn("subscriptions: the enrollment account's owner, its Account Owner", text)
+        self.assertIn(f"  az login --tenant {TENANT}", text)
+        command = next(line for line in self.printed if line.startswith("  az rest --method put"))
+        # As a shell would read it: the same call this step makes.
+        words = shlex.split(command)
+        method, path, body = install.grant_request("EA", EA, PRINCIPAL, TENANT)
+        self.assertEqual(words[words.index("--url") + 1], f"https://management.azure.com{path}")
+        self.assertEqual(json.loads(words[words.index("--body") + 1]), body)
+        check = next(line for line in self.printed if line.startswith("  az rest --method get"))
+        self.assertIn(f'value[?properties.principalId==`"{PRINCIPAL}"`].properties.roleDefinitionId', shlex.split(check))
+        self.assertNotIn("'\"'\"'", check)  # one quoting, readable as sent
+
+    def test_nothing_is_given_without_a_yes(self):
+        azure = BillingAzure()
+        self.assertFalse(self.subscriptions(azure, scope=MCA))
+        self.assertEqual([c[0] for c in azure.calls], ["GET"])
+        text = "\n".join(self.printed)
+        self.assertIn("subscriptions: an owner of the invoice section, of its billing profile or of the billing account gives it", text)
+        self.assertIn("or in the Azure portal: Cost Management + Billing, the invoice section, Access control (IAM): Add, role Azure "
+                      "subscription creator, for the identity id-acme-vending-apply-nwe.", text)
+
+    def test_a_billing_scope_vending_cannot_use_is_refused(self):
+        for scope in ("/providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c", "/subscriptions/x"):
+            with self.assertRaisesRegex(ConfigError, "is an EA enrollment account"):
+                self.subscriptions(BillingAzure(), scope=scope)
+        with self.assertRaisesRegex(ConfigError, "no vending apply identity"):
+            self.subscriptions(BillingAzure(), contract={})
+
+    # runners: GitHub-hosted, joined to management's network
+
+    def hosted(self, runners: str = ""):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "  runners:\n    kind: github-hosted\n" + runners)
+
+    def test_the_runners_step_makes_the_three_and_moves_the_repos_onto_them(self):
+        self.hosted()
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        calls = dict((call[0], call[1]) for call in github.calls if call[0] != "variable")
+        self.assertEqual(calls["configuration"], {"name": "mlz", "compute_service": "actions", "network_settings_ids": ["GHID123"]})
+        self.assertEqual(calls["group"], {"name": "mlz", "visibility": "selected", "selected_repository_ids": [101, 102, 103],
+                                          "allows_public_repositories": False, "network_configuration_id": "CONFIG"})
+        self.assertEqual(calls["runner"], {"name": "mlz", "image": {"id": "ubuntu-latest", "source": "github"}, "size": "2-core",
+                                           "maximum_runners": 10, "runner_group_id": 7})
+        self.assertEqual(github.values, {(repo, "MLZ_RUNS_ON"): "mlz" for repo in REPOS.values()})
+        self.assertIn("runners: the three repos run their plans, applies and publications on mlz from their next run. "
+                      "To go back to GitHub's public runners: gh variable delete MLZ_RUNS_ON --repo <repo>.", self.printed)
+
+    def test_the_repos_stay_on_public_runners_until_the_state_has_its_private_endpoint(self):
+        self.hosted()
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
+        self.assertEqual([call[0] for call in github.calls], ["configuration", "group", "runner"])
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("run mlz install bootstrap again, then this step" in line for line in self.printed))
+
+    def test_a_second_run_changes_nothing_in_place_and_narrows_a_widened_group(self):
+        self.hosted()
+        github = RunnersGitHub(
+            configurations=[{"name": "mlz", "id": "CONFIG", "network_settings_ids": ["GHID123"]}],
+            groups=[{"name": "mlz", "id": 7, "visibility": "all", "network_configuration_id": "CONFIG"}],
+            runners=[{"name": "mlz", "runner_group_id": 7}],
+        )
+        github.group_repositories[7] = {101, 102, 103, 999}
+        for repo in REPOS.values():
+            github.values[(repo, "MLZ_RUNS_ON")] = "mlz"
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        self.assertEqual(github.calls, [
+            ("update group", {"visibility": "selected", "allows_public_repositories": False, "network_configuration_id": "CONFIG"}),
+            ("group repositories", [101, 102, 103]),
+        ])
+
+    def test_someone_who_is_not_an_owner_gets_the_commands_and_changes_nothing(self):
+        self.hosted()
+        github = RunnersGitHub(owner=False)
+        install.step_runners(github, runners_azure(endpoint=False), self.folder, self.out)
+        self.assertEqual(github.calls, [])
+        text = "\n".join(self.printed)
+        self.assertIn("you are not an owner of acme, so nothing was changed", text)
+        self.assertIn("gh auth refresh -h github.com -s admin:org,manage_runners:org,read:network_configurations,write:network_configurations", text)
+        self.assertIn("gh api -X POST orgs/acme/settings/network-configurations -f name=mlz -f compute_service=actions "
+                      "-f 'network_settings_ids[]=GHID123' --jq .id", text)
+        self.assertIn("-F 'selected_repository_ids[]=101' -F 'selected_repository_ids[]=102' -F 'selected_repository_ids[]=103' "
+                      "-F allows_public_repositories=false -f network_configuration_id=\"$configuration\"", text)
+        self.assertIn("-f 'image[id]=ubuntu-latest' -f 'image[source]=github' -f size=2-core -F maximum_runners=10 -F runner_group_id=\"$group\"", text)
+        self.assertIn("as an admin on them. Not yet: the state account has no private endpoint yet, and the runner reaches the state "
+                      "only through it: run mlz install bootstrap again, then run these:", text)
+        self.assertIn("gh variable set MLZ_RUNS_ON --repo acme/mlz-vending --body mlz", text)
+
+    def test_a_size_that_is_no_size_is_refused_before_it_reaches_a_command(self):
+        self.hosted("    size: \"2-core'; printf INJECTED; #\"\n")
+        with self.assertRaisesRegex(ConfigError, "github.runners.size is one of GitHub's runner sizes for github-hosted runners, such as 2-core"):
+            install.step_runners(RunnersGitHub(owner=False), runners_azure(), self.folder, self.out)
+
+    def test_the_runner_size_comes_from_bootstrap_yaml(self):
+        self.hosted("    size: 4-core\n")
+        github = RunnersGitHub()
+        install.step_runners(github, runners_azure(), self.folder, self.out)
+        self.assertEqual(dict(call[:2] for call in github.calls)["runner"]["size"], "4-core")
+
+    def test_no_runners_where_github_does_not_join_them_to_a_network(self):
+        self.hosted()
+        (self.folder / "customer.yaml").write_text(CUSTOMER.replace("primary_region: norwayeast", "primary_region: westeurope"))
+        with self.assertRaisesRegex(ConfigError, "only in some regions, not westeurope"):
+            install.step_runners(RunnersGitHub(), runners_azure(), self.folder, self.out)
+
+    def test_the_network_settings_come_first(self):
+        self.hosted()
+        with self.assertRaisesRegex(ConfigError, "no GitHub network settings yet \\(ghns-acme-mgt-pd-nwe-01\\)"):
+            install.step_runners(RunnersGitHub(), FakeAzure(), self.folder, self.out)
+
+    def test_another_network_configuration_named_mlz_is_not_taken_over(self):
+        self.hosted()
+        for found in ({"network_settings_ids": ["ELSEWHERE"]}, {"network_settings_ids": ["ELSEWHERE", "GHID123"]},
+                      {"network_settings_ids": ["GHID123"], "failover_network_enabled": True, "failover_network_settings_ids": ["ELSEWHERE"]}):
+            github = RunnersGitHub(configurations=[{"name": "mlz", "id": "OTHER", **found}])
+            with self.assertRaisesRegex(ConfigError, "for other or further network settings; it must name ghns-acme-mgt-pd-nwe-01 alone"):
+                install.step_runners(github, runners_azure(), self.folder, self.out)
+            self.assertEqual(github.calls, [])
+
+    def test_a_refused_network_configuration_names_the_enterprise_policy(self):
+        self.hosted()
+        with self.assertRaisesRegex(ConfigError, "Policies, Hosted compute networking"):
+            install.step_runners(RunnersGitHub(fail_configuration=True), runners_azure(), self.folder, self.out)
+
+
+    # runners: self-hosted, the default
+
+    def self_hosted(self, runners: str = "    app_client_id: Iv23liRunners\n"):
+        (self.folder / "bootstrap.yaml").write_text(BOOTSTRAP + "  runners:\n" + runners)
+        key = Path(self.tmp.name) / "runners.private-key.pem"
+        key.write_text(APP_KEY)
+        return key
+
+    def run_self_hosted(self, github, azure, app_key=None):
+        waits = []
+        with unittest.mock.patch.object(install, "apply_bootstrap") as apply:
+            install.step_runners(github, azure, self.folder, self.out, terraform="terraform", app_key=app_key, wait=waits.append)
+        return apply, waits
+
+    def test_the_runner_settings_default_to_self_hosted_on_fortytwo_s_image_size(self):
+        self.assertEqual(install.runner_settings({"github": {}}),
+                         {"kind": "self-hosted", "size": "Standard_D2ds_v6", "instances": 1, "app_client_id": None, "image": "fortytwo"})
+        self.assertEqual(install.runner_settings({"github": {"runners": {"kind": "github-hosted"}}}),
+                         {"kind": "github-hosted", "size": "2-core", "instances": 1, "app_client_id": None, "image": "fortytwo"})
+
+    def test_runner_settings_that_would_reach_a_command_or_a_script_are_checked(self):
+        for given, problem in (({"kind": "ephemeral"}, "kind is self-hosted or github-hosted, not 'ephemeral'"),
+                               ({"kind": []}, "kind is self-hosted or github-hosted, not \\[\\]"),
+                               ({"size": "Standard_D2'; rm -rf /"}, "size is an Azure virtual machine size for self-hosted runners"),
+                               ({"instances": 60}, "instances is a whole number of runners from 0 to 59, as many as snet-runners holds"),
+                               ({"instances": True}, "instances is a whole number"),
+                               ({"app_client_id": "Iv23\"; x"}, "app_client_id is the runner App's client ID"),
+                               ({"kind": "github-hosted", "instances": 2}, "instances is for self-hosted runners"),
+                               ({"image": "ubuntu"}, "image is fortytwo or dev \\(Fortytwo's own tests\\), not 'ubuntu'"),
+                               ({"kind": "github-hosted", "image": "dev"}, "image is for self-hosted runners"),
+                               ({"labels": ["x"]}, "github.runners.labels is not a setting")):
+            with self.assertRaisesRegex(ConfigError, problem):
+                install.runner_settings({"github": {"runners": given}})
+
+    def test_self_hosted_runners_need_the_runner_app(self):
+        self.self_hosted("    instances: 2\n")
+        with self.assertRaisesRegex(ConfigError, "needs github.runners.app_client_id: the client ID of the customer's runner App"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure())
+
+    def test_the_group_the_key_the_runners_and_then_the_repos(self):
+        key = self.self_hosted()
+        github = RunnersGitHub()
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online", "labels": LABELS}]
+        # The vault's firewall refuses this address first, then Key Vault has not seen the new role yet.
+        azure = SelfHostedAzure(refusals=[
+            refused("ForbiddenByFirewall", "Client address is not authorized and caller is not a trusted service.\r\nClient address: 203.0.113.7\r\nCaller: x"),
+            refused("ForbiddenByRbac", "Caller is not authorized to perform action on resource."),
+        ])
+        apply, waits = self.run_self_hosted(github, azure, key)
+        workflow = f"acme/mlz-core/.github/workflows/role.yml@{install.release()}"
+        # Made with no repo; the repos come once GitHub is seen to keep the limit to role.yml.
+        self.assertEqual(github.calls[:2], [("group", {
+            "name": "mlz", "visibility": "selected", "selected_repository_ids": [], "allows_public_repositories": False,
+            "restricted_to_workflows": True, "selected_workflows": [workflow]}), ("group repositories", [101, 102, 103])])
+        self.assertEqual(azure.uploads, [("PUT", UPLOAD, {"value": APP_KEY, "contentType": "application/x-pem-file"})])
+        steps = [(method, url.rsplit("/", 1)[-1] if "roleAssignments" not in url else "roleAssignment") for method, url, _ in azure.calls]
+        self.assertEqual(steps, [("PUT", "roleAssignment"), ("PATCH", "kv-acme-mlz-pd-nwe-01"), ("PATCH", "kv-acme-mlz-pd-nwe-01"),
+                                 ("DELETE", "roleAssignment"), ("GET", "current"), ("PUT", "current"), ("GET", "EncryptionAtHost"),
+                                 ("POST", "register")])
+        role, opened, closed = azure.calls[0][2], azure.calls[1][2], azure.calls[2][2]
+        self.assertEqual(role["properties"]["principalId"], "33333333-3333-3333-3333-333333333333")
+        self.assertTrue(role["properties"]["roleDefinitionId"].endswith("/roleDefinitions/b86a8fe4-44ce-4948-aee5-eccb2c155cd7"))
+        self.assertEqual(opened["properties"]["networkAcls"]["ipRules"], [{"value": "203.0.113.7"}])
+        self.assertEqual(closed["properties"]["networkAcls"]["ipRules"], [])
+        self.assertTrue(azure.calls[5][2]["properties"]["accepted"])
+        self.assertEqual(azure.calls[5][2]["properties"]["signature"], "SIGNED")  # the terms as Azure gave them
+        self.assertEqual(waits, [10, 10])
+        apply.assert_called_once()
+        self.assertEqual(github.values, {(repo, "MLZ_RUNS_ON"): "mlz" for repo in REPOS.values()})
+        self.assertFalse(any("MIIE" in line for line in self.printed))  # the key is never printed
+        self.assertTrue(any("Delete the .pem file now, and never send it on" in line for line in self.printed))
+
+    def test_an_upload_that_fails_still_takes_the_role_and_the_address_away(self):
+        key = self.self_hosted()
+        azure = SelfHostedAzure(refusals=[
+            refused("ForbiddenByFirewall", "Client address: 203.0.113.7"),
+            refused("BadParameter", "The request is not valid.", status=400),
+        ])
+        with self.assertRaisesRegex(ConfigError, "Key Vault refused the key \\(HTTP 400\\): The request is not valid."):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual([method for method, _, _ in azure.calls], ["PUT", "PATCH", "PATCH", "DELETE"])
+        self.assertEqual(azure.calls[2][2]["properties"]["networkAcls"]["ipRules"], [])
+
+    def test_the_role_goes_even_when_the_firewall_cannot_be_put_back(self):
+        key = self.self_hosted()
+
+        class Failing(SelfHostedAzure):
+            def request(self, method, url, body=None):
+                if method == "PATCH" and body["properties"]["networkAcls"]["ipRules"] == []:
+                    self.calls.append((method, url.split("?")[0], body))
+                    raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, io.BytesIO(b"{}"))
+                return super().request(method, url, body)
+
+        azure = Failing(refusals=[refused("ForbiddenByFirewall", "Client address: 203.0.113.7")])
+        self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual([method for method, _, _ in azure.calls][:4], ["PUT", "PATCH", "PATCH", "DELETE"])
+        text = "\n".join(self.printed)
+        self.assertIn("these could not be undone after the upload; run them now:\naz keyvault network-rule remove --name kv-acme-mlz-pd-nwe-01 "
+                      "--ip-address 203.0.113.7", text)
+        self.assertNotIn("your role and address are gone", text)
+
+    def test_a_key_key_vault_never_took_is_not_reported_as_stored(self):
+        key = self.self_hosted()
+        # Every write refused while the new role spreads, until the attempts run out.
+        azure = SelfHostedAzure(refusals=[refused("ForbiddenByRbac", "not yet")] * 29 + [refused("ForbiddenByFirewall", "Client address: 203.0.113.7")])
+        with self.assertRaisesRegex(ConfigError, "Key Vault did not take the key within five minutes"):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual(azure.uploads, [])
+        self.assertFalse(any("Delete the .pem file now" in line for line in self.printed))
+        self.assertEqual([method for method, _, _ in azure.calls][-2:], ["PATCH", "DELETE"])  # cleaned up all the same
+
+    def test_the_group_admits_the_releases_the_repos_pin(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-governance": "v0.8.0", "acme/mlz-platform": "v0.8.0"})
+        github.tags.add((CORE_COPY, "v0.8.0"))
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(dict(github.calls[:1])["group"]["selected_workflows"],
+                         sorted([mirror.workflow(CORE_COPY, "v0.8.0"), mirror.workflow(CORE_COPY, install.release())]))
+
+    def test_a_repo_pinned_to_anything_but_a_release_of_mlz_core_stops_the_step(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-vending": "main"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls acme/mlz-core's role.yml at main, "
+                                                 "which the runner group cannot admit"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.calls, [])
+
+    def test_a_release_the_copy_has_no_tag_for_stops_the_step(self):
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-vending": "v0.8.0"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-vending: its .github/workflows/mlz.yml calls acme/mlz-core's role.yml at v0.8.0, which "
+                                                 "acme/mlz-core has no tag for: python3 -m mlz upgrade acme/mlz-vending --to v0.8.0 --core acme/mlz-core"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+
+    def test_a_repo_still_calling_mlz_core_s_own_workflow_stops_the_step(self):
+        # A runner group admits no workflow of another organization's: only the organization's copy will do.
+        self.self_hosted()
+        github = RunnersGitHub(pins={"acme/mlz-platform": f"fortytwoservices/mlz-core@{install.release()}"})
+        with self.assertRaisesRegex(ConfigError, "acme/mlz-platform: its .github/workflows/mlz.yml calls fortytwoservices/mlz-core's role.yml "
+                                                 f"at {install.release()}, which the runner group cannot admit: only acme/mlz-core's.*"
+                                                 "python3 -m mlz upgrade acme/mlz-platform --core acme/mlz-core moves it onto the copy"):
+            self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+
+    def test_fortytwo_s_dev_image_for_its_own_tests(self):
+        self.self_hosted("    app_client_id: Iv23liRunners\n    image: dev\n")
+        azure = SelfHostedAzure(secret=True)
+        self.run_self_hosted(RunnersGitHub(), azure)
+        terms = [url for method, url, _ in azure.calls if url.endswith("/agreements/current")]
+        self.assertEqual(terms[0], f"/subscriptions/00000000-0000-0000-0000-000000000001/providers/Microsoft.MarketplaceOrdering/offerTypes/"
+                                   "virtualmachine/publishers/amestofortytwoas1653635920536/offers/self_hosted_runner_ado/plans/"
+                                   "ubuntu-latest-dev-gen2/agreements/current")
+        self.assertEqual(install.runner_image("dev")["plan"], {"name": "ubuntu-latest-dev-gen2", "product": "self_hosted_runner_ado",
+                                                                "publisher": "amestofortytwoas1653635920536"})
+
+    def test_a_subscription_the_dev_image_is_not_for_is_told_so(self):
+        self.self_hosted("    app_client_id: Iv23liRunners\n    image: dev\n")
+
+        # Azure may refuse reading the plan's terms, or accepting them once read.
+        for refused_method, code in (("GET", 404), ("PUT", 403)):
+            class Refusing(SelfHostedAzure):
+                def request(self, method, url, body=None):
+                    if method == refused_method and url.split("?")[0].endswith("/agreements/current"):
+                        raise urllib.error.HTTPError(url, code, "Refused", {}, io.BytesIO(b"{}"))
+                    return super().request(method, url, body)
+
+            with self.assertRaisesRegex(ConfigError, "the management subscription may not use Fortytwo's dev image \\(self_hosted_runner_ado, "
+                                                     f"ubuntu-latest-dev-gen2; HTTP {code}\\): it is for Fortytwo's own tenants"):
+                self.run_self_hosted(RunnersGitHub(), Refusing(secret=True))
+
+    def test_a_file_that_is_no_private_key_is_refused_before_anything_changes(self):
+        key = self.self_hosted()
+        key.write_text("ssh-ed25519 AAAA not a GitHub App key\n")
+        azure = SelfHostedAzure()
+        with self.assertRaisesRegex(ConfigError, "is not a private key file: use the .pem file the runner App's settings page downloads"):
+            self.run_self_hosted(RunnersGitHub(), azure, key)
+        self.assertEqual(azure.calls, [])
+
+    def test_without_a_key_in_the_vault_the_step_asks_for_one(self):
+        self.self_hosted()
+        with self.assertRaisesRegex(ConfigError, "the runner App's key is not in kv-acme-mlz-pd-nwe-01 yet: run this step with --app-key"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure())
+
+    def test_a_key_already_in_the_vault_is_kept(self):
+        self.self_hosted()
+        azure = SelfHostedAzure(secret=True, accepted=True)
+        apply, _ = self.run_self_hosted(RunnersGitHub(), azure)
+        self.assertEqual(azure.uploads, [])
+        self.assertEqual([method for method, _, _ in azure.calls], ["GET", "GET", "POST"])  # the terms, the feature, the provider
+        apply.assert_called_once()
+
+    def test_someone_who_is_not_an_owner_gets_the_group_command_and_nothing_else_happens(self):
+        key = self.self_hosted()
+        azure = SelfHostedAzure()
+        apply, _ = self.run_self_hosted(RunnersGitHub(owner=False), azure, key)
+        apply.assert_not_called()
+        self.assertEqual(azure.calls, [])
+        text = "\n".join(self.printed)
+        self.assertIn("gh api -X POST orgs/acme/actions/runner-groups -f name=mlz -f visibility=selected -F allows_public_repositories=false "
+                      f"-F restricted_to_workflows=true -f 'selected_workflows[]=acme/mlz-core/.github/workflows/role.yml@{install.release()}'", text)
+        self.assertNotIn("selected_repository_ids", text)  # no repo until the limit is seen
+        self.assertIn("Then an owner runs this step again, which admits the three repos once GitHub keeps that limit.", text)
+
+    def test_a_group_made_for_github_hosted_runners_is_not_taken_over(self):
+        key = self.self_hosted()
+        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "network_configuration_id": "CONFIG"}])
+        with self.assertRaisesRegex(ConfigError, "runner group mlz is for GitHub-hosted runners"):
+            self.run_self_hosted(github, SelfHostedAzure(), key)
+
+    def test_a_group_github_did_not_limit_to_role_yml_is_left_with_no_repo_on_team_and_on_enterprise(self):
+        class Unlimited(RunnersGitHub):
+            """An organization where GitHub does not keep a runner group's limit to selected workflows."""
+            def create_runner_group(self, org, body):
+                return super().create_runner_group(org, {**body, "restricted_to_workflows": False, "selected_workflows": []})
+
+            def update_runner_group(self, org, group, body):
+                super().update_runner_group(org, group, {**body, "restricted_to_workflows": False, "selected_workflows": []})
+        role = mirror.workflow(CORE_COPY, install.release())
+        # On Team: no self-hosted runners without the limit (the user's decision of 23 November). The group GitHub made
+        # keeps no repo, and the step names GitHub-hosted runners, Team's private way.
+        self.team()
+        _, team = install.settings(self.folder)
+        github = Unlimited()
+        with self.assertRaisesRegex(ConfigError, f"acme's runner group mlz is not limited to {role}: GitHub did not keep its limit to selected "
+                                                 "workflows, which GitHub documents for Enterprise Cloud only. Without it any workflow of the three "
+                                                 "repos could reach the runners and the runner App's key, so no repo may use the group now, and no "
+                                                 "self-hosted runner is made. On GitHub Team, set github.runners.kind: github-hosted"):
+            install.self_hosted_group(github, "acme", REPOS, CORE_COPY, self.out, team)
+        self.assertEqual(github.group_repositories[7], set())
+        # On Enterprise it holds, so a group without it stops the step too, for a group made now and for one that was there.
+        github = Unlimited()
+        with self.assertRaisesRegex(ConfigError, "GitHub did not keep its limit to selected workflows, which GitHub Enterprise allows"):
+            install.self_hosted_group(github, "acme", REPOS, CORE_COPY, self.out)
+        self.assertEqual(github.group_repositories[7], set())
+        widened = Unlimited(groups=[{"name": "mlz", "id": 7, "visibility": "all", "restricted_to_workflows": False}])
+        widened.group_repositories[7] = {101, 102, 103}
+        with self.assertRaisesRegex(ConfigError, "Runner groups, mlz, Workflow access"):
+            install.self_hosted_group(widened, "acme", REPOS, CORE_COPY, self.out)
+        self.assertEqual(widened.group_repositories[7], set())
+        # Where GitHub keeps it, on Team too, nothing more is said.
+        self.printed.clear()
+        install.self_hosted_group(RunnersGitHub(), "acme", REPOS, CORE_COPY, self.out, team)
+        self.assertEqual(self.printed, [f"runners: runner group mlz made, for the three repos and {role} only"])
+
+        # GitHub keeping another workflow beside role.yml is no limit either: exactly what was asked, or not kept.
+        class Wider(RunnersGitHub):
+            def create_runner_group(self, org, body):
+                return super().create_runner_group(org, {**body, "selected_workflows": [*body["selected_workflows"], "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]})
+        with self.assertRaisesRegex(ConfigError, f"is not limited to {role}: GitHub keeps it limited to .*mlz.yml@refs/heads/main instead"):
+            install.self_hosted_group(Wider(), "acme", REPOS, CORE_COPY, self.out)
+
+    def test_a_new_release_is_admitted_beside_those_the_group_admits_already(self):
+        self.self_hosted()
+        older = "acme/mlz-core/.github/workflows/role.yml@v0.1.0"
+        # Anything but mlz-core's releases goes: a customer repo's workflow, or role.yml at a branch.
+        others = ["acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main", "acme/mlz-core/.github/workflows/role.yml@main"]
+        github = RunnersGitHub(groups=[{"name": "mlz", "id": 7, "visibility": "selected", "restricted_to_workflows": True, "selected_workflows": [older, *others]}])
+        github.group_repositories[7] = {101, 102, 103}
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.calls, [("update group", {"visibility": "selected", "allows_public_repositories": False, "restricted_to_workflows": True,
+                                                          "selected_workflows": sorted([older, mirror.workflow(CORE_COPY, install.release())])})])
+
+    def test_encryption_at_host_still_registering_stops_before_the_apply(self):
+        self.self_hosted()
+        for state, registers in (("NotRegistered", True), ("Registering", False)):
+            azure = SelfHostedAzure(secret=True, accepted=True, feature=state)
+            apply, _ = self.run_self_hosted(RunnersGitHub(), azure)
+            apply.assert_not_called()
+            self.assertEqual(("POST", "register") in [(m, u.rsplit("/", 1)[-1]) for m, u, _ in azure.calls], registers)
+        self.assertIn("runners: encryption at host is being registered on the management subscription, which takes a few minutes. "
+                      "Run this step again then.", self.printed)
+
+    def test_the_repos_wait_until_a_runner_is_online_and_the_state_has_its_endpoint(self):
+        self.self_hosted()
+        github = RunnersGitHub()
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "offline", "labels": LABELS}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("none is online in the runner group mlz yet" in line for line in self.printed))
+        # Online, but without the label the repos' jobs ask for: it could take none of them.
+        github.online = [{"name": "someone-else", "status": "online", "labels": LABELS[:3]}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True))
+        self.assertEqual(github.values, {})
+        github.online = [{"name": "vmss-acme-mlz-pd-nwe-01000000", "status": "online", "labels": LABELS}]
+        self.run_self_hosted(github, SelfHostedAzure(secret=True, accepted=True, endpoint=False))
+        self.assertEqual(github.values, {})
+        self.assertTrue(any("the state account has no private endpoint yet" in line for line in self.printed))
+
+    def test_the_runners_wait_for_their_subnet_and_their_vault(self):
+        self.self_hosted()
+        with self.assertRaisesRegex(ConfigError, "management's network has no snet-runners yet"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure(subnet=False))
+        with self.assertRaisesRegex(ConfigError, "the runners' vault kv-acme-mlz-pd-nwe-01 is not there yet"):
+            self.run_self_hosted(RunnersGitHub(), SelfHostedAzure(vault=False))
+
 
 class PrepareTest(unittest.TestCase):
     """The real Terraform.prepare, against a checkout of mlz-core made in a temporary folder."""
@@ -432,9 +1961,8 @@ class PrepareTest(unittest.TestCase):
     def test_the_copy_is_the_checkouts_root_without_its_override_files_or_older_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             core, work = Path(tmp) / "core", Path(tmp) / "work"
-            for folder in ("bootstrap/terraform", "modules/naming"):
-                (core / folder).mkdir(parents=True)
-                (core / folder / "main.tf").write_text("# main\n")
+            (core / "bootstrap/terraform").mkdir(parents=True)
+            (core / "bootstrap/terraform/main.tf").write_text("# main\n")
             (core / "bootstrap/terraform/backend_override.tf").write_text('terraform {\n  backend "local" {}\n}\n')
             (core / "bootstrap/terraform/.terraform.lock.hcl").write_text("# lock\n")
             (work / "bootstrap/terraform").mkdir(parents=True)
@@ -443,26 +1971,25 @@ class PrepareTest(unittest.TestCase):
                 install.Terraform(work, "tenant").prepare()
             root = work / "bootstrap/terraform"
             self.assertEqual(sorted(p.name for p in root.iterdir()), [".terraform.lock.hcl", "main.tf"])
-            self.assertTrue((work / "modules/naming/main.tf").exists())
+            self.assertFalse((work / "modules").exists())  # the names come in names.json, worked out by mlz install
 
     def test_the_checkout_itself_is_refused_as_the_work_folder_and_keeps_its_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             core = Path(tmp) / "core"
-            for folder in ("bootstrap/terraform", "modules/naming"):
-                (core / folder).mkdir(parents=True)
-                (core / folder / "main.tf").write_text("# main\n")
+            (core / "bootstrap/terraform").mkdir(parents=True)
+            (core / "bootstrap/terraform/main.tf").write_text("# main\n")
             with unittest.mock.patch.object(install, "CORE", core), unittest.mock.patch.dict(os.environ, {"GITHUB_TOKEN": "token"}):
                 with self.assertRaisesRegex(ConfigError, "own checkout"):
                     install.Terraform(core / "bootstrap" / "..", "tenant").prepare()
             self.assertTrue((core / "bootstrap/terraform/main.tf").exists())
-            self.assertTrue((core / "modules/naming/main.tf").exists())
 
 
 class PagedGitHub(GitHub):
     """GitHub with its API in memory: a listing answers per_page items a page."""
 
-    def __init__(self, listings: dict[str, list]):
-        self.listings, self.posted = listings, []
+    def __init__(self, listings: dict[str, list], wrapped: dict[str, str] | None = None):
+        # wrapped: the listings GitHub answers inside an object, by path, with the key that holds the items.
+        self.listings, self.wrapped, self.posted = listings, wrapped or {}, []
 
     def _api(self, path, method="GET", body=None, missing_ok=False):
         if method == "POST":
@@ -471,19 +1998,122 @@ class PagedGitHub(GitHub):
         base, _, query = path.partition("?")
         params = dict(part.split("=") for part in query.split("&"))
         size, page = int(params["per_page"]), int(params["page"])
-        return self.listings[base][(page - 1) * size:page * size]
+        items = self.listings[base][(page - 1) * size:page * size]
+        return {self.wrapped[base]: items} if base in self.wrapped else items
 
 
 class GitHubTest(unittest.TestCase):
+    def test_a_ref_is_encoded_so_a_branch_name_never_reads_another(self):
+        asked = []
+
+        class Recorded(GitHub):
+            def _api(self, path, method="GET", body=None, missing_ok=False, accept=None):
+                asked.append(path)
+                return []
+        github = Recorded()
+        github.file("acme/mlz-platform", ".github/workflows/mlz.yml", "main&probe=x")
+        github.folder("acme/mlz-platform", ".github", "feature/a b")
+        self.assertEqual(asked, ["repos/acme/mlz-platform/contents/.github/workflows/mlz.yml?ref=main%26probe%3Dx",
+                                 "repos/acme/mlz-platform/contents/.github?ref=feature%2Fa%20b"])
+
     def test_a_ruleset_past_the_first_page_is_found_and_not_made_again(self):
         rulesets = [{"name": f"other-{n}"} for n in range(120)] + [{"name": "main"}]
         github = PagedGitHub({"repos/acme/mlz-platform/rulesets": rulesets})
-        self.assertFalse(github.add_ruleset("acme/mlz-platform", install.MAIN_RULESET))
+        self.assertFalse(github.add_ruleset("acme/mlz-platform", install.main_ruleset("platform")))
         self.assertEqual(github.posted, [])
 
     def test_every_page_of_releases_is_read(self):
         releases = [{"tag_name": f"v0.{n}.0", "body": "", "draft": False, "prerelease": False} for n in range(150)]
         self.assertEqual(len(PagedGitHub({"repos/f/mlz-core/releases": releases}).releases("f/mlz-core")), 150)
+
+    def test_the_runner_settings_past_the_first_page_are_found(self):
+        others = [{"name": f"other-{n}", "id": n} for n in range(150)]
+        paths = {"orgs/acme/settings/network-configurations": "network_configurations", "orgs/acme/actions/runner-groups": "runner_groups",
+                 "orgs/acme/actions/hosted-runners": "runners", "orgs/acme/actions/runner-groups/7/repositories": "repositories"}
+        github = PagedGitHub({path: others + [{"name": "mlz", "id": 999}] for path in paths}, wrapped=paths)
+        self.assertEqual(github.network_configuration("acme", "mlz")["id"], 999)
+        self.assertEqual(github.runner_group("acme", "mlz")["id"], 999)
+        self.assertEqual(github.hosted_runner("acme", "mlz")["id"], 999)
+        self.assertEqual(len(github.runner_group_repositories("acme", 7)), 151)
+        self.assertIsNone(github.runner_group("acme", "missing"))
+
+    def test_only_an_active_admin_is_an_owner(self):
+        for membership, owner in (({"state": "active", "role": "admin"}, True), ({"state": "active", "role": "member"}, False),
+                                  ({"state": "pending", "role": "admin"}, False), (None, False)):
+            github = AnsweringGitHub({"user": {"login": "someone"}, "orgs/acme/memberships/someone": membership})
+            self.assertEqual(github.is_owner("acme"), owner, membership)
+
+    def test_a_variable_is_made_or_changed(self):
+        github = AnsweringGitHub({"repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON": None})
+        github.set_variable("acme/mlz-platform", "MLZ_RUNS_ON", "mlz")
+        github.answers["repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON"] = {"name": "MLZ_RUNS_ON", "value": "mlz"}
+        github.set_variable("acme/mlz-platform", "MLZ_RUNS_ON", "mlz")
+        self.assertEqual([call[:2] for call in github.sent], [
+            ("POST", "repos/acme/mlz-platform/actions/variables"),
+            ("PATCH", "repos/acme/mlz-platform/actions/variables/MLZ_RUNS_ON"),
+        ])
+
+
+class ModeGitHub(GitHub):
+    """A branch whose top has mlz at the given mode, a README and a folder; writes recorded, each answered with a SHA."""
+
+    def __init__(self, mode, kind="blob"):
+        self.sent = []
+        top = [{"path": "mlz", "mode": mode, "type": kind, "sha": "blob-mlz"},
+               {"path": "README.md", "mode": "100644", "type": "blob", "sha": "blob-readme"},
+               {"path": "tools", "mode": "040000", "type": "tree", "sha": "tree-tools"}]
+        self.answers = {"repos/acme/mlz-vending/git/ref/heads/mlz/upgrade": {"object": {"sha": "head"}},
+                        "repos/acme/mlz-vending/git/commits/head": {"tree": {"sha": "tree"}},
+                        "repos/acme/mlz-vending/git/trees/tree": {"tree": top},
+                        "repos/acme/mlz-vending/git/trees/mlz/upgrade": {"tree": top}}
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method != "GET":
+            self.sent.append((method, path, body))
+            return {"sha": f"made-{len(self.sent)}"}
+        return self.answers[path]
+
+
+class ModeTest(unittest.TestCase):
+    """The real calls that make ./mlz executable, which createCommitOnBranch cannot (GitHub.make_executable)."""
+
+    def test_a_file_without_its_mode_is_found_and_only_it(self):
+        # Only the paths asked about, and only those there: README.md is not asked about, and nothing is named missing.
+        self.assertEqual(ModeGitHub("100644").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz", "missing"]), ["mlz"])
+        self.assertEqual(ModeGitHub("100755").not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [])
+
+    def test_one_commit_on_the_branch_s_head_gives_the_same_blob_its_mode(self):
+        github = ModeGitHub("100644")
+        self.assertTrue(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"))
+        self.assertEqual(github.sent, [
+            ("POST", "repos/acme/mlz-vending/git/trees",
+             {"base_tree": "tree", "tree": [{"path": "mlz", "mode": "100755", "type": "blob", "sha": "blob-mlz"}]}),
+            ("POST", "repos/acme/mlz-vending/git/commits", {"message": "chore: mlz executable", "tree": "made-1", "parents": ["head"]}),
+            ("PATCH", "repos/acme/mlz-vending/git/refs/heads/mlz/upgrade", {"sha": "made-2", "force": False}),  # never over a newer push
+        ])
+
+    def test_an_executable_file_a_folder_or_a_link_makes_no_commit(self):
+        for mode, kind in (("100755", "blob"), ("040000", "tree"), ("120000", "blob")):  # a symbolic link is a blob at 120000
+            github = ModeGitHub(mode, kind)
+            self.assertEqual(github.not_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"]), [], mode)
+            self.assertFalse(github.make_executable("acme/mlz-vending", "mlz/upgrade", ["mlz"], "chore: mlz executable"), mode)
+            self.assertEqual(github.sent, [], mode)
+
+
+class AnsweringGitHub(GitHub):
+    """GitHub with canned answers by path; None is a 404. Writes are recorded, never sent."""
+
+    def __init__(self, answers):
+        self.answers, self.sent = answers, []
+
+    def _api(self, path, method="GET", body=None, missing_ok=False):
+        if method != "GET":
+            self.sent.append((method, path, body))
+            return {}
+        found = self.answers.get(path)
+        if found is None and not missing_ok:
+            raise ConfigError(f"gh api GET {path}: HTTP 404")
+        return found
 
 
 if __name__ == "__main__":

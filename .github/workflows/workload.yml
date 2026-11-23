@@ -1,0 +1,266 @@
+# A landing zone's workload repo's pipeline (starter/mlz-workload), which vending makes for each landing zone
+# (docs/vending.md). The repo's Terraform is at its top and reads mlz.auto.tfvars.json, the landing zone's values,
+# which vending keeps up to date. Every run plans, as the plan identity, from a copy of the state in the landing
+# zone's own account; on main, the apply then runs in the apply environment, as the deploy identity, once the
+# owning team approves, and only if its plan makes exactly the changes the reviewed one showed. The scripts are
+# role.yml's, with the role "workload" (tools/mlz/stacks.py: its root is the repo's top).
+#
+# approval, as in role.yml: environment (the default, GitHub Enterprise), the owning team approves the apply
+# environment; pull-request (GitHub Team), the gate job lets the apply through only with the plan the merged pull
+# request's run showed (docs/pipelines.md, "Approval on GitHub Team").
+#
+# No top-level permissions, unlike role.yml, for the gate alone: a job with no permissions key gets what the caller
+# grants, and only a caller on GitHub Team grants actions: read, which the gate needs to read the pull request's run.
+# A job that asks for a permission its caller does not grant stops the whole run before it starts, even when its if
+# skips it (tested 23 November 2026), so asking for it here would break every caller on Enterprise. Every other job
+# declares its own permissions, and the gate signs in nowhere (tools/ci/test_workflows.py holds both).
+name: mlz workload
+
+on:
+  workflow_call:
+    inputs:
+      approval:
+        description: "who approves an apply: environment (the owning team, GitHub Enterprise) or pull-request (the pull request's code owner, GitHub Team)"
+        type: string
+        required: false
+        default: environment
+
+env:
+  ARM_USE_OIDC: "true"
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+  TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+  CHECKPOINT_DISABLE: "1"
+  # Python runs from the repo's checkout, which a pull request controls: mlz-core's code and the standard library
+  # come first. mlz runs isolated, on every Python (tools/ci/run_mlz.py); this covers the rest on Python 3.11 and later.
+  PYTHONSAFEPATH: "1"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write       # signs in as the plan identity
+      pull-requests: write  # puts the plan on the pull request
+    outputs:
+      core-repository: ${{ steps.core.outputs.repository }}
+      core-ref: ${{ steps.core.outputs.ref }}
+      status: ${{ steps.plan.outputs.status }}
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the plan identity
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The caller pins mlz-core with uses: ...@<release>; job.workflow_sha is that release's commit, and the scripts
+      # come from there, never from the caller's repo, which a pull request controls (role.yml does the same).
+      - name: Find the mlz-core release
+        id: core
+        env:
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+          APPROVAL: ${{ inputs.approval }}
+        run: |
+          # Anything else would run as neither: on GitHub Team, an apply nobody gates.
+          if [[ $APPROVAL != environment && $APPROVAL != pull-request ]]; then
+            echo "::error::approval is '$APPROVAL' in .github/workflows/mlz.yml: it is environment (GitHub Enterprise, the default) or pull-request (GitHub Team)."
+            exit 1
+          fi
+          if [[ ! $WORKFLOW_SHA =~ ^[0-9a-f]{40}$ || -z $WORKFLOW_REPOSITORY || $WORKFLOW_REPOSITORY == "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::GitHub did not say which mlz-core commit this workflow comes from (job.workflow_repository '$WORKFLOW_REPOSITORY', job.workflow_sha '$WORKFLOW_SHA')."
+            exit 1
+          fi
+          echo "$WORKFLOW_REPOSITORY ${WORKFLOW_REF#*@} at $WORKFLOW_SHA"
+          echo "repository=$WORKFLOW_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.core.outputs.repository }}
+          ref: ${{ steps.core.outputs.ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          python3 .mlz-core/tools/ci/plan.py workload workload
+          echo "status=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Show the plan on the run page
+        if: steps.plan.outputs.status != '1'
+        run: cat .mlz/summary-workload.md >> "$GITHUB_STEP_SUMMARY"
+
+      # GitHub Team: the pull request's number with its plan, as role.yml's plan jobs do.
+      - name: Mark the plan as the pull request's
+        if: inputs.approval == 'pull-request' && steps.plan.outputs.status != '1' && github.event_name == 'pull_request'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: mkdir -p .mlz && echo "$PR_NUMBER" > .mlz/pull-request.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.plan.outputs.status != '1'
+        with:
+          name: mlz-workload-plan
+          path: |
+            .mlz/plan-workload.txt
+            .mlz/summary-workload.md
+            .mlz/changes-workload.txt
+            .mlz/version-workload.txt
+            .mlz/pull-request.txt
+          include-hidden-files: true
+          retention-days: 30
+
+      - name: Put the plan on the pull request
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: python3 .mlz-core/tools/ci/comment.py workload "$STATUS"
+
+      - name: Result
+        env:
+          STATUS: ${{ steps.plan.outputs.status }}
+        run: |
+          if [[ $STATUS == 1 ]]; then echo "::error::The plan failed."; exit 1; fi
+          if [[ $STATUS == 3 ]]; then echo "::error::The plan is refused; the plan above says why."; exit 1; fi
+
+  # GitHub Team only: the apply goes on only with the plan the merged pull request's run showed. No permissions key, so
+  # its token holds what the caller grants, actions: read included on Team (above); it signs in nowhere, and runs only
+  # mlz-core's own code at the release the caller pins.
+  gate:
+    if: >-
+      inputs.approval == 'pull-request'
+      && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.plan.outputs.status == '2'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.core-repository }}
+          ref: ${{ needs.plan.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # main's plan, of this run.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-workload-plan
+          path: .mlz/reviewed/
+
+      - name: Match the plan with its pull request's
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.workflow_ref }} # the caller's workflow, whose pull request runs showed the plan
+        run: python3 .mlz-core/tools/ci/approved.py gate workload workload
+
+  # GitHub Team only, pull requests: one check that the plan finished and that the last approval covers it, which the
+  # workload repo's main-checks requires there. A required check whose job is skipped counts as passed, so it runs whatever
+  # happened before it. No permissions key, as the gate: it reads the pull request's runs with the caller's actions: read.
+  # Weaker than a role repo's: a workflow's token cannot read a team's members, so any approval by someone with write
+  # access counts, not only the landing zone team's (docs/pipelines.md).
+  planned:
+    if: inputs.approval == 'pull-request' && always() && github.event_name == 'pull_request'
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: The plan of this pull request finished
+        env:
+          PLAN: ${{ needs.plan.result }}
+        run: |
+          if [[ $PLAN == success ]]; then
+            echo "The plan of this pull request finished: a code owner may approve it."
+            exit 0
+          fi
+          echo "::error::The plan of this pull request did not finish (plan: $PLAN), so there is no plan to approve, and it cannot merge. The plan job's log says why; once that is fixed, re-run the failed jobs. A run cancelled by a newer push leaves that push's run to say."
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.core-repository }}
+          ref: ${{ needs.plan.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-workload-plan
+          path: .mlz/planned/
+
+      - name: The approval covers this plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.base_ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: python3 .mlz-core/tools/ci/approved.py covers workload
+
+  apply:
+    # main only, and only when the plan changes something. The apply environment waits for the owning team (on GitHub
+    # Team it has no reviewer, and the gate above has let it through). Not after a cancelled run.
+    if: >-
+      !cancelled() && needs.plan.result == 'success'
+      && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      && needs.plan.outputs.status == '2'
+      && (inputs.approval == 'pull-request' && needs.gate.result == 'success' || inputs.approval != 'pull-request' && needs.gate.result == 'skipped')
+    needs: [plan, gate]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: apply
+    permissions:
+      contents: read
+      id-token: write # signs in as the deploy identity, which only this environment may use
+    concurrency:
+      group: mlz-workload-apply
+      cancel-in-progress: false
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the deploy identity, set on the environment
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.plan.outputs.core-repository }}
+          ref: ${{ needs.plan.outputs.core-ref }}
+          path: .mlz-core
+          persist-credentials: false
+
+      # The changes the reviewer saw; the apply makes exactly these or none.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mlz-workload-plan
+          path: .mlz/reviewed/
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.0
+          terraform_wrapper: false
+
+      - name: Apply
+        env:
+          APPROVAL: ${{ inputs.approval }}
+          MLZ_APPROVAL: ${{ vars.MLZ_APPROVAL }} # pull-request on a GitHub Team environment, which has no reviewer (apply_guard.py)
+        run: python3 .mlz-core/tools/ci/apply.py workload workload

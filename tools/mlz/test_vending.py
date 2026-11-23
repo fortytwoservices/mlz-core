@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -15,10 +16,10 @@ from pathlib import Path
 from mlz.files import read_yaml
 from mlz.merge import ConfigError
 from mlz.__main__ import MARKER, main, own_folder
-from mlz import files
+from mlz import files, naming, vending
 from mlz.contract import render
 from mlz.firewall import vending_contract
-from mlz.vending import IP_PLAN, allocate, build, ip_plan, landing_zones, place, release, render_plan
+from mlz.vending import IP_PLAN, NAMES, agreement, allocate, build, give_names, ip_plan, landing_zones, place, recorded_names, release, render_names, render_plan
 
 GOVERNANCE = {
     "root": "demo",
@@ -40,7 +41,7 @@ PLATFORM = {
 }
 
 DEFAULTS = "location: norwayeast\nbudget:\n  monthly: 500\n  contacts: [platform@demo.example]\n"
-WORKLOAD = "owner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
+WORKLOAD = "short_name: pay\nowner: payments@demo.example\ncost_center: '4711'\narchetype: corp\n"
 PROD = "subscription: 33333333-3333-3333-3333-333333333333\nbudget:\n  monthly: 2000\n"
 DEV = "subscription: 44444444-4444-4444-4444-444444444444\n"
 
@@ -49,8 +50,8 @@ class VendingTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS)
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD)
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
         self.write("landing-zones/payments/prod.yaml", PROD)
         self.write("landing-zones/payments/dev.yaml", DEV)
 
@@ -62,10 +63,13 @@ class VendingTest(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
 
-    def allocate(self, platform: dict = PLATFORM) -> list[str]:
-        """Runs the allocator and writes its plan, as `python3 -m mlz allocate` does."""
+    def allocate(self, platform: dict = PLATFORM, governance: dict = GOVERNANCE) -> list[str]:
+        """Runs the allocator and writes its plan and the names, as `python3 -m mlz allocate` does. Returns the
+        plan's changes."""
         plan, changes, retired = allocate(self.repo, platform)
+        record, _ = give_names(self.repo, plan, governance)
         self.write(IP_PLAN, render_plan(plan, retired))
+        self.write(NAMES, render_names(record))
         return changes
 
     def plan(self) -> dict:
@@ -75,6 +79,32 @@ class VendingTest(unittest.TestCase):
         with self.assertRaises(ConfigError) as caught:
             function(self.repo, *args)
         return str(caught.exception)
+
+    def test_the_environment_s_defaults_reach_its_landing_zones_only(self):
+        self.write("defaults/prod-defaults.yaml", "tags:\n  Tier: production\n")
+        zones = landing_zones(self.repo)
+        self.assertEqual(zones["payments-prod"]["settings"]["tags"], {"Tier": "production"})
+        self.assertNotIn("tags", zones["payments-dev"]["settings"])
+        self.assertEqual(zones["payments-prod"]["origins"][("tags", "Tier")], "defaults/prod-defaults")
+        self.assertNotIn("payments-workload-defaults", zones)  # the workload's own file is no environment
+
+    def test_an_environment_may_not_take_the_name_of_every_landing_zone_s_defaults(self):
+        self.write("landing-zones/payments/landing-zone.yaml", "subscription: 00000000-0000-0000-0000-000000000009\n")
+        with self.assertRaisesRegex(ConfigError, "landing-zones/payments/landing-zone: landing-zone cannot be an environment, since "
+                                                 "defaults/landing-zone-defaults.yaml is every landing zone's defaults"):
+            landing_zones(self.repo)
+
+    def test_a_file_in_defaults_that_is_neither_kind_is_refused(self):
+        # Not ending in -defaults, or for an environment no landing zone's file could name.
+        for name in ("prod", "PROD-defaults", "-defaults", "workload-defaults-defaults"):
+            with self.subTest(name=name):
+                self.write(f"defaults/{name}.yaml", "tags:\n  Tier: production\n")
+                with self.assertRaisesRegex(ConfigError, f"defaults/{re.escape(name)}: not a defaults file; defaults/ holds landing-zone-defaults.yaml "
+                                                         "for every landing zone and <env>-defaults.yaml for one environment"):
+                    landing_zones(self.repo)
+                (self.repo / "defaults" / f"{name}.yaml").unlink()
+        self.write("defaults/uat-defaults.yaml", "tags:\n  Tier: test\n")  # an environment no landing zone has yet is fine
+        landing_zones(self.repo)
 
     def test_the_four_layers_merge_and_the_key_names_the_landing_zone(self):
         self.allocate()
@@ -115,12 +145,12 @@ class VendingTest(unittest.TestCase):
         message = self.problems(build, governance, PLATFORM)
         self.assertIn("governance requires the BusinessUnit tag", message)
         self.assertNotIn("Environment tag", message)  # mlz-core sets it
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  BusinessUnit: Finance\n")
         configs = build(self.repo, governance, PLATFORM)
         self.assertEqual(configs["payments-prod"]["tags"]["BusinessUnit"], "Finance")
 
     def test_tags_mlz_core_sets_cannot_be_overridden_in_any_case(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  owner: someone@demo.example\n  Environment: production\n  Team: a\n  team: b\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  owner: someone@demo.example\n  Environment: production\n  Team: a\n  team: b\n")
         self.allocate()
         message = self.problems(build, GOVERNANCE, PLATFORM)
         self.assertIn("tags.owner comes from owner", message)
@@ -128,7 +158,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("tags Team and team are one tag to Azure", message)
 
     def test_required_tags_match_in_any_case_and_none_means_none(self):
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  businessunit: Finance\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  businessunit: Finance\n")
         self.allocate()
         build(self.repo, {**GOVERNANCE, "required_tags": ["owner", "BusinessUnit"]}, PLATFORM)
         build(self.repo, {**GOVERNANCE, "required_tags": None}, PLATFORM)
@@ -158,7 +188,9 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n")
         self.assertEqual(self.allocate(), ["payments-prod: subnet cache 10.100.9.192/26"])  # not app's block
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 27\n")
-        self.assertIn("subnet app was removed and still holds 10.100.9.0/26; ask for a /26", self.problems(allocate, PLATFORM))
+        self.assertIn("subnet app was removed and still holds 10.100.9.0/26; ask for a /26 to get it back. For a /27, take app out of the YAML, "
+                      "free the block once the removed subnet is destroyed (./mlz release --repo . payments-prod), then ask for it again.", self.problems(allocate, PLATFORM))
+        self.assertIn("payments-prod asks for app again", self.problems(release, "payments-prod"))  # hence: out of the YAML first
         self.write("landing-zones/payments/prod.yaml", prod + "    web: 26\n    data: 26\n    cache: 26\n    app: 26\n")
         self.assertIn("payments-prod asks for app again; run the IP allocator", self.problems(release, "payments-prod"))
         self.assertEqual(self.allocate(), ["payments-prod: subnet app 10.100.9.0/26 given back"])
@@ -210,13 +242,6 @@ class VendingTest(unittest.TestCase):
             "payments-prod: range 10.100.9.0/24", "payments-prod: subnet default 10.100.9.0/26",
         ])
 
-    def test_a_platform_contract_from_before_v0_3_still_keeps_the_hub_clear(self):
-        # Its hub_range is the hub's own /22: vending, upgraded first, reads it until the next contract.
-        region = {k: v for k, v in PLATFORM["regions"]["norwayeast"].items() if k != "platform_address_space"}
-        older = {"regions": {"norwayeast": {**region, "hub_range": ["10.100.0.0/22"]}}}
-        self.allocate(older)
-        self.assertEqual(self.plan()["payments-dev"]["range"], "10.100.4.0/24")
-
     def test_reserved_ranges_are_never_given_and_conflicts_are_reported(self):
         reserving = {"regions": {"norwayeast": {**PLATFORM["regions"]["norwayeast"], "reserved": ["10.100.8.0/23"]}}}
         self.allocate(reserving)
@@ -226,12 +251,18 @@ class VendingTest(unittest.TestCase):
 
     def test_check_mode_fails_when_the_plan_is_stale_and_writes_nothing(self):
         self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
         run = lambda *extra: self.cli("allocate", "--repo", str(self.repo), *extra)
         self.assertEqual(run("--check"), 1)
         self.assertFalse((self.repo / IP_PLAN).exists())
+        self.assertFalse((self.repo / NAMES).exists())
         self.assertEqual(run(), 0)
         self.assertEqual(run("--check"), 0)
         self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.assertEqual(run("--check"), 1)
+        self.assertEqual(run(), 0)
+        # The names alone out of date: a subnet's NSG not recorded yet.
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("    default: nsg-demo-pay-default-te-nwe-01\n", ""))
         self.assertEqual(run("--check"), 1)
 
     def test_a_command_starts_terraform_once(self):
@@ -267,7 +298,7 @@ class VendingTest(unittest.TestCase):
     def test_a_removed_landing_zone_keeps_its_range_until_released(self):
         self.allocate()
         (self.repo / "landing-zones/payments/dev.yaml").unlink()
-        self.write("landing-zones/website/_workload.yaml", WORKLOAD.replace("Payments", "Website"))
+        self.write("landing-zones/website/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
         self.write("landing-zones/website/prod.yaml", DEV)
         self.allocate()
         self.assertEqual(self.plan()["website-prod"]["range"], "10.100.10.0/24")  # not dev's 10.100.8.0/24
@@ -281,6 +312,324 @@ class VendingTest(unittest.TestCase):
         self.assertEqual((sorted(plan), retired, freed), (["payments-prod", "website-prod"], [], "payments-dev's range 10.100.8.0/24"))
         self.write(IP_PLAN, render_plan(plan, retired))
         self.assertNotIn("held", vending_contract(landing_zones(self.repo), ip_plan(self.repo)))  # none left: as before
+
+    def test_a_decommissioned_landing_zone_goes_to_decommissioned_and_keeps_its_range_held(self):
+        self.allocate()
+        dev_range = self.plan()["payments-dev"]["range"]
+        self.write("landing-zones/payments/dev.yaml", "decommission: true\n" + DEV)
+        self.assertEqual(self.allocate(), [])  # nothing moves, nothing is released
+        config = build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]
+        self.assertTrue(config["decommission"])
+        self.assertEqual(config["management_group_id"], "demo-decommissioned")
+        self.assertFalse(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["decommission"])
+        # The platform stops applying its rules, and builds nothing over its range, until it is released.
+        contract = vending_contract(landing_zones(self.repo), ip_plan(self.repo))
+        self.assertEqual((sorted(contract["landing_zones"]), contract["held"]), (["payments-prod"], {"payments-dev": dev_range}))
+        self.assertIn("payments-dev is still in landing-zones/payments/dev", self.problems(release, "payments-dev"))
+
+    def test_decommission_is_only_true_and_only_in_the_landing_zone_s_own_file(self):
+        self.allocate()
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "decommission: true\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/workload-defaults: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        # Also when the landing zone's own file sets it too, which hides the layer above.
+        self.write("landing-zones/payments/prod.yaml", "decommission: true\n" + PROD)
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/workload-defaults: decommission retires one landing zone, so it goes in that landing zone's own file, landing-zones/payments/prod.", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
+        self.write("landing-zones/payments/dev.yaml", "decommission: false\n" + DEV)
+        self.assertIn("landing-zones/payments/dev: decommission is true or not there at all, not False.", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_names_come_from_the_template(self):
+        self.allocate()
+        names = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual({k: v for k, v in names.items() if k != "network_security_groups"}, {
+            "network_resource_group": "rg-demo-pay-net-pd-nwe-01", "identity_resource_group": "rg-demo-pay-id-pd-nwe-01",
+            "virtual_network": "vnet-demo-pay-pd-nwe-01", "route_table": "rt-demo-pay-pd-nwe-01",
+            "deploy_identity": "id-demo-pay-pd-nwe-01", "budget": "budget-demo-pay-pd-nwe-01",
+            # The workload repo's identity and state; no repo here, as no github.organization is set.
+            "plan_identity": "id-demo-pay-plan-pd-nwe-01", "state_resource_group": "rg-demo-pay-state-pd-nwe-01", "state_account": "stdemopaypdnwe01",
+            "subnet": "snet-%s", "peering_to_hub": "peer-payments-prod-to-hub", "peering_from_hub": "peer-hub-to-payments-prod",
+        })
+        self.assertEqual(names["network_security_groups"], {"default": "nsg-demo-pay-default-pd-nwe-01"})
+        text = (self.repo / NAMES).read_text()
+        self.assertTrue(text.startswith("# The names vending gave each landing zone"))
+        self.assertIn("payments-prod:\n  network_resource_group: rg-demo-pay-net-pd-nwe-01\n", text)
+        self.assertIn("  network_security_groups:\n    default: nsg-demo-pay-default-pd-nwe-01\n", text)
+
+    def test_the_state_account_has_no_purpose_and_a_recorded_one_keeps_its_name(self):
+        # At the longest codes customer.yaml allows, a purpose would take it past Azure's 24 characters.
+        longest = naming.Naming(org="abcd", template=naming.parse(naming.TEMPLATE, "t", []), environments={"prod": "prod"},
+                                regions={"norwayeast": "nweab"})
+        kind, purpose = vending.NAMED["state_account"]
+        self.assertEqual(naming.render(longest, kind, app="paymt", env="prod", region="norwayeast", purpose=purpose), "stabcdpaymtprodnweab01")
+        with self.assertRaisesRegex(ConfigError, "27 characters, 3 more than Azure allows"):
+            naming.render(longest, kind, app="paymt", env="prod", region="norwayeast", purpose="state")
+        # A landing zone named before keeps its account: the record wins, and allocating again changes nothing.
+        self.allocate()
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("stdemopaypdnwe01", "stdemopaystatepdnwe01"))
+        recorded = (self.repo / NAMES).read_text()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]["state_account"], "stdemopaystatepdnwe01")
+        self.assertEqual(self.allocate(), [])
+        self.assertEqual((self.repo / NAMES).read_text(), recorded)
+
+    def test_a_name_once_given_stays_until_renewed(self):
+        self.allocate()
+        # customer.yaml's naming changes, through governance's contract: what has names keeps them; a new
+        # landing zone, and a new subnet's NSG, take the new template.
+        named = {**GOVERNANCE, "naming": {"org": "acme", "environments": {"prod": "pr"}}}
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n")
+        self.write("landing-zones/payments/test.yaml", DEV.replace("44", "55"))
+        self.allocate(governance=named)
+        configs = build(self.repo, named, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["names"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
+        self.assertEqual(configs["payments-prod"]["names"]["network_security_groups"], {
+            "default": "nsg-demo-pay-default-pd-nwe-01", "web": "nsg-acme-pay-web-pr-nwe-01"})
+        self.assertEqual(configs["payments-test"]["names"]["virtual_network"], "vnet-acme-pay-te-nwe-01")
+        # Renewed: the template's names, all of them.
+        record, changes = give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
+        self.assertIn("payments-prod: virtual_network vnet-demo-pay-pd-nwe-01, now vnet-acme-pay-pr-nwe-01", changes)
+        self.assertNotIn("payments-prod: network_security_groups.web", "\n".join(changes))  # the template's already
+        self.assertFalse([c for c in changes if c.startswith(("payments-dev", "payments-test"))])
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        with self.assertRaisesRegex(ConfigError, "no landing zone payments-uat; the landing zones are payments-dev, payments-prod, payments-test"):
+            give_names(self.repo, ip_plan(self.repo), named, {"payments-uat"})
+        # Renewed without a short name the template can use: refused, the record left as it is.
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: PAY"))
+        with self.assertRaisesRegex(ConfigError, "short_name is 'PAY'; it must be 2 to 5 lower-case letters and digits"):
+            give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
+
+    def test_a_pull_request_keeps_only_the_names_its_base_has(self):
+        self.allocate()
+        base = {k: v for k, v in recorded_names(self.repo).items() if k != "payments-dev"}
+        # payments-dev came with this pull request: a short name changed in review still counts.
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=base)
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pm-dv-nwe-01")
+        self.assertEqual(record["payments-prod"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
+        self.assertEqual([c for c in changes if c.startswith("payments-prod")], [])
+        # Without a base, as on main and with --check: everything recorded stays.
+        self.assertEqual(give_names(self.repo, ip_plan(self.repo), GOVERNANCE)[0]["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+
+    def test_the_names_command_renews_a_landing_zone(self):
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", GOVERNANCE))
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo)), 0)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: pm"))
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # a short name changed renames nothing
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["mlz", "names", "--repo", str(self.repo), "--renew", "payments-prod"]), redirect_stdout(out):
+            self.assertEqual(main(), 0)
+        self.assertIn("payments-prod: virtual_network vnet-demo-pay-pd-nwe-01, now vnet-demo-pm-pd-nwe-01", out.getvalue())
+        self.assertIn("vnet-demo-pm-pd-nwe-01", (self.repo / NAMES).read_text())
+        self.assertIn("vnet-demo-pay-dv-nwe-01", (self.repo / NAMES).read_text())
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)  # the allocator keeps what was renewed
+
+    def test_an_environment_without_a_short_name_is_asked_for_once_and_only_when_needed(self):
+        self.allocate()
+        self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "55"))
+        plan, _, _ = allocate(self.repo, PLATFORM)
+        with self.assertRaises(ConfigError) as caught:
+            give_names(self.repo, plan, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertEqual(message.count("landing-zones/payments/hotfix: the environment 'hotfix' has no short name for names"), 1)
+        self.assertNotIn("payments-prod", message)  # its names are recorded: nothing needs the template
+        record, _ = give_names(self.repo, plan, {**GOVERNANCE, "naming": {"environments": {"hotfix": "hf"}}})
+        self.assertEqual(record["payments-hotfix"]["virtual_network"], "vnet-demo-pay-hf-nwe-01")
+
+    def test_a_removed_subnet_or_landing_zone_keeps_its_names_until_released(self):
+        two = PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n"
+        self.write("landing-zones/payments/prod.yaml", two)
+        self.allocate()
+        named = {**GOVERNANCE, "naming": {"org": "acme"}}  # the template changes meanwhile
+        # The web subnet and payments-dev are removed: their blocks are held, and so are their names.
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.allocate(governance=named)
+        record = recorded_names(self.repo)
+        self.assertEqual(record["payments-prod"]["network_security_groups"]["web"], "nsg-demo-pay-web-pd-nwe-01")
+        self.assertEqual(record["payments-dev"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        # Asked for again before they are released: the same resources, under the same names.
+        self.write("landing-zones/payments/prod.yaml", two)
+        self.write("landing-zones/payments/dev.yaml", DEV)
+        self.allocate(governance=named)
+        configs = build(self.repo, named, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["names"]["network_security_groups"]["web"], "nsg-demo-pay-web-pd-nwe-01")
+        self.assertEqual(configs["payments-dev"]["names"]["virtual_network"], "vnet-demo-pay-dv-nwe-01")
+        # Renewed while web is removed: what it has now is renamed, web's NSG keeps its name while its block is held.
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        self.allocate(governance=named)
+        record, _ = give_names(self.repo, ip_plan(self.repo), named, {"payments-prod"})
+        self.assertEqual(record["payments-prod"]["network_security_groups"], {
+            "default": "nsg-acme-pay-default-pd-nwe-01", "web": "nsg-demo-pay-web-pd-nwe-01"})
+        self.assertEqual(record["payments-prod"]["virtual_network"], "vnet-acme-pay-pd-nwe-01")
+        # Released, through the command: the names go with the addresses.
+        self.write("_generated/platform.yaml", render("platform", PLATFORM))
+        self.write("_generated/governance.yaml", render("governance", named))
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.allocate(governance=named)
+        for key in ("payments-prod", "payments-dev"):
+            self.assertEqual(self.cli("release", "--repo", str(self.repo), key), 0)
+        record = recorded_names(self.repo)
+        self.assertEqual(sorted(record), ["payments-prod"])
+        self.assertNotIn("web", record["payments-prod"]["network_security_groups"])
+        self.assertEqual(self.cli("allocate", "--repo", str(self.repo), "--check"), 0)
+
+    def test_a_recorded_name_is_checked_and_a_missing_one_asked_for(self):
+        self.allocate()
+        for wrong in ("null", "false", "[]"):  # the allocator writes {} for an entry without names, never these
+            self.write(NAMES, f"payments-prod: {wrong}\n")
+            self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+            # Nor an NSG map like these: it leaves the key out rather than write one empty.
+            self.write(NAMES, f"payments-prod:\n  virtual_network: vnet-x\n  network_security_groups: {wrong}\n")
+            self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write(NAMES, "payments-prod:\n  network_security_groups: {}\n")
+        self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write(NAMES, (self.repo / NAMES).read_text().replace("vnet-demo-pay-pd-nwe-01", "vnet demo"))
+        self.assertIn("_generated/names.yaml: payments-prod is not as the IP allocator writes it; restore the file from git.", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    default: 26\n    web: 27\n")
+        plan, _, retired = allocate(self.repo, PLATFORM)
+        self.write(IP_PLAN, render_plan(plan, retired))
+        self.assertIn("payments-prod: _generated/names.yaml has no name for web yet; run the IP allocator", self.problems(build, GOVERNANCE, PLATFORM))
+        (self.repo / NAMES).unlink()
+        self.assertIn("payments-prod: no names yet; run the IP allocator (./mlz allocate --repo .).", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_explicit_names_win_and_are_checked(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  virtual_network: vnet-payments-legacy\n  network_security_groups:\n    default: nsg-legacy\n")
+        names = build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual((names["virtual_network"], names["network_security_groups"]["default"], names["route_table"]), ("vnet-payments-legacy", "nsg-legacy", "rt-demo-pay-pd-nwe-01"))
+        self.write("landing-zones/payments/prod.yaml", PROD + "names:\n  vnet: x\n  route_table: 'rt bad'\n  network_security_groups:\n    web: nsg-web\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: names.vnet is not a name vending gives", problems)
+        self.assertIn("landing-zones/payments/prod: route_table name rt bad has characters Azure does not allow", problems)
+        self.assertIn("landing-zones/payments/prod: names.network_security_groups.web is not one of its subnets (default)", problems)
+        for wrong in ("false", "[]", "''"):
+            self.write("landing-zones/payments/prod.yaml", PROD + f"names:\n  network_security_groups: {wrong}\n")
+            self.assertIn("landing-zones/payments/prod: names.network_security_groups maps a subnet to its NSG's name.", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/prod.yaml", PROD)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "names:\n  route_table: rt-x\n")
+        self.assertIn("landing-zones/payments/workload-defaults: names are one landing zone's own", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_two_of_one_type_side_by_side_are_named_apart(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
+        self.allocate()
+        # A template without {purpose} and {nn} gives both resource groups, and both NSGs, one name.
+        bare = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}"}}
+        renamed = lambda: give_names(self.repo, ip_plan(self.repo), bare, {"payments-prod"})
+        problems = self.problems(lambda _: renamed())
+        self.assertIn("landing-zones/payments/prod: network_resource_group and identity_resource_group would both be rg-demo-pay-pd-nwe, "
+                      "and Azure needs its resource groups named apart; put {purpose} or {nn} in the template (naming.template, or "
+                      "naming.templates.<type>), or set one under names:.", problems)
+        self.assertIn("network_security_groups.app and network_security_groups.web would both be nsg-demo-pay-pd-nwe", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
+                   "names:\n  identity_resource_group: RG-demo-pay-pd-nwe\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
+                   "  network_security_groups:\n    web: nsg-pay-web\n")
+        problems = self.problems(lambda _: renamed())  # Azure ignores case in a resource group's name
+        self.assertIn("would both be RG-demo-pay-pd-nwe", problems)
+        self.assertNotIn("NSGs", problems)
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n"
+                   "names:\n  identity_resource_group: rg-pay-identity\n  state_resource_group: rg-pay-state\n  plan_identity: id-pay-plan\n"
+                   "  network_security_groups:\n    web: nsg-pay-web\n")
+        self.allocate(governance=bare)
+        (self.repo / NAMES).unlink()
+        self.allocate(governance=bare)
+        names = build(self.repo, bare, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual((names["network_resource_group"], names["identity_resource_group"]), ("rg-demo-pay-pd-nwe", "rg-pay-identity"))
+
+    def test_without_purpose_mlz_core_numbers_its_own(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n    web: 26\n    app: 26\n")
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        self.allocate(governance=flat)
+        names = build(self.repo, flat, PLATFORM)["payments-prod"]["names"]
+        self.assertEqual([names[item] for item in ("network_resource_group", "identity_resource_group", "state_resource_group", "deploy_identity", "plan_identity")],
+                         ["rg-demo-pay-pd-nwe-01", "rg-demo-pay-pd-nwe-02", "rg-demo-pay-pd-nwe-03", "id-demo-pay-pd-nwe-01", "id-demo-pay-pd-nwe-02"])
+        # NSGs named in one allocation take their numbers in the order of their subnets' names.
+        self.assertEqual(names["network_security_groups"], {"app": "nsg-demo-pay-pd-nwe-01", "web": "nsg-demo-pay-pd-nwe-02"})
+        self.assertEqual(vending.NUMBERS, {"network_resource_group": 1, "identity_resource_group": 2, "state_resource_group": 3,
+                                           "deploy_identity": 1, "plan_identity": 2})  # only ever added to: a number is in a name
+
+    def test_an_nsg_s_number_never_moves(self):
+        (self.repo / "landing-zones/payments/dev.yaml").unlink()
+        flat = {**GOVERNANCE, "naming": {"template": "{type}-{org}-{app}-{env}-{region}-{nn}"}}
+        nsgs = lambda: build(self.repo, flat, PLATFORM)["payments-prod"]["names"]["network_security_groups"]
+        subnets = lambda *names: self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  subnets:\n" + "".join(f"    {n}: 27\n" for n in names))
+        subnets("web", "app")
+        self.allocate(governance=flat)
+        subnets("db", "web", "app")  # a new subnet takes the next number, wherever it is in the file and whatever its name
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs(), {"app": "nsg-demo-pay-pd-nwe-01", "web": "nsg-demo-pay-pd-nwe-02", "db": "nsg-demo-pay-pd-nwe-03"})
+        # web removed: its block, and so its NSG's name, stay held until released, so the next subnet takes 04, not 02.
+        subnets("db", "app", "api")
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs(), {"app": "nsg-demo-pay-pd-nwe-01", "db": "nsg-demo-pay-pd-nwe-03", "api": "nsg-demo-pay-pd-nwe-04"})
+        # Released once its NSG is gone: 02 is free again for the next new subnet.
+        plan, retired, _ = release(self.repo, "payments-prod")
+        self.write(IP_PLAN, render_plan(plan, retired))
+        subnets("db", "app", "api", "cache")
+        self.allocate(governance=flat)
+        self.assertEqual(nsgs()["cache"], "nsg-demo-pay-pd-nwe-02")
+        self.assertEqual(self.allocate(governance=flat), [])  # allocating again moves nothing
+
+    def test_the_short_name_is_set_once_for_the_workload(self):
+        self.allocate()
+        self.write("landing-zones/payments/prod.yaml", PROD + "short_name: xyz\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "short_name: all\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/prod: short_name is the workload's, so it goes in landing-zones/payments/workload-defaults.yaml.", problems)
+        self.assertIn("defaults/landing-zone-defaults: short_name is the workload's, so it goes in landing-zones/payments/workload-defaults.yaml.", problems)
+        self.assertNotIn("landing-zones/payments/workload-defaults:", problems)
+
+    def test_a_workload_may_not_take_a_platform_part_s_short_name(self):
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: hub"))
+        self.allocate()
+        self.assertIn("landing-zones: workload payments has the short name hub, which names the platform's hub (customer.yaml's naming.platform); "
+                      "give it another short_name.", self.problems(build, GOVERNANCE, PLATFORM))
+        # customer.yaml gives the hub another: hub is free, con is not.
+        moved = {**GOVERNANCE, "naming": {"platform": {"hub": "con"}}}
+        build(self.repo, moved, PLATFORM)
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: con"))
+        (self.repo / NAMES).unlink()
+        self.allocate(governance=moved)
+        self.assertIn("has the short name con, which names the platform's hub", self.problems(build, moved, PLATFORM))
+
+    def test_a_short_name_that_is_not_text_is_reported_not_a_crash(self):
+        self.allocate()
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: [pay]"))
+        self.write("landing-zones/web/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: 42"))
+        self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("landing-zones/payments/workload-defaults: short_name is ['pay']; it must be 2 to 5", problems)
+        self.assertIn("landing-zones/web/workload-defaults: short_name is 42; it must be 2 to 5", problems)
+
+    def test_the_short_name_is_the_workload_s_own_when_it_fits(self):
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/web/workload-defaults.yaml", WORKLOAD.replace("short_name: pay\n", ""))
+        self.write("landing-zones/web/prod.yaml", "subscription: 55555555-5555-5555-5555-555555555555\n")
+        plan, _, retired = allocate(self.repo, PLATFORM)
+        self.write(IP_PLAN, render_plan(plan, retired))
+        # No names without a short name: the allocator says why, once, and gives nothing.
+        with self.assertRaises(ConfigError) as caught:
+            give_names(self.repo, plan, GOVERNANCE)
+        message = str(caught.exception)
+        self.assertEqual(message.count("landing-zones/payments/workload-defaults.yaml: short_name is needed, since the workload's name 'payments' is not 2 to 5"), 1)
+        self.assertNotIn("landing-zones/web", message)
+        self.assertIn("short_name is needed", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", "short_name: web"))
+        self.assertIn("workloads payments, web share the short name web", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD)
+        self.allocate()  # payments' names, now that it has a short name
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual(configs["web-prod"]["names"]["virtual_network"], "vnet-demo-web-pd-nwe-01")
+        self.assertEqual(configs["payments-prod"]["names"]["virtual_network"], "vnet-demo-pay-pd-nwe-01")
 
     def test_a_landing_zone_without_a_range_is_refused_until_allocated(self):
         self.allocate()
@@ -311,11 +660,11 @@ class VendingTest(unittest.TestCase):
         self.assertIn("payments/dev: budget.montly is not a setting; use contacts, monthly", message)
 
     def test_a_problem_names_the_file_that_set_the_value_once(self):
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "network:\n  size: 30\n")
-        self.write("landing-zones/payments/_workload.yaml", WORKLOAD + "tags:\n  Team: [a]\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "network:\n  size: 30\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "tags:\n  Team: [a]\n")
         message = self.problems(build, GOVERNANCE, PLATFORM)
-        self.assertEqual(message.count("landing-zones/_defaults/all: network.size is a prefix length"), 1)
-        self.assertIn("landing-zones/payments/_workload: tags.Team is one value", message)
+        self.assertEqual(message.count("defaults/landing-zone-defaults: network.size is a prefix length"), 1)
+        self.assertIn("landing-zones/payments/workload-defaults: tags.Team is one value", message)
         self.write("landing-zones/payments/prod.yaml", PROD + "network:\n  size: 31\n")
         self.assertIn("landing-zones/payments/prod: network.size", self.problems(build, GOVERNANCE, PLATFORM))
 
@@ -346,7 +695,7 @@ class VendingTest(unittest.TestCase):
         self.assertIn("budget is a group of settings (contacts, monthly), not 500", message)
         self.assertIn("network is a group of settings (size, subnets), not 'big'", message)
         self.assertIn("tags maps each extra tag to its value", message)
-        self.assertIn("github is a group of settings (organization, repo), not 'payments'", message)
+        self.assertIn("github is a group of settings (create, organization, repo, team), not 'payments'", message)
         self.assertIn("location is one value", message)
         self.assertIn("location ['norwayeast'] has no hub", self.problems(allocate, PLATFORM))
 
@@ -354,13 +703,129 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n")
         self.allocate()
         self.assertIn("github.repo needs github.organization", self.problems(build, GOVERNANCE, PLATFORM))
-        self.write("landing-zones/_defaults/all.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.assertIn("payments-dev: _generated/names.yaml has no name for repository yet", self.problems(build, GOVERNANCE, PLATFORM))
+        self.allocate()
         configs = build(self.repo, GOVERNANCE, PLATFORM)
-        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra"})
-        self.assertIsNone(configs["payments-dev"]["github"])
+        # An existing repo, which vending only trusts; and one vending makes, named by naming.repository.
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "payments-infra", "create": False, "team": "demo-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending."})
+        self.assertEqual(configs["payments-dev"]["github"], {"organization": "demo-org", "repo": "payments-dev", "create": True, "team": "demo-devs", "description": "Workload repo of landing zone payments-dev, made by mlz-core's vending.", "bypass_team": None})
+        self.assertNotIn("repository", configs["payments-prod"]["names"])
+        # Governance's bypass team (bootstrap.yaml's), for the rules of a repo vending makes only.
+        configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins"}}, PLATFORM)
+        self.assertEqual(configs["payments-dev"]["github"]["bypass_team"], "acme-admins")
+        self.assertNotIn("approval", configs["payments-dev"]["github"])  # Enterprise: as before
+        # On GitHub Team, governance's contract says so, and a repo vending makes is written Team's way.
+        configs = build(self.repo, {**GOVERNANCE, "github": {"bypass_team": "acme-admins", "plan": "team"}}, PLATFORM)
+        self.assertEqual(configs["payments-dev"]["github"]["approval"], "pull-request")
+        self.assertNotIn("bypass_team", configs["payments-prod"]["github"])
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
+        self.assertIsNone(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["github"])
+
+    def test_a_repo_vending_makes_gets_the_landing_zone_s_values(self):
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: false\n")
+        own = {**GOVERNANCE, "naming": {"org": "dmo", "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"}}}
+        self.allocate(governance=own)
+        configs = build(self.repo, own, PLATFORM)
+        # mlz.auto.tfvars.json's, for the team's Terraform and modules/naming: codes resolved, templates as written; and
+        # the landing zone's network by names, its tags and the groups vending owns (docs/vending.md).
+        prod, names = configs["payments-prod"], configs["payments-prod"]["names"]
+        workload = prod["workload"]
+        self.assertEqual({k: workload[k] for k in ("landing_zone", "location", "org", "app", "env", "region", "template", "templates")}, {
+            "landing_zone": "payments-prod", "location": "norwayeast",
+            "org": "dmo", "app": "pay", "env": "pd", "region": "nwe", "template": "{type}-{org}-{app}-{purpose}-{env}-{region}-{nn}",
+            "templates": {"key_vault": "{type}{org}{app}{purpose}{env}{nn}"},
+        })
+        self.assertEqual(workload["network"], {
+            "resource_group": names["network_resource_group"], "virtual_network": names["virtual_network"],
+            "address_space": prod["network"]["address_space"],
+            "subnets": {name: {"name": f"snet-{name}", "address_prefix": prefix} for name, prefix in prod["network"]["subnets"].items()},
+            "dns_servers": prod["network"]["dns_servers"],
+        })
+        self.assertEqual(workload["tags"], prod["tags"])  # the tags vending gives what it makes
+        self.assertEqual(workload["resource_groups"], {"network": names["network_resource_group"], "identity": names["identity_resource_group"],
+                                                       "state": names["state_resource_group"]})
+        self.assertEqual(workload["platform_owns"], sorted(workload["resource_groups"].values()))
+        # The starter declares every value vending writes: Terraform would drop one it does not, without a word.
+        starter = (Path(__file__).resolve().parents[2] / "starter" / "mlz-workload" / "variables.tf").read_text()
+        declared = set(re.findall(r"^\s+([a-z_]+)\s+=", starter, re.M))
+        self.assertEqual(set(workload) - declared, set())
+        self.assertEqual(set(workload["network"]) - declared, set())
+        # And each subnet's attributes, in the subnets' own object type: the example reads subnet.name.
+        subnet_type = re.search(r"subnets = map\(object\(\{(.*?)\}\)\)", starter, re.S).group(1)
+        subnet_declared = set(re.findall(r"^\s+([a-z_]+)\s+=", subnet_type, re.M))
+        for subnet in workload["network"]["subnets"].values():
+            self.assertEqual(set(subnet) - subnet_declared, set())
+        self.assertIsNone(configs["payments-dev"]["workload"])  # no repo of vending's
+        # An environment's code taken out of customer.yaml after its names were recorded: said where, not a crash.
+        self.write("landing-zones/payments/hotfix.yaml", DEV.replace("44", "77").replace("github:\n  create: false\n", ""))
+        self.allocate(governance={**own, "naming": {**own["naming"], "environments": {"hotfix": "hf"}}})
+        self.assertIn("landing-zones/payments/hotfix: its workload repo's values: the environment 'hotfix' has no short name; add it under "
+                      "naming.environments in customer.yaml.", self.problems(build, own, PLATFORM))
+
+    def test_a_repo_vending_makes_needs_its_team(self):
+        # Every apply needs someone to approve it: in a repo vending makes, the owning team.
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n")
+        self.allocate()
+        self.assertIn("landing-zones/payments/prod: github.team is needed: the GitHub team that owns the repo vending makes", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "github:\n  create: false\n")
+        build(self.repo, GOVERNANCE, PLATFORM)  # no repo, so no team needed
+
+    def test_the_workload_repo_s_settings_are_checked(self):
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/prod.yaml", PROD + "github:\n  repo: payments-infra\n  create: true\n  team: Payments Devs\n")
+        self.write("landing-zones/payments/dev.yaml", DEV + "github:\n  create: 'no'\n")
+        self.allocate()
+        problems = self.problems(build, GOVERNANCE, PLATFORM)
+        self.assertIn("github.repo names an existing repo, which vending never creates", problems)
+        self.assertIn("github.team 'Payments Devs' is a GitHub team's slug, as in its URL", problems)
+        self.assertIn("landing-zones/payments/dev: github.create is true or false, without quotes.", problems)
+
+    def test_the_workload_repo_takes_customer_yaml_s_template_and_keeps_its_name(self):
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        self.write("landing-zones/payments/workload-defaults.yaml", WORKLOAD + "github:\n  team: payments-devs\n")
+        own = {**GOVERNANCE, "naming": {"repository": "{org}-{app}-{env}"}}
+        self.allocate(governance=own)
+        configs = build(self.repo, own, PLATFORM)
+        self.assertEqual(configs["payments-prod"]["github"], {"organization": "demo-org", "repo": "demo-payments-prod", "create": True, "team": "payments-devs", "description": "Workload repo of landing zone payments-prod, made by mlz-core's vending.", "bypass_team": None})
+        # Recorded, as every landing zone name is: a changed template renames nothing until renewed.
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-prod"]["github"]["repo"], "demo-payments-prod")
+        record, changes = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, {"payments-prod"})
+        self.assertIn("payments-prod: repository demo-payments-prod, now payments-prod", changes)
+        # A pull request's run keeps what its base has, the repo's name too: a changed template renames nothing there either.
+        record, _ = give_names(self.repo, ip_plan(self.repo), GOVERNANCE, base=recorded_names(self.repo))
+        self.assertEqual(record["payments-prod"]["repository"], "demo-payments-prod")
+
+    def test_no_two_landing_zones_get_one_repo(self):
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + "github:\n  organization: demo-org\n  team: demo-devs\n")
+        # {app}{env} without a dash: ab/preprod and abpre/prod come out the same.
+        for workload, env, sub in (("ab", "preprod", "55"), ("abpre", "prod", "66")):
+            self.write(f"landing-zones/{workload}/workload-defaults.yaml", WORKLOAD.replace("short_name: pay", f"short_name: {workload}"))
+            self.write(f"landing-zones/{workload}/{env}.yaml", DEV.replace("44", sub))
+        joined = {**GOVERNANCE, "naming": {"repository": "{app}{env}"}}
+        self.allocate(governance=joined)
+        self.assertIn("landing-zones: ab-preprod, abpre-prod would share the repo demo-org/abpreprod, which vending makes for ab-preprod, abpre-prod",
+                      self.problems(build, joined, PLATFORM))
+        # A repo vending makes, with the name another landing zone's existing repo has, ignoring case. The names given
+        # under the joined template are recorded, so they go first.
+        (self.repo / NAMES).unlink()
+        self.allocate()
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: AB-Preprod\n")
+        self.assertIn("would share the repo demo-org/ab-preprod, which vending makes for ab-preprod", self.problems(build, GOVERNANCE, PLATFORM))
+        # Not text, or empty: reported by the check, not a crash here.
+        for wrong in ("42", "''", "false"):
+            self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + f"github:\n  repo: {wrong}\n")
+            self.assertIn("is a repository name in the organization", self.problems(build, GOVERNANCE, PLATFORM))
+        # Two landing zones naming one existing repo, which vending makes for neither: theirs to share.
+        self.write("landing-zones/ab/preprod.yaml", DEV.replace("44", "55") + "github:\n  repo: shared-infra\n")
+        self.write("landing-zones/abpre/prod.yaml", DEV.replace("44", "66") + "github:\n  repo: shared-infra\n")
+        self.allocate()
+        build(self.repo, GOVERNANCE, PLATFORM)
 
     def test_budget_alerts_go_to_the_owner_without_contacts(self):
-        self.write("landing-zones/_defaults/all.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
+        self.write("defaults/landing-zone-defaults.yaml", "location: norwayeast\nbudget:\n  monthly: 500\n")
         self.allocate()
         self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["budget"]["contacts"], ["payments@demo.example"])
 
@@ -368,6 +833,56 @@ class VendingTest(unittest.TestCase):
         self.write("landing-zones/payments/dev.yaml", PROD)
         self.allocate()
         self.assertIn("is used by more than one landing zone", self.problems(build, GOVERNANCE, PLATFORM))
+
+    def test_without_a_subscription_vending_makes_one_where_billing_scope_says(self):
+        ea = "/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"
+        self.write("defaults/landing-zone-defaults.yaml", DEFAULTS + f"billing_scope: {ea}\n")
+        self.write("landing-zones/payments/dev.yaml", "budget: null\n")
+        self.allocate()
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        # Made: no ID until vending's apply makes it, named from the template and recorded like the other names.
+        self.assertIsNone(configs["payments-dev"]["subscription_id"])
+        self.assertEqual(configs["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": ea, "name": "sub-demo-pay-dv-nwe-01"})
+        self.assertIn("payments-dev:\n  network_resource_group: rg-demo-pay-net-dv-nwe-01\n", (self.repo / NAMES).read_text())
+        self.assertIn("  subscription: sub-demo-pay-dv-nwe-01\n", (self.repo / NAMES).read_text())
+        # Handed over: the billing scope above is not used, and nothing is made.
+        self.assertEqual(configs["payments-prod"]["subscription_id"], "33333333-3333-3333-3333-333333333333")
+        self.assertIsNone(configs["payments-prod"]["subscription"])
+        self.assertNotIn("subscription", configs["payments-prod"]["names"])
+        # Its own name under names:, used and not recorded; an MCA invoice section is a billing scope too.
+        mca = "/providers/Microsoft.Billing/billingAccounts/a1b2:c3d4_2019-05-31/billingProfiles/AB12-CD34/invoiceSections/EF56-GH78"
+        self.write("landing-zones/payments/dev.yaml", f"billing_scope: {mca}\nnames:\n  subscription: Payments Dev\n")
+        self.assertIn("landing-zones/payments/dev: subscription name Payments Dev has characters Azure does not allow there", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/dev.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
+        self.allocate()
+        self.assertEqual(build(self.repo, GOVERNANCE, PLATFORM)["payments-dev"]["subscription"], {"alias": "demo-payments-dev", "billing_scope": mca, "name": "payments_dev"})
+        self.assertNotIn("  subscription: ", (self.repo / NAMES).read_text())
+        # Two landing zones with one display name still get a subscription each: each has its own alias.
+        self.write("landing-zones/payments/prod.yaml", f"billing_scope: {mca}\nnames:\n  subscription: payments_dev\n")
+        self.allocate()
+        configs = build(self.repo, GOVERNANCE, PLATFORM)
+        self.assertEqual((configs["payments-dev"]["subscription"]["alias"], configs["payments-prod"]["subscription"]["alias"]),
+                         ("demo-payments-dev", "demo-payments-prod"))
+
+    def test_a_billing_scope_is_an_enrollment_account_or_an_invoice_section(self):
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321"), "EA")
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/billingProfiles/P/invoiceSections/S"), "MCA")
+        self.assertEqual(agreement("/providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c"), "MPA")
+        self.assertIsNone(agreement("/providers/Microsoft.Billing/billingAccounts/a/billingProfiles/P"))
+        self.write("landing-zones/payments/dev.yaml", "budget: null\n")
+        self.allocate()
+        self.assertIn("landing-zones/payments/dev: subscription is required, or billing_scope for vending to make one", self.problems(build, GOVERNANCE, PLATFORM))
+        self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a/billingProfiles/P\n")
+        self.assertIn("billing_scope", self.problems(build, GOVERNANCE, PLATFORM))
+        # An alias longer than Azure takes, from the longest root and names there are: refused, not cut.
+        workload, env = "w" * 24, "e" * 24
+        self.write(f"landing-zones/{workload}/{env}.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/1/enrollmentAccounts/2\n")
+        alias = f"{'r' * 16}-{workload}-{env}"
+        self.assertIn(f"landing-zones/{workload}/{env}: the alias vending makes its subscription by, {alias}, is more than Azure's 63 characters",
+                      self.problems(build, {**GOVERNANCE, "root": "r" * 16}, PLATFORM))
+        # A CSP customer's subscription is made in Fortytwo's Partner Center, then handed over.
+        self.write("landing-zones/payments/dev.yaml", "billing_scope: /providers/Microsoft.Billing/billingAccounts/a:b_2019-05-31/customers/c\n")
+        self.assertIn("a CSP customer's subscription (Microsoft Partner Agreement) is made from Fortytwo's Partner Center", self.problems(build, GOVERNANCE, PLATFORM))
 
     def test_a_landing_zone_split_into_chunks_reads_the_same(self):
         self.allocate()

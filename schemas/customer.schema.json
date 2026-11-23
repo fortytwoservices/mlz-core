@@ -175,6 +175,1604 @@
           "type": "string"
         }
       }
+    },
+    "naming": {
+      "description": "How mlz-core names what it creates (docs/naming.md).",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "org": {
+          "type": "string",
+          "description": "The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).",
+          "pattern": "^[a-z0-9]{2,4}$"
+        },
+        "template": {
+          "type": "string",
+          "description": "How names are made (default: {type}-{org}-{app}-{purpose}-{env}-{region}-{nn}). Tokens in braces, dashes and lower-case text; an empty {purpose} drops out."
+        },
+        "templates": {
+          "description": "A template for one type, for the 24-character ones (storage_account, key_vault).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "application_gateway",
+              "azure_firewall",
+              "bastion_host",
+              "budget",
+              "data_collection_rule",
+              "dns_resolver",
+              "dns_resolver_inbound_endpoint",
+              "dns_resolver_outbound_endpoint",
+              "firewall_policy",
+              "github_network_settings",
+              "key_vault",
+              "log_analytics_workspace",
+              "network_interface",
+              "network_security_group",
+              "private_endpoint",
+              "public_ip_address",
+              "resource_group",
+              "route_table",
+              "storage_account",
+              "subscription",
+              "user_assigned_identity",
+              "virtual_machine_scale_set",
+              "virtual_network"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "environments": {
+          "description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (dev: dv, test: te, uat: ut, sit: st, qa: qa, preprod: pp, sandbox: sb, dr: dr, prod: pd).",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{1,4}$"
+          }
+        },
+        "regions": {
+          "description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "australiacentral",
+              "australiacentral2",
+              "australiaeast",
+              "australiasoutheast",
+              "austriaeast",
+              "belgiumcentral",
+              "brazilsouth",
+              "brazilsoutheast",
+              "canadacentral",
+              "canadaeast",
+              "centralindia",
+              "centralus",
+              "centraluseuap",
+              "chilecentral",
+              "denmarkeast",
+              "eastasia",
+              "eastus",
+              "eastus2",
+              "eastus2euap",
+              "eastus3",
+              "francecentral",
+              "francesouth",
+              "germanynorth",
+              "germanywestcentral",
+              "indiasouthcentral",
+              "indonesiacentral",
+              "israelcentral",
+              "israelnorthwest",
+              "italynorth",
+              "japaneast",
+              "japanwest",
+              "jioindiacentral",
+              "jioindiawest",
+              "koreacentral",
+              "koreasouth",
+              "malaysiasouth",
+              "malaysiawest",
+              "mexicocentral",
+              "newzealandnorth",
+              "northcentralus",
+              "northeastus5",
+              "northeurope",
+              "norwayeast",
+              "norwaywest",
+              "polandcentral",
+              "qatarcentral",
+              "southafricanorth",
+              "southafricawest",
+              "southcentralus",
+              "southcentralus2",
+              "southeastasia",
+              "southeastus",
+              "southeastus3",
+              "southeastus5",
+              "southindia",
+              "southwestus",
+              "spaincentral",
+              "swedencentral",
+              "swedensouth",
+              "switzerlandnorth",
+              "switzerlandwest",
+              "taiwannorth",
+              "taiwannorthwest",
+              "uaecentral",
+              "uaenorth",
+              "uksouth",
+              "ukwest",
+              "westcentralus",
+              "westeurope",
+              "westindia",
+              "westus",
+              "westus2",
+              "westus3"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{2,5}$"
+          }
+        },
+        "repository": {
+          "type": "string",
+          "description": "How a landing zone's workload repo is named (default: {app}-{env}), with long names: {app} the workload's folder, {env} the landing zone's file, {org} the customer's code. Both {app} and {env} are needed."
+        },
+        "platform": {
+          "description": "A part of the platform to its short name in names, replacing mlz-core's (hub: hub, dns: dns, management: mgt, identity: idn, bootstrap: mlz). The platform's environment is prod.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "propertyNames": {
+            "enum": [
+              "hub",
+              "dns",
+              "management",
+              "identity",
+              "bootstrap"
+            ]
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[a-z0-9]{2,5}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "advanced": {
+      "description": "Module inputs mlz-core leaves at the module's default, by module call (alz, management); anything else is refused with what owns it.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "alz": {
+          "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/governance.md lists them). Anything else is refused with what owns it.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "management_group_hierarchy_settings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "default_management_group_name": {
+                  "type": "string"
+                },
+                "require_authorization_for_group_creation": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "update_existing": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "policy_assignment_non_compliance_message_settings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "default_message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "merge_mode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "policy_assignments_to_modify": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "policy_assignments": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "object",
+                      "properties": {
+                        "enforcement_mode": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "identity": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "identity_ids": {
+                          "type": [
+                            "array",
+                            "null"
+                          ],
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "parameters": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "additionalProperties": {
+                            "type": "string"
+                          }
+                        },
+                        "not_scopes": {
+                          "type": [
+                            "array",
+                            "null"
+                          ],
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "non_compliance_messages": {
+                          "type": [
+                            "array",
+                            "null"
+                          ],
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "message": {
+                                "type": "string"
+                              },
+                              "policy_definition_reference_id": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "resource_selectors": {
+                          "type": [
+                            "array",
+                            "null"
+                          ],
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "name": {
+                                "type": "string"
+                              },
+                              "resource_selector_selectors": {
+                                "type": [
+                                  "array",
+                                  "null"
+                                ],
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "in": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "not_in": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "overrides": {
+                          "type": [
+                            "array",
+                            "null"
+                          ],
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "type": "string"
+                              },
+                              "override_selectors": {
+                                "type": [
+                                  "array",
+                                  "null"
+                                ],
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "kind": {
+                                      "type": "string"
+                                    },
+                                    "in": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "not_in": {
+                                      "type": [
+                                        "array",
+                                        "null"
+                                      ],
+                                      "items": {
+                                        "type": "string"
+                                      }
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              }
+                            },
+                            "additionalProperties": false
+                          }
+                        },
+                        "creation_enabled": {
+                          "type": [
+                            "boolean",
+                            "null"
+                          ]
+                        },
+                        "role_assignments_enabled": {
+                          "type": [
+                            "boolean",
+                            "null"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "retries": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "management_groups": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "role_definitions": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "role_assignments": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_definitions": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_set_definitions": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_assignments": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_role_assignments": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "hierarchy_settings": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "subscription_placement": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "error_message_regex": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "max_interval_seconds": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "multiplier": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "randomization_factor": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "subscription_placement_destroy_behavior": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "subscription_placement_destroy_custom_target_management_group_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "timeouts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "management_group": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "role_definition": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "role_assignment": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_definition": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_set_definition": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_assignment": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "policy_role_assignment": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "delete": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "update": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "read": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "delays": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "after_management_group": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destroy": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "after_policy_definitions": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destroy": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "after_policy_set_definitions": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "create": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "destroy": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "management_group_role_assignments": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "management_group_name": {
+                    "type": "string"
+                  },
+                  "role_definition_id_or_name": {
+                    "type": "string"
+                  },
+                  "principal_id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "skip_service_principal_aad_check": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "condition": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "condition_version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "delegated_managed_identity_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "principal_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "role_assignment_definition_lookup_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "management": {
+          "description": "Module inputs mlz-core leaves at the module's default, as the module names them (docs/reference/governance.md lists them). Anything else is refused with what owns it.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "daily_quota_gb": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "permanently_delete_on_destroy": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "public_network_access_for_ingestion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "public_network_access_for_query": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "resource_permissions_enabled": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "retention_in_days": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "data_collection_rules": {
+              "type": "object",
+              "properties": {
+                "vm_insights": {
+                  "type": "object",
+                  "properties": {
+                    "processes_and_dependencies_enabled": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "defender_sql": {
+                  "type": "object",
+                  "properties": {
+                    "sql_queries_collection_enabled": {
+                      "type": [
+                        "boolean",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "sentinel_onboarding": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "customer_managed_key_enabled": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "retry": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "error_message_regex": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "interval_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "max_interval_seconds": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "timeouts": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "create": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "read": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "update": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "delete": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "diagnostic_settings": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "logs": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "category": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "category_group": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "enabled": {
+                          "type": [
+                            "boolean",
+                            "null"
+                          ]
+                        },
+                        "retention_policy": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "days": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "enabled": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "metrics": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "category": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "enabled": {
+                          "type": [
+                            "boolean",
+                            "null"
+                          ]
+                        },
+                        "retention_policy": {
+                          "type": [
+                            "object",
+                            "null"
+                          ],
+                          "properties": {
+                            "days": {
+                              "type": [
+                                "number",
+                                "null"
+                              ]
+                            },
+                            "enabled": {
+                              "type": [
+                                "boolean",
+                                "null"
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "log_analytics_destination_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "workspace_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "storage_account_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "event_hub_authorization_rule_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "event_hub_name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "marketplace_partner_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "lock": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "notes": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            },
+            "role_assignments": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "role_definition_id_or_name": {
+                    "type": "string"
+                  },
+                  "principal_id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "skip_service_principal_aad_check": {
+                    "type": [
+                      "boolean",
+                      "null"
+                    ]
+                  },
+                  "condition": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "condition_version": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "delegated_managed_identity_resource_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "principal_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   },
   "additionalProperties": false

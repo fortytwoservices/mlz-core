@@ -4,20 +4,25 @@ from __future__ import annotations
 
 import re
 import unittest
+import unittest.mock
 from pathlib import Path
 
+from mlz import mirror
 from mlz.merge import ConfigError
-from mlz.upgrade import OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, breaking_changes, pin_of, releases_between, role_of, upgrade, version
+from mlz.upgrade import (GITIGNORE, OWNED, RELEASE_PLEASE_MARKER, WORKFLOW, WRAPPER, breaking_changes, gitignore_with, pin_of, releases_between,
+                         role_of, upgrade, version)
 
 STARTERS = Path(__file__).resolve().parents[2] / "starter"
 CORE = "fortytwoservices/mlz-core"
+EDITOR = (".vscode/settings.json", ".vscode/extensions.json")
+JETBRAINS = ".idea/jsonSchemas.xml"
 
 
-def caller(role: str, ref: str) -> str:
-    """A customer's workflow: the starter of a role, pinned to ref."""
+def caller(role: str, ref: str, core: str = CORE) -> str:
+    """A customer's workflow: the starter of a role, pinned to ref, in mlz-core or in the organization's copy of it."""
     text = (STARTERS / f"mlz-{role}" / WORKFLOW).read_text()
-    core, pinned = pin_of(text)
-    return text.replace(f"{core}/.github/workflows/role.yml@{pinned}", f"{CORE}/.github/workflows/role.yml@{ref}")
+    called, pinned = pin_of(text)
+    return text.replace(f"{called}/.github/workflows/role.yml@{pinned}", f"{core}/.github/workflows/role.yml@{ref}")
 
 
 def notes(tag: str, *, breaking: str | None = None) -> str:
@@ -36,7 +41,8 @@ def editor(role: str, path: str, tag: str) -> str:
 
 class FakeGitHub:
     def __init__(self, workflow: str | None, releases: dict[str, str], open_pull: str | None = None,
-                 editor_from: str = "v0.1.7", repo_files: dict | None = None):
+                 editor_from: str = "v0.1.7", repo_files: dict | None = None, group: dict | None = None, refuse_groups: bool = False,
+                 wrapper_from: str | None = None, push_rulesets: list | None = None, jetbrains_from: str | None = None):
         self.files = {("acme/mlz-governance", WORKFLOW, "main"): (workflow, "sha-main")} if workflow else {}
         self.files.update({("acme/mlz-governance", path, "main"): (text, "sha") for path, text in (repo_files or {}).items()})
         for tag in releases:
@@ -45,14 +51,32 @@ class FakeGitHub:
                 assert "# x-release-please-version" in starter
                 self.files[(CORE, f"starter/mlz-{role}/{WORKFLOW}", tag)] = (starter, f"sha-{tag}")
                 if version(tag) and version(tag) >= version(editor_from):  # the editor settings came with editor_from
-                    for path in OWNED[1:]:
+                    for path in EDITOR:
                         self.files[(CORE, f"starter/mlz-{role}/{path}", tag)] = (editor(role, path, tag), f"sha-{tag}")
+                if jetbrains_from and version(tag) and version(tag) >= version(jetbrains_from):  # and JetBrains' with jetbrains_from
+                    self.files[(CORE, f"starter/mlz-{role}/{JETBRAINS}", tag)] = (editor(role, JETBRAINS, tag), f"sha-{tag}")
+                    self.files[(CORE, f"starter/mlz-{role}/{GITIGNORE}", tag)] = ((STARTERS / f"mlz-{role}" / GITIGNORE).read_text(), f"sha-{tag}")
+                if wrapper_from and version(tag) and version(tag) >= version(wrapper_from):  # ./mlz came with wrapper_from
+                    self.files[(CORE, f"starter/mlz-{role}/{WRAPPER}", tag)] = ((STARTERS / f"mlz-{role}" / WRAPPER).read_text(), f"sha-{tag}")
         self._releases = releases
         self._open_pull = open_pull
         self.writes: list[tuple] = []
+        self.group, self.refuse_groups = group, refuse_groups  # the self-hosted runners' group, if any
+        self.push_rulesets = push_rulesets or []  # the repo's rulesets, as GitHub answers for the person signed in
+
+    def runner_group(self, org, name):
+        if self.refuse_groups:
+            raise ConfigError("gh api orgs/acme/actions/runner-groups: HTTP 403")
+        return self.group if self.group and self.group["name"] == name else None
+
+    def update_runner_group(self, org, group, body):
+        self.writes.append(("runner group", org, group, body))
 
     def default_branch(self, repo):
         return "main"
+
+    def rulesets(self, repo):
+        return self.push_rulesets
 
     def file(self, repo, path, ref):
         return self.files.get((repo, path, ref), (None, None))
@@ -66,6 +90,10 @@ class FakeGitHub:
     def reset_branch(self, repo, branch, base):
         self.writes.append(("branch", repo, branch, base))
         return "head-of-main"
+
+    def make_executable(self, repo, branch, paths, message):
+        self.writes.append(("executable", repo, branch, tuple(paths), message))
+        return True
 
     def commit_files(self, repo, branch, head, files, message):
         self.writes.append(("files", repo, branch, head, files, message))
@@ -118,7 +146,7 @@ class UpgradeTest(unittest.TestCase):
         self.assertEqual(branch, ("branch", "acme/mlz-governance", "mlz/upgrade-v0.1.7", "main"))
         _, _, on, head, files, message = written
         self.assertEqual((on, head, message), ("mlz/upgrade-v0.1.7", "head-of-main", "chore: mlz-core v0.1.7"))
-        self.assertEqual(set(files), set(OWNED))  # one commit: the workflow and the editor settings
+        self.assertEqual(set(files), {WORKFLOW, *EDITOR})  # one commit: the workflow and the editor settings
         self.assertEqual(pin_of(files[WORKFLOW]), (CORE, "v0.1.7"))
         self.assertIn("/mlz-core/v0.1.7/schemas/customer.schema.json", files[".vscode/settings.json"])
         for text in files.values():
@@ -132,14 +160,109 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("### [0.1.7]", body)  # release-please's heading, one level down
         self.assertIn("v0.1.6 -> v0.1.7", printed)
 
+    def test_a_repo_on_github_team_stays_on_it_and_one_on_enterprise_stays_on_enterprise(self):
+        from mlz import upgrade as module
+        team = module.caller(caller("governance", "v0.1.6"), "team")
+        github = FakeGitHub(team, {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        role_yml = (STARTERS.parent / ".github/workflows/role.yml").read_text()  # this release's, with the approval input
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.7")] = (role_yml, "sha")
+        self.run_upgrade(github)
+        written = github.writes[1][4][WORKFLOW]
+        self.assertEqual(pin_of(written), (CORE, "v0.1.7"))
+        self.assertEqual(module.approval_of(written), "pull-request")  # an upgrade never switches the plan
+        self.assertEqual(written, module.caller(written, "team"))
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        self.run_upgrade(github)
+        self.assertEqual(module.approval_of(github.writes[1][4][WORKFLOW]), "environment")
+        self.assertNotIn("approval", github.writes[1][4][WORKFLOW].split("with:")[1].split("secrets:")[0])
+
+    def test_a_repo_on_github_team_is_not_moved_to_a_release_without_team_s_gate(self):
+        from mlz import upgrade as module
+        team = module.caller(caller("governance", "v0.1.7"), "team")
+        github = FakeGitHub(team, {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")})
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.6")] = ("on:\n  workflow_call:\n    inputs:\n      role:\n        type: string\njobs: {}\n", "sha")
+        with self.assertRaisesRegex(ConfigError, "is on GitHub Team's way, and v0.1.6's role.yml has no approval input, so its pipeline could not run there"):
+            self.run_upgrade(github, "v0.1.6")
+        self.assertEqual(github.writes, [])  # nothing pushed
+
+    def test_the_caller_for_each_plan_comes_and_goes_byte_for_byte(self):
+        from mlz import upgrade as module
+        for role in ("governance", "platform", "vending"):
+            enterprise = (STARTERS / f"mlz-{role}" / WORKFLOW).read_text()
+            team = module.caller(enterprise, "team")
+            self.assertEqual((module.approval_of(enterprise), module.approval_of(team)), ("environment", "pull-request"), role)
+            self.assertEqual(module.caller(team, "enterprise"), enterprise, role)  # Enterprise's is the starter's, byte for byte
+            self.assertEqual(module.caller(team, "team"), team, role)
+            # Under with:, right after the role, at its indent.
+            self.assertIn(f"      role: {role}\n      approval: pull-request ", team, role)
+        with self.assertRaisesRegex(ConfigError, "has no with: block in the job that calls mlz-core's role.yml"):
+            module.caller("on: push\n", "team")
+        # Only that with: changes: an approval: elsewhere stays, and an inline with: is refused rather than rewritten.
+        enterprise = (STARTERS / "mlz-platform" / WORKFLOW).read_text()
+        elsewhere = enterprise.replace("permissions:\n", "env:\n  approval: keep-me\npermissions:\n", 1)
+        self.assertIn("  approval: keep-me\n", module.caller(module.caller(elsewhere, "team"), "enterprise"))
+        self.assertEqual(module.caller(module.caller(elsewhere, "team"), "enterprise"), elsewhere)
+        # A pipeline with CRLF line endings switches too, and keeps them.
+        crlf = enterprise.replace("\n", "\r\n")
+        self.assertEqual(module.approval_of(module.caller(crlf, "team")), "pull-request")
+        self.assertNotIn("\n", module.caller(crlf, "team").replace("\r\n", ""))
+        self.assertEqual(module.caller(module.caller(crlf, "team"), "enterprise"), crlf)
+        # A quoted approval key goes too, switched either way, and is never doubled.
+        quoted = module.caller(enterprise, "team").replace("      approval: pull-request", '      "approval": pull-request')
+        self.assertEqual(module.caller(quoted, "enterprise"), enterprise)
+        self.assertEqual(module.caller(quoted, "team").count("approval"), module.caller(enterprise, "team").count("approval"))
+        inline = "jobs:\n  platform:\n    uses: o/mlz-core/.github/workflows/role.yml@v1\n    with: {role: platform}\n"
+        with self.assertRaisesRegex(ConfigError, "has no with: block"):
+            module.caller(inline, "team")
+
+    def test_a_release_with_the_wrapper_writes_it_and_makes_it_executable(self):
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, wrapper_from="v0.1.8")
+        self.run_upgrade(github)
+        branch, written, executable, pull = github.writes
+        self.assertEqual(written[4][WRAPPER], (STARTERS / "mlz-governance" / WRAPPER).read_text())
+        self.assertEqual(executable[:4], ("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,)))  # after the files
+        self.assertEqual(pull[0], "pull")
+        self.assertIn(WRAPPER, OWNED)
+
+    def test_an_unchanged_wrapper_is_still_made_executable(self):
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.8")) for path in EDITOR}
+        current[WRAPPER] = (STARTERS / "mlz-governance" / WRAPPER).read_text()
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, wrapper_from="v0.1.7")
+        self.run_upgrade(github)
+        self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
+        self.assertEqual(github.writes[2][:4], ("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,)))
+
+    def test_going_back_before_the_wrapper_removes_it(self):
+        current = {path: editor("governance", path, "v0.1.8") for path in EDITOR}
+        current[WRAPPER] = (STARTERS / "mlz-governance" / WRAPPER).read_text()
+        github = FakeGitHub(caller("governance", "v0.1.8"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, wrapper_from="v0.1.8")
+        self.run_upgrade(github, target="v0.1.7")
+        self.assertIsNone(github.writes[1][4][WRAPPER])
+        self.assertNotIn("executable", [write[0] for write in github.writes])
+
+    def test_a_push_ruleset_the_person_may_not_bypass_stops_the_upgrade_before_anything_is_pushed(self):
+        guard = {"name": "pipeline-files", "target": "push", "enforcement": "active", "current_user_can_bypass": "never",
+                 "rules": [{"type": "file_path_restriction", "parameters": {"restricted_file_paths": [".github/**/*"]}}]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, push_rulesets=[guard])
+        with self.assertRaises(ConfigError) as caught:
+            self.run_upgrade(github)
+        self.assertIn("acme/mlz-governance: its ruleset pipeline-files refuses changes to .github/workflows/mlz.yml from you. "
+                      "Only its bypass team (bootstrap.yaml's github.bypass_team) may change them", str(caught.exception))
+        self.assertEqual(github.writes, [])  # no branch, no commit, no pull request
+        # A member of the bypass team goes ahead, as does anyone where the ruleset is off.
+        for allowed in ({**guard, "current_user_can_bypass": "always"}, {**guard, "enforcement": "disabled"}):
+            github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, push_rulesets=[allowed])
+            url, _ = self.run_upgrade(github)
+            self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+
     def test_editor_settings_already_on_the_target_are_left_out(self):
-        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.7")) for path in OWNED[1:]}
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.7")) for path in EDITOR}
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, repo_files=current)
         self.run_upgrade(github)
         self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
 
     def test_going_back_before_the_editor_settings_removes_them(self):
-        current = {path: editor("governance", path, "v0.1.7") for path in OWNED[1:]}
+        current = {path: editor("governance", path, "v0.1.7") for path in EDITOR}
         github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.6": notes("v0.1.6"), "v0.1.7": notes("v0.1.7")}, repo_files=current)
         self.run_upgrade(github, target="v0.1.6")
         files = github.writes[1][4]
@@ -151,6 +274,44 @@ class UpgradeTest(unittest.TestCase):
         github = FakeGitHub(caller("governance", "v0.1.5"), {"v0.1.5": notes("v0.1.5"), "v0.1.6": notes("v0.1.6")}, repo_files=own)
         self.run_upgrade(github)
         self.assertEqual(set(github.writes[1][4]), {WORKFLOW})  # neither release has editor settings
+
+    def test_a_release_with_jetbrains_settings_adds_them_and_a_gitignore(self):
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, jetbrains_from="v0.1.8")
+        self.run_upgrade(github)
+        files, body = github.writes[1][4], github.writes[2][5]
+        self.assertIn("/mlz-core/v0.1.8/schemas/customer.schema.json", files[JETBRAINS])
+        self.assertNotIn("x-release-please", files[JETBRAINS])
+        self.assertEqual(files[GITIGNORE], (STARTERS / "mlz-governance" / GITIGNORE).read_text())
+        self.assertIn(JETBRAINS, OWNED)
+        self.assertNotIn(GITIGNORE, OWNED)  # the customer's file, which only ever gets lines
+        self.assertIn("`.vscode/extensions.json`, `.idea/jsonSchemas.xml`. If this repo", body)  # replaced: not the .gitignore
+        self.assertIn("`.gitignore` gets the starter's lines it lacks", body)
+
+    def test_the_repo_s_own_gitignore_only_gets_the_lines_it_lacks(self):
+        ours = (STARTERS / "mlz-governance" / GITIGNORE).read_text()
+        for own, expected in ((".terraform/\n", ".terraform/\n\n" + ours),
+                              (".terraform/", ".terraform/\n\n" + ours),  # no newline at its end
+                              ("\n", ours),
+                              ("/.idea/*\n.terraform/\n", "/.idea/*\n.terraform/\n\n" + "".join(l + "\n" for l in ours.splitlines() if l != "/.idea/*")),
+                              (ours, None), ("node_modules/\n" + ours.replace("\n", "\r\n"), None)):
+            with self.subTest(own=own):
+                self.assertEqual(gitignore_with(own, ours), expected)
+        self.assertEqual(gitignore_with(None, ours), ours)
+        # On the target already: the pull request leaves the file out.
+        current = {path: RELEASE_PLEASE_MARKER.sub("", editor("governance", path, "v0.1.8")) for path in (*EDITOR, JETBRAINS)}
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, jetbrains_from="v0.1.8",
+                            repo_files={**current, GITIGNORE: "*.tfplan\n" + ours})
+        self.run_upgrade(github)
+        self.assertEqual(set(github.writes[1][4]), {WORKFLOW})
+
+    def test_going_back_before_the_jetbrains_settings_removes_them_and_leaves_the_gitignore(self):
+        ours = (STARTERS / "mlz-governance" / GITIGNORE).read_text()
+        current = {JETBRAINS: editor("governance", JETBRAINS, "v0.1.8"), GITIGNORE: ours}
+        github = FakeGitHub(caller("governance", "v0.1.8"), {"v0.1.7": notes("v0.1.7"), "v0.1.8": notes("v0.1.8")}, repo_files=current, jetbrains_from="v0.1.8")
+        self.run_upgrade(github, target="v0.1.7")
+        files = github.writes[1][4]
+        self.assertIsNone(files[JETBRAINS])
+        self.assertNotIn(GITIGNORE, files)
 
     def test_defaults_to_the_latest_release(self):
         github = FakeGitHub(caller("governance", "v0.1.5"), {t: notes(t) for t in ("v0.1.5", "v0.1.10", "v0.1.9")})
@@ -213,9 +374,32 @@ class UpgradeTest(unittest.TestCase):
 
     def test_an_open_upgrade_is_not_opened_twice(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
         url, printed = self.run_upgrade(github)
         self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
         self.assertEqual(github.writes, [])
+        self.assertIn("already open", printed)
+
+    def test_an_open_upgrade_from_before_a_switch_of_plans_is_made_again(self):
+        from mlz import upgrade as module
+        # The repo moved to Team's way after its upgrade was opened, Enterprise's way: the branch is made again.
+        github = FakeGitHub(module.caller(caller("governance", "v0.1.6"), "team"), {"v0.1.6": "", "v0.1.7": ""},
+                            open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[(CORE, ".github/workflows/role.yml", "v0.1.7")] = ((STARTERS.parent / ".github/workflows/role.yml").read_text(), "sha")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.7")] = (caller("governance", "v0.1.7"), "sha")
+        url, printed = self.run_upgrade(github)
+        written = [w for w in github.writes if w[0] == "files"]
+        self.assertTrue(written, github.writes)
+        self.assertEqual(module.approval_of(written[0][4][WORKFLOW]), "pull-request")
+        self.assertNotIn("already open", printed)
+
+    def test_an_open_upgrade_with_the_wrapper_gets_its_mode_on_a_rerun(self):
+        # A run that stopped after the files and before the mode: the rerun finds the pull request and gives the mode.
+        github = FakeGitHub(caller("governance", "v0.1.7"), {"v0.1.7": "", "v0.1.8": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3", wrapper_from="v0.1.8")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.1.8")] = (caller("governance", "v0.1.8"), "sha")
+        url, printed = self.run_upgrade(github)
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
+        self.assertEqual([w[:4] for w in github.writes], [("executable", "acme/mlz-governance", "mlz/upgrade-v0.1.8", (WRAPPER,))])
         self.assertIn("already open", printed)
 
     def test_a_dry_run_shows_the_change_and_writes_nothing(self):
@@ -226,6 +410,104 @@ class UpgradeTest(unittest.TestCase):
         self.assertIn("-    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.6", printed)
         self.assertIn("+    uses: fortytwoservices/mlz-core/.github/workflows/role.yml@v0.1.7", printed)
         self.assertIn("## Before you merge", printed)
+
+    def test_self_hosted_runners_admit_the_target_before_its_pull_request(self):
+        older = f"{CORE}/.github/workflows/role.yml@v0.1.6"
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": [older]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        _, printed = self.run_upgrade(github)
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {
+            "restricted_to_workflows": True, "selected_workflows": [older, f"{CORE}/.github/workflows/role.yml@v0.1.7"]}))
+        self.assertEqual(github.writes[1][0], "branch")  # then the pull request
+        self.assertIn(f"acme: the runner group mlz admits {CORE}/.github/workflows/role.yml@v0.1.7", printed)
+
+    def test_the_group_keeps_only_mlz_core_s_releases(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True,
+                 "selected_workflows": [f"{CORE}/.github/workflows/role.yml@refs/heads/main", "acme/mlz-platform/.github/workflows/mlz.yml@refs/heads/main"]}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        self.run_upgrade(github)
+        self.assertEqual(github.writes[0][3]["selected_workflows"], [f"{CORE}/.github/workflows/role.yml@v0.1.7"])
+
+    def test_a_group_that_admits_every_workflow_or_none_at_all_is_left_alone(self):
+        for group in (None, {"name": "mlz", "id": 7, "restricted_to_workflows": False}):
+            github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+            self.run_upgrade(github)
+            self.assertNotIn("runner group", [write[0] for write in github.writes])
+
+    def test_someone_who_may_not_read_the_groups_is_told_what_an_owner_does(self):
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
+        url, printed = self.run_upgrade(github)
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertIn("an owner must let the runner group mlz run v0.1.7's role.yml", printed)
+
+    def test_the_owner_s_step_is_printed_once_for_the_repos_of_one_run(self):
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, refuse_groups=True)
+        printed: list[str] = []
+        told: set = set()
+        for _ in range(3):  # three repos of one organization, moving to one release
+            upgrade(github, "acme/mlz-governance", None, False, printed.append, told=told)
+        self.assertEqual(sum("an owner must let the runner group mlz" in line for line in printed), 1)
+
+    def test_the_group_is_kept_up_to_date_for_every_repo_of_a_run(self):
+        # Only the owner's step is printed once: a repo on another copy in between may have changed the group.
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": []}
+        github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""}, group=group)
+        told: set = set()
+        for _ in range(2):
+            upgrade(github, "acme/mlz-governance", None, False, lambda line: None, told=told)
+        self.assertEqual(sum(write[0] == "runner group" for write in github.writes), 2)
+
+    def test_a_repo_on_the_organization_s_copy_moves_to_mlz_core_s_release_through_it(self):
+        group = {"name": "mlz", "id": 7, "restricted_to_workflows": True, "selected_workflows": ["acme/mlz-core/.github/workflows/role.yml@v0.9.0"]}
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": notes("v0.9.0"), "v0.9.1": notes("v0.9.1")}, group=group)
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url, printed = self.run_upgrade(github)
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.1")])  # the copy gets the release before the pull request
+        self.assertEqual(github.writes[0], ("runner group", "acme", 7, {"restricted_to_workflows": True, "selected_workflows": [
+            "acme/mlz-core/.github/workflows/role.yml@v0.9.0", "acme/mlz-core/.github/workflows/role.yml@v0.9.1"]}))
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))  # mlz-core's starter, calling the copy
+        self.assertIn("something new in v0.9.1", github.writes[-1][5])  # mlz-core's release notes
+
+    def test_core_moves_a_repo_onto_the_organization_s_copy_at_the_same_release(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": notes("v0.9.0")})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            url = upgrade(github, "acme/mlz-governance", None, False, lambda line: None, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.0"))
+
+    def test_an_open_upgrade_that_calls_mlz_core_itself_is_moved_onto_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0"), {"v0.9.0": "", "v0.9.1": ""}, open_pull="https://github.com/acme/mlz-governance/pull/3")
+        github.files[("acme/mlz-governance", WORKFLOW, "mlz/upgrade-v0.9.1")] = (caller("governance", "v0.9.1"), "sha")  # calls mlz-core itself
+        printed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: None):
+            url = upgrade(github, "acme/mlz-governance", "v0.9.1", False, printed.append, core="acme/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/3")
+        files = next(write for write in github.writes if write[0] == "files")[4]
+        self.assertEqual(pin_of(files[WORKFLOW]), ("acme/mlz-core", "v0.9.1"))
+        self.assertIn("acme/mlz-governance: the upgrade to v0.9.1 in https://github.com/acme/mlz-governance/pull/3 now calls acme/mlz-core", printed)
+
+    def test_a_repo_already_on_its_release_still_gets_the_tag_into_the_copy(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.9.0": ""})
+        pushed = []
+        with unittest.mock.patch.object(mirror, "push_release", lambda gh, core, tag, out: pushed.append((core, tag))):
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", False, lambda line: None, core="acme/mlz-core"))
+            self.assertIsNone(upgrade(github, "acme/mlz-governance", "v0.9.0", True, lambda line: None, core="acme/mlz-core"))  # a dry run pushes nothing
+        self.assertEqual(pushed, [("acme/mlz-core", "v0.9.0")])
+
+    def test_a_repo_on_the_copy_never_moves_back_past_the_first_release_that_reads_it(self):
+        github = FakeGitHub(caller("governance", "v0.9.0", "acme/mlz-core"), {"v0.8.1": "", "v0.9.0": ""})
+        with self.assertRaisesRegex(ConfigError, "v0.8.1 cannot run from acme/mlz-core: releases before v0.9.0 read mlz-core's code without a token.*"
+                                                 "--core fortytwoservices/mlz-core"):
+            self.run_upgrade(github, target="v0.8.1")
+        self.assertEqual(github.writes, [])  # nothing pushed, admitted or opened
+        # Back onto mlz-core itself, it may.
+        url = upgrade(github, "acme/mlz-governance", "v0.8.1", False, lambda line: None, core="fortytwoservices/mlz-core")
+        self.assertEqual(url, "https://github.com/acme/mlz-governance/pull/7")
 
     def test_refuses_a_target_that_is_not_a_release(self):
         github = FakeGitHub(caller("governance", "v0.1.6"), {"v0.1.6": "", "v0.1.7": ""})

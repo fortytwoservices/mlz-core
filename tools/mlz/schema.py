@@ -15,12 +15,11 @@ starter, replaced by mlz upgrade), at raw.githubusercontent.com: mlz-core is pub
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 from pathlib import Path
 
-from . import firewall, install, platform, vending
+from . import advanced, firewall, governance, install, names, naming, platform, vending
 
 CORE = Path(__file__).resolve().parents[2]
 DRAFT = "http://json-schema.org/draft-07/schema#"
@@ -31,14 +30,6 @@ ARCHETYPES = ("corp", "online", "sandbox", "local")
 # or one address, which is a /32. Whether host bits are set is the loader's check.
 IPV4 = r"((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
 CIDR = rf"^{IPV4}(/(0*([0-9]|[12][0-9]|3[0-2])|{IPV4}))?$"  # a prefix may be zero-padded, as int() reads it
-
-
-def governance_rules():
-    """governance/scripts/render_library.py, which runs as a script of its own, not as part of the mlz package."""
-    spec = importlib.util.spec_from_file_location("render_library", CORE / "governance" / "scripts" / "render_library.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def pattern(compiled: re.Pattern, ignore_case: bool = False) -> str:
@@ -81,8 +72,9 @@ def landing_zone() -> dict:
         "owner": text("The owning team's email address. Becomes the Owner tag, and gets the budget alerts unless budget.contacts names others.", pattern=pattern(vending.EMAIL), maxLength=vending.TAG_VALUE_LENGTH),
         "cost_center": {"description": "The cost center. Becomes the CostCenter tag.", "type": ["string", "integer"], "maxLength": vending.TAG_VALUE_LENGTH},
         "archetype": text("The management group the subscription goes into: corp, online or sandbox (local only when governance turns it on).", enum=list(ARCHETYPES)),
-        "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=list(platform.REGIONS)),
-        "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged.", pattern=pattern(vending.GUID, ignore_case=True)),
+        "location": text("The Azure region, one of governance's allowed regions with a hub, for example norwayeast.", pattern="^[a-z0-9]+$", examples=["norwayeast", "swedencentral"]),
+        "subscription": text("The landing zone's subscription ID, handed to vending before this file is merged. Without it, vending makes one where billing_scope says.", pattern=pattern(vending.GUID, ignore_case=True)),
+        "billing_scope": text("Where a subscription vending makes is billed: an EA enrollment account or an MCA invoice section (docs/vending.md). Set it once, in defaults/landing-zone-defaults.yaml; a landing zone with subscription: uses that one instead.", pattern=r"^/providers/Microsoft\.Billing/billingAccounts/[^/]+/(enrollmentAccounts/[^/]+|billingProfiles/[^/]+/invoiceSections/[^/]+|customers/[^/]+)$"),
         "budget": or_empty(mapping({
             "monthly": {"description": "A whole amount per month, in the subscription's currency. No monthly, no budget.", "type": "integer", "exclusiveMinimum": 0},
             "contacts": or_empty({"description": "Who gets the budget alerts, as email addresses (default: the owner).", "type": "array", "items": email}),
@@ -97,9 +89,19 @@ def landing_zone() -> dict:
             }),
         }, "The spoke network. Its addresses come from the IP allocator, in _generated/ip-plan.yaml, never from here.")),
         "github": or_empty(mapping({
-            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in _defaults/all.yaml.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
-            "repo": text("The landing zone's repo, whose main branch signs in as its deploy identity.", pattern=pattern(vending.GITHUB_REPO)),
-        }, "The landing zone's own repo.")),
+            "organization": text("The GitHub organization of the landing zone's repo. Set it once, in defaults/landing-zone-defaults.yaml: from then on vending makes every landing zone a repo, named by customer.yaml's naming.repository.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
+            "repo": text("An existing repo to use instead of one vending makes: vending only trusts it.", pattern=pattern(vending.GITHUB_REPO)),
+            "create": {"description": "false: no repo for this landing zone, for example a sandbox. Vending makes one by default once github.organization is set.", "type": "boolean"},
+            "team": text("The owning team's GitHub team, by its slug: Maintain on the repo, and its apply's reviewer. Set it once per workload, in workload-defaults.yaml.", pattern=pattern(vending.GITHUB_TEAM)),
+        }, "The landing zone's workload repo (docs/vending.md).")),
+        "short_name": text("The workload's short name in every name (docs/naming.md): 2 to 5 lower-case letters and digits, unique among workloads. Default: the workload's folder name, when it fits. Set it in workload-defaults.yaml.", pattern="^[a-z0-9]{2,5}$"),
+        "names": or_empty(mapping({
+            **{key: text(f"An explicit name for the {kind.replace('_', ' ')}, instead of the template's.") for key, (kind, _) in vending.NAMED.items()},
+            vending.SUBSCRIPTION: text("An explicit display name for the subscription vending makes, instead of the template's. Its alias, which never changes, is <root>-<key>."),
+            "network_security_groups": or_empty({"description": "An explicit name for a subnet's NSG, by the subnet's name.", "type": "object", "additionalProperties": {"type": "string"}}),
+        }, "Explicit names, which win over the template; only in the landing zone's own file. A changed name replaces the resource.")),
+        "decommission": {"description": "true retires this landing zone: its plan destroys everything vending made and moves the subscription to Decommissioned. Only in the landing zone's own file.", "const": True},
+        "advanced": advanced.schema("landing-zone"),
         "tags": or_empty({
             "description": "Extra tags. Owner, CostCenter, Environment, Workload and ManagedBy are set for you.",
             "type": "object",
@@ -110,12 +112,12 @@ def landing_zone() -> dict:
     return {
         "$schema": DRAFT,
         "title": "MLZ landing zone",
-        "description": "A layer of landing zone settings: landing-zones/_defaults/all.yaml, _defaults/<env>.yaml, <workload>/_workload.yaml or <workload>/<env>.yaml. Each says only what differs from the one above.",
+        "description": "A layer of landing zone settings: defaults/landing-zone-defaults.yaml, defaults/<env>-defaults.yaml, landing-zones/<workload>/workload-defaults.yaml or landing-zones/<workload>/<env>.yaml. Each says only what differs from the one above.",
         **mapping(properties),
     }
 
 
-def hub() -> dict:
+def connectivity() -> dict:
     cidr = {"type": "string", "pattern": CIDR}
     properties = {
         "platform_address_space": text("The region's platform range, a /21: the hub (its first /22, its subnets carved from it), management's /24, identity's /24 and a spare /23. No landing zone gets an address in it.", pattern=CIDR),
@@ -124,13 +126,23 @@ def hub() -> dict:
         "firewall": text("The hub's Azure Firewall tier.", enum=list(platform.FIREWALL_TIERS), default="Standard"),
         "dns_resolver": {"description": "A DNS resolver for Private Link names, for landing zones and on-premises.", "type": "boolean", "default": True},
         "bastion": {"description": "Azure Bastion, for VMs in any landing zone.", "type": "boolean", "default": False},
-        "identity": {"description": "Identity's network in this region, for domain controllers, in the identity subscription. Its range is held either way.", "type": "boolean", "default": False},
+        "names": {"description": "A hub component's own name, instead of the customer's template's (docs/naming.md); a changed name replaces the component.", "type": "object", "propertyNames": {"enum": list(names.HUB)}, "additionalProperties": {"type": "string"}},
+        "advanced": advanced.schema(platform.CONNECTIVITY),
     }
     return {
         "$schema": DRAFT,
-        "title": "MLZ hub",
-        "description": "The platform's networks in one region, the hub first: hubs/<region>.yaml, or the chunks in hubs/<region>/.",
+        "title": "MLZ connectivity",
+        "description": "The hub and the platform's range in one region: connectivity/<region>.yaml, or the chunks in connectivity/<region>/.",
         **mapping(properties),
+    }
+
+
+def network() -> dict:
+    return {
+        "$schema": DRAFT,
+        "title": "MLZ management or identity network",
+        "description": "management/<region>.yaml (optional, the primary region only) or identity/<region>.yaml (builds identity's network in that region). Neither takes a setting yet: leave it empty or comments only.",
+        **mapping({}),
     }
 
 
@@ -142,19 +154,19 @@ def firewall_rules() -> dict:
         "name": text("The rule's name, lower-case letters, digits and hyphens; unique in this file.", pattern=pattern(firewall.NAME)),
         "to": {"description": "Where the traffic goes: names (api.example.com, *.example.com), addresses and ranges, other landing zones by key, FQDN tags (WindowsUpdate) or service tags (AzureMonitor, Storage.NorwayEast).", "type": "array", "items": {"type": "string"}, "minItems": 1},
         "ports": {"description": "https, http, TCP ports (8443) or udp:<port>.", "type": "array", "minItems": 1, "items": {"anyOf": [{"type": "integer", "minimum": 1, "maximum": 65535}, {"type": "string", "pattern": port_word}]}},
-        "description": text("What the rule is for."),
+        "description": text("What the rule is for: whoever approves it reads this.", minLength=1),
     }
-    rule = mapping({key: descriptions[key] for key in firewall.RULE_KEYS}, required=list(firewall.RULE_KEYS[:3]))
+    rule = mapping({key: descriptions[key] for key in firewall.RULE_KEYS}, required=list(firewall.RULE_KEYS))
     return {
         "$schema": DRAFT,
         "title": "MLZ firewall rules",
-        "description": "Outbound rules: firewall/platform.yaml for every landing zone, firewall/landing-zones/<key>.yaml for one. A rule names only where traffic goes; the source is worked out.",
-        **mapping({"outbound": or_empty({"description": "The rules, each with name, to and ports.", "type": "array", "items": rule})}),
+        "description": "Outbound rules: firewall-rules/platform.yaml for every landing zone, firewall-rules/landing-zones/<key>.yaml for one, firewall-rules/management.yaml and firewall-rules/identity.yaml for the platform's own networks. A rule names only where traffic goes; the source is worked out.",
+        **mapping({"outbound": or_empty({"description": "The rules, each with name, description, to and ports.", "type": "array", "items": rule})}),
     }
 
 
 def customer() -> dict:
-    rules = governance_rules()
+    rules = governance
     guid = text("A subscription ID.", pattern=pattern(rules.GUID, ignore_case=True))
     strings = or_empty({"type": "array", "items": {"type": "string"}})
     tag_names = or_empty({"type": "array", "items": {"type": "string", "pattern": pattern(rules.TAG)}})
@@ -174,7 +186,17 @@ def customer() -> dict:
             "exempt_resource_groups": or_empty({"description": "Resource groups Azure creates itself, where the required tags are not enforced. One * per pattern.", "type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 90, "pattern": "^[^*]*[*]?[^*]*$"}}),
             "in_sandboxes": {"description": "Whether sandboxes must tag their resource groups too.", "type": ["boolean", "null"]},
         }, "Tag policies. A key given here replaces the default's whole list.")),
+        "advanced": advanced.schema("customer"),
         "policy_assignments_to_remove": or_empty({"description": "ALZ policy assignments to leave out, by archetype.", "type": "object", "propertyNames": {"enum": list(rules.ALZ_ARCHETYPES)}, "additionalProperties": strings}),
+        "naming": or_empty(mapping({
+            "org": text("The customer's code in every name: 2 to 4 lower-case letters and digits (default: the root ID).", pattern="^[a-z0-9]{2,4}$"),
+            "template": text(f"How names are made (default: {naming.TEMPLATE}). Tokens in braces, dashes and lower-case text; an empty {{purpose}} drops out."),
+            "templates": or_empty({"description": "A template for one type, for the 24-character ones (storage_account, key_vault).", "type": "object", "propertyNames": {"enum": sorted(naming.RULES)}, "additionalProperties": {"type": "string"}}),
+            "environments": or_empty({"description": "A landing zone file's name to its environment's short name, added to or replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.ENVIRONMENTS.items()) + ").", "type": "object", "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{1,4}$"}}),
+            "regions": or_empty({"description": "An Azure region to its short name, replacing Microsoft's code; before the first deployment only.", "type": "object", "propertyNames": {"enum": sorted(naming.REGION_CODES)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
+            "repository": text(f"How a landing zone's workload repo is named (default: {naming.REPOSITORY}), with long names: {{app}} the workload's folder, {{env}} the landing zone's file, {{org}} the customer's code. Both {{app}} and {{env}} are needed."),
+            "platform": or_empty({"description": "A part of the platform to its short name in names, replacing mlz-core's (" + ", ".join(f"{k}: {v}" for k, v in naming.PLATFORM.items()) + "). The platform's environment is prod.", "type": "object", "propertyNames": {"enum": list(naming.PLATFORM)}, "additionalProperties": {"type": "string", "pattern": "^[a-z0-9]{2,5}$"}}),
+        }, "How mlz-core names what it creates (docs/naming.md).")),
     }
     return {
         "$schema": DRAFT,
@@ -187,12 +209,32 @@ def customer() -> dict:
 def bootstrap() -> dict:
     github = {
         "organization": text("The customer's GitHub organization.", pattern=pattern(vending.GITHUB_ORGANIZATION)),
-        "repositories": mapping({role: text(f"The {role} repo's name.") for role in install.ROLES}, "The three repos, by role."),
-        "reviewers": {"description": "GitHub users who approve every apply.", "type": "array", "items": {"type": "string"}, "minItems": 1},
+        "plan": text("The organization's GitHub plan, which decides who approves an apply. enterprise (the default): github.reviewers, in each apply's environment, which GitHub allows in a private repo only on Enterprise. team: the pull request's approval, which then covers the plan that is applied; github.reviewers is refused.",
+                     enum=list(install.GITHUB_PLANS), default="enterprise"),
+        "app": text("The slug of the customer's MLZ App, the last part of its page's address (https://github.com/apps/<slug>). With the bypass team, it alone may change _generated/ in the three repos: their push ruleset generated-files refuses it from anyone else.",
+                    pattern="^[a-z0-9][a-z0-9-]*$"),
+        "repositories": mapping({**{role: text(f"The {role} repo's name.") for role in install.ROLES},
+                                 "core": text("The organization's own copy of mlz-core, which the three repos' pipelines call.", default="mlz-core")},
+                                "The three repos, by role, and the organization's copy of mlz-core."),
+        "platform_team": text("The slug of the GitHub team that owns the three repos: their CODEOWNERS name it, and its approval is required for every change but the contracts.", pattern="^[a-z0-9][a-z0-9-]*$"),
+        "bypass_team": text("The slug of the small GitHub team that alone may change .github/ in the three repos (mlz upgrade, CODEOWNERS): their push ruleset refuses it from anyone else. It may also merge a pull request without a code owner's approval (pull requests only). Its members can therefore reach the MLZ App's key. Visible, and not the platform team.", pattern="^[a-z0-9][a-z0-9-]*$"),
+        "reviewers": {"description": "GitHub users who approve every apply, on GitHub Enterprise (github.plan); refused on Team, where nobody would wait for them.", "type": "array", "items": {"type": "string"}, "minItems": 1},
+        "runners": or_empty(mapping({
+            "kind": text("self-hosted: Fortytwo's runner image on a scale set in management's network (the default). github-hosted: GitHub's own runners, joined to that network.",
+                         enum=list(install.RUNNER_KINDS), default="self-hosted"),
+            "size": text(f"An Azure virtual machine size for self-hosted runners ({install.RUNNER_KINDS['self-hosted']} unless set), or GitHub's runner size for github-hosted ones ({install.RUNNER_KINDS['github-hosted']} unless set).",
+                         examples=["Standard_D2ds_v6", "Standard_D4ds_v6", "4-core"]),
+            "instances": {"description": "Self-hosted: how many runners. Each is billed for its compute and Fortytwo's image from the moment it exists; 0 removes them.",
+                          "type": "integer", "minimum": 0, "maximum": install.MAXIMUM_INSTANCES, "default": install.RUNNER_INSTANCES},
+            "app_client_id": text("Self-hosted: the client ID of the customer's runner App, which has only Organization > Self-hosted runners: write.", pattern="^[A-Za-z0-9.]+$"),
+            "image": text("Self-hosted: fortytwo, Fortytwo's runner image, billed per instance and hour (the default); or dev, its dev plan, for Fortytwo's own tests in its own tenants.",
+                          enum=list(install.RUNNER_IMAGES), default="fortytwo"),
+        }, "Where the pipelines' Azure jobs run, for mlz install runners (docs/bootstrap.md, private runners).")),
     }
     properties = {
-        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization, repos and reviewers."),
+        "github": mapping({key: github[key] for key in install.GITHUB_SETTINGS}, "The customer's GitHub organization and plan, repos, platform team, reviewers and runners."),
         "state_operators": or_empty({"description": "People who may run Terraform by hand against the state, by name: their Entra object IDs.", "type": "object", "additionalProperties": text("An Entra object ID.", pattern=pattern(vending.GUID, ignore_case=True))}),
+        "names": or_empty({"description": "The bootstrap's own name for its resource group, state account or runners' vault, instead of the customer's template's (docs/naming.md): for a storage account or vault name taken elsewhere in Azure, or one to keep.", "type": "object", "propertyNames": {"enum": list(names.BOOTSTRAP_NAMED)}, "additionalProperties": {"type": "string"}}),
     }
     return {
         "$schema": DRAFT,
@@ -206,8 +248,9 @@ def bootstrap() -> dict:
 SCHEMAS = {
     "customer.schema.json": customer,
     "bootstrap.schema.json": bootstrap,
-    "hub.schema.json": hub,
-    "firewall.schema.json": firewall_rules,
+    "connectivity.schema.json": connectivity,
+    "network.schema.json": network,
+    "firewall-rules.schema.json": firewall_rules,
     "landing-zone.schema.json": landing_zone,
 }
 

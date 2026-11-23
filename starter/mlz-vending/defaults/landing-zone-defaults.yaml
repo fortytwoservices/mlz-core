@@ -1,0 +1,18 @@
+# Settings every landing zone shares. Each layer after it says only what differs: defaults/<env>-defaults.yaml
+# for an environment, landing-zones/<workload>/workload-defaults.yaml for a workload, and
+# landing-zones/<workload>/<env>.yaml for one landing zone. A complete landing zone is in examples/, which vending
+# does not read. What each setting does: docs/vending.md in mlz-core.
+
+# billing_scope: /providers/Microsoft.Billing/billingAccounts/1234567/enrollmentAccounts/7654321
+#                                   # vending makes the subscription of a landing zone without one, billed
+#                                   # here: an EA enrollment account or an MCA invoice section
+
+# github:
+#   organization: demo-org          # where the landing zones' own repos are
+
+# network:
+#   size: 24                        # each landing zone's range (the default); a landing zone may say otherwise
+
+# tags:
+#   BusinessUnit: Shared            # an extra tag on everything; Owner, CostCenter, Environment, Workload
+#                                   # and ManagedBy are set for you

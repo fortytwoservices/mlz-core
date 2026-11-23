@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/time"
       version = "~> 0.13"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.6"
+    }
   }
 
   # The pipeline passes the storage account, container and key with -backend-config.
