@@ -442,8 +442,8 @@ jobs:
           pattern: mlz-${{ inputs.role }}-plan-*
           path: .mlz/planned/
 
-      # The pull request's reviews, CODEOWNERS on its base, the code owner team's members and the run that an approval saw,
-      # read as the MLZ App, scoped to this repo and to reading.
+      # The pull request's reviews, CODEOWNERS on its base and the run that an approval saw, read as the MLZ App, scoped to
+      # this repo and to reading.
       - id: reader
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -454,6 +454,15 @@ jobs:
           permission-actions: read
           permission-pull-requests: read
           permission-contents: read
+
+      # Whether a reviewer is in the code owner team: Members is an organization permission, read with a token of its own,
+      # as vending's plan reads teams; it reaches no repo's contents.
+      - id: team-reader
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.MLZ_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.MLZ_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
           permission-members: read
 
       # The last code owner's approval must have come after these plans, or have seen the same plans; otherwise a code owner
@@ -461,6 +470,7 @@ jobs:
       - name: The approval covers this plan
         env:
           GH_TOKEN: ${{ steps.reader.outputs.token }}
+          TEAM_TOKEN: ${{ steps.team-reader.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           BASE_REF: ${{ github.base_ref }}
