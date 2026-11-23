@@ -10,7 +10,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core bootstrap" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.14.0/schemas/bootstrap.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.15.0/schemas/bootstrap.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
@@ -27,7 +27,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core customer" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.14.0/schemas/customer.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.15.0/schemas/customer.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
