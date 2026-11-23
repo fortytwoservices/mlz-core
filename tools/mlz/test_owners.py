@@ -62,13 +62,11 @@ class OwnersTest(unittest.TestCase):
         self.assertIn("\n/_generated/\n", enterprise)
         self.assertIn("\n/_generated/  @acme/platform\n", team)
         self.assertEqual((owners.generated_owned(enterprise), owners.generated_owned(team), owners.generated_owned("* @acme/platform\n")), (False, True, None))
-        # Without the plan (platform and vending, which have no bootstrap.yaml) either form; with it, the plan's.
-        for text, plan, found in ((enterprise, None, 0), (team, None, 0), (enterprise, "enterprise", 0), (team, "team", 0), (team, "enterprise", 1), (enterprise, "team", 1)):
+        # Either form passes offline, so a switch can change bootstrap.yaml and this file in pull requests of their own;
+        # mlz install check enforces the plan's.
+        for text in (enterprise, team):
             self.owned(text)
-            self.assertEqual(len(owners.offline_problems(self.repo, "acme", "platform", plan)), found, (plan, text))
-        self.owned(team)
-        self.assertIn("gives `/_generated/` an owner, but bootstrap.yaml's github.plan is enterprise, where it has none",
-                      owners.offline_problems(self.repo, "acme", "platform", "enterprise")[0])
+            self.assertEqual(owners.offline_problems(self.repo, "acme", "platform"), [], text)
 
     def test_in_the_governance_repo_it_must_be_bootstrap_yaml_s_platform_team(self):
         self.owned(owners.render("acme", "platform"))
