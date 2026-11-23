@@ -115,8 +115,10 @@ def approval_of(workflow: str) -> str:
     if found is None:
         return "environment"
     start, end, inline = found
-    # Its keys without their comments: a comment that reads like an approval is not one.
-    keys = [inline] if inline else [re.sub(r"(^|\s)#.*$", "", line) for line in lines[start + 1:end]]
+    # Its keys without their comments: a comment that reads like an approval is not one. A flow mapping may go on over
+    # the lines below its opening brace.
+    block = [re.sub(r"(^|\s)#.*$", "", line) for line in lines[start + 1:end]]
+    keys = [" ".join([inline, *block]) if inline.startswith("{") and "}" not in inline else inline] if inline else block
     for key in keys:
         match = re.search(r"(^\s*|[{,]\s*)approval:[ \t]*['\"]?(?P<approval>[\w-]+)", key)
         if match:

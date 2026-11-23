@@ -460,10 +460,10 @@ resource "github_actions_variable" "role" {
 
 # On Team only: the environment has no reviewer, and says so, so that an apply whose pipeline still expects one refuses
 # (role.yml): a check against a switch done out of order and against mistakes, not the switch, which is the caller's
-# approval input. It names its environment, so Terraform makes it after the environment loses its reviewer and removes it
-# before the reviewer comes back, by the time between two calls (tested 23 November): the order the other way would make
-# it before its environment, which GitHub refuses on a first install (404). mlz install bootstrap applies this only once
-# every pipeline passes approval: pull-request (docs/bootstrap.md, Switching plans).
+# approval input. It names its environment, so it is made after the environment (GitHub refuses a variable on an
+# environment that does not exist yet, 404) and, on the way to Team, after the reviewer goes, by the time between two
+# calls; mlz install bootstrap applies that only once every pipeline passes approval: pull-request. Back on Enterprise,
+# create_before_destroy has the reviewer come back before the variable goes (tested with terraform_data, 23 November).
 resource "github_actions_environment_variable" "approval" {
   for_each = local.team ? local.roles : toset([])
 
@@ -471,6 +471,10 @@ resource "github_actions_environment_variable" "approval" {
   environment   = github_repository_environment.apply[each.key].environment
   variable_name = "MLZ_APPROVAL"
   value         = "pull-request"
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "github_actions_environment_variable" "apply_identity" {
