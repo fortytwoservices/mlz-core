@@ -170,8 +170,9 @@ is therefore not Enterprise's, and this is said to them as it is:
 - **A manual run on `main` applies nothing**, since no pull request's approval covers its plan. To apply what `main`
   says, after drift or a half-failed apply: change `replan.txt` at the repo's top, or add it if it is not there, with
   one line saying why ([pipelines](pipelines.md#when-the-gate-refuses-replantxt)).
-- **Self-hosted runners:** GitHub documents a runner group's limit to selected workflows for Enterprise Cloud only.
-  Where it does not keep it, only `pipeline-files` keeps other workflows off the runners ([private runners](#private-runners)).
+- **Self-hosted runners only where GitHub keeps the runner group limited to `role.yml`,** which GitHub documents for
+  Enterprise Cloud only. Where it does not, `mlz install runners` stops and the pipelines run on GitHub-hosted runners
+  joined to management's network (`kind: github-hosted`), which GitHub documents for Team ([private runners](#private-runners)).
 - **Team synchronization** of a team with an Entra ID group needs SAML single sign-on; whether a Team organization has
   it is not verified.
 
@@ -236,8 +237,9 @@ in the order they happen, and stop at the first that does not hold:
 3. `mlz install bootstrap`: each environment is made with its branch policy (`main` only), no reviewer and
    `MLZ_APPROVAL`; `mlz install check` passes.
 4. `mlz install runners`: for self-hosted runners, whether GitHub keeps the runner group's limit to `role.yml` (the step
-   reads it back and says); for GitHub-hosted ones, the network configuration (Azure private networking is documented
-   for organization owners on Team).
+   reads it back; without it, it takes the repos out of the group and stops, and the customer moves to
+   `kind: github-hosted`); for GitHub-hosted ones, the network configuration (Azure private networking is documented for
+   organization owners on Team).
 5. The MLZ App's permissions as the installation holds them: an owner accepts each change of the App's permissions on
    the installation, and only an owner sees it.
 6. The first pull request in each role repo: `<role> / planned` reports and is required; after the merge, the run on
