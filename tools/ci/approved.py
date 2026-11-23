@@ -54,12 +54,13 @@ from typing import Callable
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/: run as a script, as role.yml does
 
 from ci.gh import ConfigError, Pipeline, env  # noqa: E402
+from mlz import owners as codeowners  # noqa: E402
 
 STAMP = "pull-request.txt"  # the pull request's number, which each plan job of a Team pull request's run puts with its plans
 # GitHub lists a merge's pull request one to five seconds after the merge (tested 23 November 2026): ask for 30 seconds.
 LOOKS, PAUSE = 7, 5
 WRITE = ("admin", "maintain", "write")
-CODEOWNERS = ".github/CODEOWNERS"
+CODEOWNERS = codeowners.PATH
 # What vending's MLZ App commits to a workload repo's main (tools/mlz/workload.py): the values, the code owners, and once the
 # starter's files.
 VALUES = "mlz.auto.tfvars.json"
@@ -175,16 +176,17 @@ def plans_finished(github, repo: str, run_id: int, attempt: int, now: Callable[[
 
 
 def code_owner(role: str, github, repo: str, base: str) -> Callable[[str], bool]:
-    """Whether a login counts as a code owner here. In a role repo: a user or a member of a team that CODEOWNERS names on the
-    base branch (mlz-core's has one team, the platform team). In a workload repo, whose job cannot read a team's members:
-    anyone with write access."""
+    """Whether a login counts as a code owner here. In a role repo: a user or a member of a team that the CODEOWNERS file
+    GitHub reads on the base branch names (the first of .github/, the top and docs/, as GitHub looks; its comments, a
+    line's own included, are no owners), read as tools/mlz/owners.py reads it. mlz-core's names one team, the platform team.
+    In a workload repo, whose job cannot read a team's members: anyone with write access."""
     if role == "workload":
         return lambda login: github.permission(repo, login) in WRITE
-    text = github.text(repo, CODEOWNERS, base) or ""
-    names = {name[1:] for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")
-             for name in line.split()[1:] if name.startswith("@")}
+    found = next(((location, text) for location in codeowners.LOCATIONS if (text := github.text(repo, location, base)) is not None), None)
+    location, text = found or (CODEOWNERS, "")
+    names = {owner[1:] for rule in codeowners.rules(text) for owner in rule[1:] if owner.startswith("@")}
     if not names:
-        raise ConfigError(f"{CODEOWNERS} on {base} names no owner, so no approval can be checked; mlz install repos writes it.")
+        raise ConfigError(f"{location} on {base} names no owner, so no approval can be checked; mlz install repos writes it.")
     users, teams = {name for name in names if "/" not in name}, [name.split("/", 1) for name in names if "/" in name]
     return lambda login: login in users or any(github.team_member(org, team, login) for org, team in teams)
 
