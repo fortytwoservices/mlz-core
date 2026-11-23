@@ -308,6 +308,10 @@ the file, from `bootstrap.yaml`'s `platform_team`:
 /_generated/
 ```
 
+On GitHub Team, `_generated/` has the platform team as its code owner too (`/_generated/  @acme/platform`), so a person
+approves each contract pull request, which no longer merges itself ([Approval on GitHub Team](#contracts-and-the-bypass-team);
+[what Team gives up](bootstrap.md#what-team-gives-up), [switching plans](bootstrap.md#switching-plans)).
+
 - **Nothing else goes in the file** (decision D8, 19 November).
   - Every run's check reads it offline (`mlz check`, which `./mlz check` runs on a person's checkout too).
   - The check fails on any other rule and names it. Handing a folder to another team is not supported.
