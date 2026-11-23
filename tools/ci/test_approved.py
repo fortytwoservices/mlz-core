@@ -498,7 +498,8 @@ class CrossCheckTest(Case):
                 said = []
                 self.assertEqual(apply_guard.before("platform", "pay-prod", say=said.append), verdict)
                 self.assertEqual(said, [apply_guard.UNGATED] if verdict == apply_guard.REFUSE else [])
-        self.assertIn("On Enterprise, delete the repository variable MLZ_APPROVAL: it belongs on the environment, and only on Team.", apply_guard.UNGATED)
+        self.assertIn("On Enterprise, give the environment its reviewer back first, and only then remove its variable MLZ_APPROVAL (docs/bootstrap.md, "
+                      "Switching plans); remove a repository variable MLZ_APPROVAL too, if there is one", apply_guard.UNGATED)
 
 
 class ReplanTest(unittest.TestCase):
