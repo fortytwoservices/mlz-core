@@ -50,7 +50,7 @@ from . import contract, mirror, names, naming, owners, platform, stacks, vending
 from .files import read_yaml
 from .github import RUNNER_SCOPES
 from .merge import ConfigError
-from .upgrade import CALL, EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
+from .upgrade import EXECUTABLE, GITIGNORE, PIPELINE_FILES, RELEASE_PLEASE_MARKER, WORKFLOW, approval_of, gitignore_with, matches, pin_of, push_refused, restricts, version
 
 ROLES = ("governance", "platform", "vending")
 CORE = Path(__file__).resolve().parents[2]
@@ -1323,15 +1323,6 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     workflow = " and ".join(pinned)
     body = {"name": RUNNER, "visibility": "selected", "selected_repository_ids": repo_ids, "allows_public_repositories": False,
             "restricted_to_workflows": True, "selected_workflows": pinned}
-    if bootstrap is not None and github_plan(bootstrap) == "team":
-        # On Team GitHub may not keep the group's limit to role.yml, and then only each repo's push ruleset keeps another
-        # workflow off the runners: seen first, before the group is made or gains a repo.
-        guards = [problem for repo in repos.values() for problem in push_ruleset_problems(github, bootstrap, repo, lambda _: None)]
-        guards += [problem for repo in repos.values() for problem in other_workflows(github, repo, core)]
-        if guards:
-            raise ConfigError("\n  ".join([f"runners: on GitHub Team the runner group {RUNNER} may admit any workflow of the three repos, so "
-                                             f"each repo's push ruleset {PUSH_RULESET} must keep every other workflow out of it first, as only "
-                                             "the bypass team may pass it, and none may be there already. Nothing was changed:"] + guards))
     if not github.is_owner(org):
         out(f"runners: you are not an owner of {org}, so nothing was changed. Send this to one of its owners: it makes the runner group "
             f"{RUNNER}, for the three repos and {workflow} only. Then run this step again.\n")
@@ -1361,68 +1352,29 @@ def self_hosted_group(github, org: str, repos: dict[str, str], core: str, out: C
     return made
 
 
-def calls_role_alone(pipeline: str | None, core: str) -> list[str] | None:
-    """A pipeline's jobs when they are other than one job calling role.yml in core, the organization's copy of mlz-core,
-    at a release; None when that is all it has. The keys of its jobs: mapping, at two spaces, up to the next key at the
-    top."""
-    start = re.search(r"^jobs:[ \t]*(#[^\n]*)?$", pipeline or "", re.M)
-    body = re.split(r"^\S", (pipeline or "")[start.end():], maxsplit=1, flags=re.M)[0] if start else ""
-    jobs = re.findall(r"^  ([\w-]+):", body, re.M)
-    calls = [line for line in body.splitlines() if CALL.match(line)]
-    try:
-        called, ref = pin_of(calls[0]) if len(calls) == 1 else ("", "")
-    except ConfigError:
-        called, ref = "", ""
-    return None if len(jobs) == 1 and called == core and version(ref) is not None else jobs
-
-
-def other_workflows(github, repo: str, core: str) -> list[str]:
-    """Workflows a repo has besides its pipeline's one call of role.yml, which pipeline-files does not take away: on the
-    default branch, any file in .github/workflows/ but mlz.yml, and any job in mlz.yml but the one that calls role.yml;
-    on any other branch, a .github/ that is not the default branch's, file for file (a branch pushed before the ruleset
-    keeps what it had, a workflow main removed since included), but an mlz.yml that only calls role.yml in core, the
-    organization's copy of mlz-core, at another release, as a branch from before an upgrade has. On Team, where a runner group may admit every workflow of the repo,
-    each could reach the runners."""
-    branch = github.default_branch(repo)
-    found = [f"{repo}: {path} on {branch} is a workflow besides the pipeline; remove it, or keep the runners off Team's fallback."
-             for path in github.folder(repo, ".github/workflows", branch) if path != WORKFLOW]
-    pipeline = github.file(repo, WORKFLOW, branch)[0]
-    jobs = calls_role_alone(pipeline, core) if pipeline is not None else None
-    if jobs is not None:
-        found.append(f"{repo}: its {WORKFLOW} on {branch} is not one job calling {core}'s role.yml at a release (it has "
-                     f"{', '.join(jobs) or 'no'} job{'s' if len(jobs) != 1 else ''}); mlz upgrade writes it as it should be.")
-    tree = {path: github.file(repo, path, branch)[1] for path in github.folder(repo, ".github", branch)}
-    for other in github.branch_names(repo):
-        if other == branch:
-            continue
-        theirs = {path: github.file(repo, path, other)[1] for path in github.folder(repo, ".github", other)}
-        differ = sorted(path for path in set(tree) | set(theirs) if tree.get(path) != theirs.get(path)
-                        and not (path == WORKFLOW and path in theirs and calls_role_alone(github.file(repo, path, other)[0], core) is None))
-        if differ:
-            found.append(f"{repo}: branch {other} has another {', '.join(differ)} than {branch}, which a run from it would use; delete the "
-                         "branch if you do not know it, or bring its change through a reviewed pull request.")
-    return found
-
-
 def workflows_kept(github, org: str, requested: list[str], bootstrap: dict | None, out: Callable[[str], None]) -> None:
     """Whether GitHub kept the group's limit to exactly the workflows requested (role.yml at the releases admitted), read
-    back. GitHub documents that limit ("Changing which workflows can access a runner group") for Enterprise Cloud only,
-    so on Team it may not hold: said, and the step goes on, since self_hosted_group saw each repo's push ruleset keep
-    every other workflow out first. On Enterprise it holds, so a group without it is a failure."""
+    back. Without it any workflow of the three repos could run where the runner App's key is, and nothing in the repos
+    can prove there is none: an old run kept in the Actions history can be re-run with the workflow it had. So a group
+    without the limit is left with no repo in it, and the step stops, on GitHub Team as on Enterprise (the user's
+    decision of 23 November). GitHub documents the limit ("Changing which workflows can access a runner group") for
+    Enterprise Cloud only; on Team, GitHub-hosted runners joined to management's network are the private way."""
     group = github.runner_group(org, RUNNER) or {}
     if group.get("restricted_to_workflows") and sorted(group.get("selected_workflows") or []) == sorted(requested):
         return
+    if group.get("id") is not None:
+        github.set_runner_group_repositories(org, group["id"], [])
     kept = sorted(group.get("selected_workflows") or []) if group.get("restricted_to_workflows") else []
     lost = (f"{org}'s runner group {RUNNER} is not limited to {' and '.join(requested)}: GitHub "
             + (f"keeps it limited to {', '.join(kept)} instead" if kept else "did not keep its limit to selected workflows"))
     if bootstrap is not None and github_plan(bootstrap) == "team":
-        out(f"runners: {lost}. GitHub documents that limit for Enterprise Cloud only, so on Team the group admits any workflow of the "
-            f"three repos; the push ruleset {PUSH_RULESET}, which only the bypass team may pass, is what keeps any other workflow out of "
-            "them (docs/bootstrap.md, private runners).")
-        return
-    raise ConfigError(f"{lost}, which GitHub Enterprise allows. Without it a job a pull request adds could run where the runner App's key "
-                      f"is: set it in the organization's Settings, Actions, Runner groups, {RUNNER}, Workflow access (selected workflows: "
-                      f"{', '.join(requested)}), then run this step again.")
+        raise ConfigError(f"{lost}, which GitHub documents for Enterprise Cloud only. Without it any workflow of the three repos could reach "
+                          f"the runners and the runner App's key, so no repo may use the group now, and no self-hosted runner is made. On "
+                          "GitHub Team, set github.runners.kind: github-hosted in bootstrap.yaml: GitHub's runners, joined to management's "
+                          "network (docs/bootstrap.md, private runners).")
+    raise ConfigError(f"{lost}, which GitHub Enterprise allows. Without it any workflow of the three repos could reach the runners and the "
+                      f"runner App's key, so no repo may use the group now: set it in the organization's Settings, Actions, Runner groups, "
+                      f"{RUNNER}, Workflow access (selected workflows: {', '.join(requested)}), then run this step again.")
 
 
 def upload_app_key(azure, vault_id: str, vault: dict, app_key: Path, out: Callable[[str], None], wait: Callable[[float], None]) -> None:
