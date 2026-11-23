@@ -100,16 +100,14 @@ class FakeGitHub:
         # Each repo's environment, named after its role, as the bootstrap makes it on Enterprise: a reviewer, main only.
         self.environments = {repo: ENTERPRISE_ENVIRONMENT for repo in REPOS.values()} if environments is None else environments
         self.environment_variables = environment_variables or {}  # (repo, environment, name): value
-        self.other_branches = {}  # repo: {branch: the paths it changes since it left main}
+        self.other_branches = {}  # repo: its branches besides main
 
     def folder(self, repo, path, ref):
-        return sorted(p for (r, p) in [k[:2] for k in self.files] if r == repo and p.startswith(path + "/"))
+        # A file on every branch is keyed (repo, path); one on a single branch (repo, path, ref).
+        return sorted({k[1] for k in self.files if k[0] == repo and k[1].startswith(path + "/") and (len(k) == 2 or k[2] == ref)})
 
     def branch_names(self, repo):
-        return ["main", *self.other_branches.get(repo, {})]
-
-    def changed_paths(self, repo, base, head):
-        return self.other_branches.get(repo, {}).get(head, [])
+        return ["main", *self.other_branches.get(repo, [])]
 
     def environment(self, repo, name):
         return self.environments.get(repo)
@@ -1076,6 +1074,9 @@ class InstallTest(unittest.TestCase):
         self.assertEqual(approval_of(block + "      # approval: pull-request\n      role: platform\n"), "environment")
         self.assertEqual(approval_of(block + "      role: platform # approval: pull-request\n"), "environment")
         self.assertEqual(approval_of(block + "      # approval: environment\n      approval: pull-request\n"), "pull-request")
+        # A flow mapping over several lines.
+        self.assertEqual(approval_of(block.replace("    with:\n", "    with: {\n") + "      role: platform,\n      approval: pull-request\n    }\n"),
+                         "pull-request")
         self.assertEqual(approval_of("on: push\n"), "environment")
         # The with: may come before uses:, and a workload caller calls workload.yml.
         self.assertEqual(approval_of("jobs:\n  workload:\n    with:\n      approval: pull-request\n    uses: o/mlz-core/.github/workflows/workload.yml@v1\n"),
@@ -1832,12 +1833,21 @@ class InstallTest(unittest.TestCase):
         # Nor with a workflow there already that the push ruleset does not take away: on main, or on a branch.
         extra = Unlimited()
         extra.files[("acme/mlz-platform", ".github/workflows/lint.yml")] = ("on: push\n", "sha")
-        extra.other_branches = {"acme/mlz-vending": {"old-work": [".github/workflows/mlz.yml", "README.md"], "fine": ["README.md"]}}
+        # A branch with its own mlz.yml; one that kept a workflow main removed since; one like main.
+        extra.other_branches = {"acme/mlz-vending": ["old-work", "fine"], "acme/mlz-governance": ["kept"]}
+        extra.files[("acme/mlz-vending", WORKFLOW, "old-work")] = ("jobs:\n  x:\n    runs-on: mlz\n", "sha-old")
+        extra.files[("acme/mlz-governance", ".github/workflows/gone.yml", "kept")] = ("on: push\n", "sha-gone")
+        # And a pipeline on main with a job of its own beside the call of role.yml.
+        pipeline = extra.files[("acme/mlz-governance", WORKFLOW)][0]
+        extra.files[("acme/mlz-governance", WORKFLOW)] = (pipeline + "  mine:\n    runs-on: mlz\n    steps: []\n", "sha")
         with self.assertRaises(ConfigError) as caught:
             install.self_hosted_group(extra, "acme", REPOS, CORE_COPY, self.out, team)
-        self.assertIn("acme/mlz-platform: .github/workflows/lint.yml on main is a workflow besides the pipeline", str(caught.exception))
-        self.assertIn("acme/mlz-vending: branch old-work changes .github/workflows/mlz.yml, which a run from it would use", str(caught.exception))
-        self.assertNotIn("branch fine", str(caught.exception))
+        found = str(caught.exception)
+        self.assertIn("acme/mlz-platform: .github/workflows/lint.yml on main is a workflow besides the pipeline", found)
+        self.assertIn("acme/mlz-governance: its .github/workflows/mlz.yml on main has check, mine jobs, not the one that calls mlz-core's role.yml alone", found)
+        self.assertIn("acme/mlz-vending: branch old-work has another .github/workflows/mlz.yml than main", found)
+        self.assertIn("acme/mlz-governance: branch kept has another .github/workflows/gone.yml than main", found)
+        self.assertNotIn("branch fine", found)
         self.assertEqual((extra.groups, extra.calls), ([], []))
 
         # GitHub keeping another workflow beside role.yml is no limit either: exactly what was asked, or not kept.
