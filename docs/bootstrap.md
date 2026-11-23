@@ -167,6 +167,9 @@ is therefore not Enterprise's, and this is said to them as it is:
   platform team approved, and they change only that landing zone (`docs/vending.md`).
 - **The bypass team's merges** apply with nobody else's approval, and the run page says so. GitHub records each bypass
   (the repo's Insights, Rules).
+- **A manual run on `main` applies nothing**, since no pull request's approval covers its plan. To apply what `main`
+  says, after drift or a half-failed apply: change `replan.txt` at the repo's top, or add it if it is not there, with
+  one line saying why (`docs/pipelines.md`).
 - **Self-hosted runners:** GitHub documents a runner group's limit to selected workflows for Enterprise Cloud only.
   Where it does not keep it, only `pipeline-files` keeps other workflows off the runners ([private runners](#private-runners)).
 - **Team synchronization** of a team with an Entra ID group needs SAML single sign-on; whether a Team organization has
