@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.2](https://github.com/fortytwoservices/mlz-core/compare/v0.16.1...v0.16.2) (2026-11-24)
+
+
+### Bug Fixes
+
+* publish checks the branch and sends its move again when GitHub's answer is lost ([#152](https://github.com/fortytwoservices/mlz-core/issues/152)) ([031823f](https://github.com/fortytwoservices/mlz-core/commit/031823f595257ddabea819864053f836a3100423))
+
 ## [0.16.1](https://github.com/fortytwoservices/mlz-core/compare/v0.16.0...v0.16.1) (2026-11-23)
 
 
