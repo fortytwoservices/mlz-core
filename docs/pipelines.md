@@ -293,6 +293,11 @@ request still open from an earlier run is closed: it no longer matches what was 
 still open with an older contract gets the new one on its branch. Publishing runs even when nothing was
 applied, so a publication that failed is retried by the next run.
 
+Otherwise publishing first moves its branch, `mlz/<role>-contract`, back to `main`. If GitHub fails or its answer
+is lost on the way, the job reads the branch. It stops there if the branch is already at `main`, and otherwise
+sends the move again, up to three tries five seconds apart. Failing here means a 5xx, an empty or cut-off answer,
+a dropped connection, or no answer in 30 seconds. A refusal (HTTP 4xx) stops the job at once.
+
 On GitHub Team a code owner approves each contract pull request instead, like any other change
 ([Approval on GitHub Team](#contracts-and-the-bypass-team)); what follows is GitHub Enterprise's.
 
