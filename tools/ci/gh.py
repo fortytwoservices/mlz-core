@@ -7,8 +7,10 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/, for mlz
@@ -16,6 +18,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # tools/, for mlz
 from mlz.merge import ConfigError  # noqa: E402
 
 __all__ = ["ConfigError", "Pipeline", "env", "work"]
+
+# A branch move is sent at most three times, five seconds apart. GitHub ends a REST request it has worked on for 10
+# seconds with a "Server Error" (docs.github.com, Troubleshooting the REST API, Timeouts); gh itself waits forever.
+MOVE_TRIES, MOVE_WAIT, MOVE_TIMEOUT = 3, 5, 30
+
+
+def refused(error: Exception) -> bool:
+    """Whether GitHub refused the call: gh prints a 4xx's status ("gh: Reference already exists (HTTP 422)", or
+    "gh: HTTP 422" without a message). An answer gh cannot read prints no status: empty or cut off ("unexpected end of
+    JSON input", "unexpected EOF"), as does a dropped connection ('Patch "<url>": EOF'). gh exits 1 for each (gh 2.105.0,
+    tested against a local server)."""
+    return isinstance(error, ConfigError) and re.search(r"\bHTTP 4\d\d\b", str(error)) is not None
 
 
 def env(name: str) -> str:
@@ -64,12 +78,47 @@ class Pipeline:
         return self._api(f"repos/{repo}/git/ref/heads/{branch}")["object"]["sha"]
 
     def reset_branch(self, repo: str, branch: str, base: str) -> None:
-        """The branch at the base branch's head, created or moved back there: it is the pipeline's own."""
+        """The branch at the base branch's head, created or moved back there: it is the pipeline's own. A move that
+        fails is checked on the branch, which may have moved though its answer was lost (finding 20), and sent again
+        unless GitHub refused it."""
         sha = self.head(repo, base)
+        for attempt in range(1, MOVE_TRIES + 1):
+            try:
+                self._move(repo, branch, sha)
+                return
+            except (ConfigError, subprocess.TimeoutExpired) as error:
+                try:
+                    if self._branch(repo, branch) == sha:
+                        return
+                except (ConfigError, subprocess.TimeoutExpired):
+                    pass  # not known: the error decides
+                if refused(error):
+                    raise
+                if attempt == MOVE_TRIES:
+                    raise ConfigError(f"{error} (tried {MOVE_TRIES} times)") from error
+                time.sleep(MOVE_WAIT)
+
+    def _branch(self, repo: str, branch: str) -> str | None:
+        """The commit the branch is at, None when GitHub says there is no such branch (HTTP 404): an empty answer is
+        a hiccup, not a missing branch."""
+        path = f"repos/{repo}/git/ref/heads/{branch}"
         try:
-            self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha})
-        except ConfigError:
-            self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True})
+            found = self._api(path, timeout=MOVE_TIMEOUT)
+        except ConfigError as error:
+            if re.search(r"\bHTTP 404\b", str(error)):
+                return None
+            raise
+        if not found:
+            raise ConfigError(f"gh api GET {path}: an empty answer")
+        return found["object"]["sha"]
+
+    def _move(self, repo: str, branch: str, sha: str) -> None:
+        """Read first, so a refusal to create the branch never turns into a forced update."""
+        found = self._branch(repo, branch)
+        if found is None:
+            self._api(f"repos/{repo}/git/refs", "POST", {"ref": f"refs/heads/{branch}", "sha": sha}, timeout=MOVE_TIMEOUT)
+        elif found != sha:
+            self._api(f"repos/{repo}/git/refs/heads/{branch}", "PATCH", {"sha": sha, "force": True}, timeout=MOVE_TIMEOUT)
 
     def create_pull(self, repo: str, branch: str, base: str, title: str, body: str) -> str:
         return self._api(f"repos/{repo}/pulls", "POST", {"title": title, "head": branch, "base": base, "body": body})["html_url"]

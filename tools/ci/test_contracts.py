@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -408,12 +409,95 @@ class PipelineTest(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, r"^gh api GET repos/acme/r/contents/_generated/x.yaml\?ref=b: gh: Bad Gateway \(HTTP 502\)$"):
                 gh.Pipeline().text("acme/r", "_generated/x.yaml", "b")
 
+    def move(self, branch_at: str | None, writes: list, reads: list | None = None):
+        """reset_branch against one repo's refs as GitHub keeps them: main at m, mlz/x-contract at branch_at (None: no
+        such branch). Each POST or PATCH takes the next of writes: "ok" (done), "lost" (done, but the answer was empty,
+        as in finding 20), an exception gh's run raises, or gh's text for a failure that leaves the branch as it was.
+        The branch's first reads take reads' answers, (exit code, stdout, stderr), instead of the branch's.
+        Returns the calls as (method, path, timeout), the waits, and the branch's commit after; or the error raised."""
+        state, calls, reads = {"branch": branch_at}, [], list(reads or [])
+
+        def run(command, input=None, timeout=None, **kwargs):
+            method, path = command[3], command[4]
+            calls.append((method, path, timeout))
+            answer = lambda code, out="", err="": mock.Mock(returncode=code, stdout=out, stderr=err)
+            if path.endswith("/git/ref/heads/main"):
+                return answer(0, '{"object": {"sha": "m"}}')
+            if method == "GET" and reads:
+                return answer(*reads.pop(0))
+            if method == "GET":
+                return answer(0, json.dumps({"object": {"sha": state["branch"]}})) if state["branch"] else answer(1, "", "gh: Not Found (HTTP 404)")
+            if method == "POST" and state["branch"]:
+                return answer(1, "", "gh: Reference already exists (HTTP 422)")
+            if method == "PATCH" and not state["branch"]:
+                return answer(1, "", "gh: Reference does not exist (HTTP 422)")
+            what = writes.pop(0)
+            if isinstance(what, BaseException):
+                raise what
+            if what in ("ok", "lost"):
+                state["branch"] = json.loads(input)["sha"]
+                return answer(0, "{}") if what == "ok" else answer(1, "", "unexpected end of JSON input")
+            return answer(1, "", what)
+
+        with mock.patch.object(gh.subprocess, "run", run), mock.patch.object(gh.time, "sleep") as sleep:
+            try:
+                gh.Pipeline().reset_branch("acme/r", "mlz/x-contract", "main")
+                error = None
+            except ConfigError as raised:
+                error = raised
+        return calls, [c.args[0] for c in sleep.call_args_list], state["branch"], error
+
     def test_a_branch_is_made_from_main_or_moved_back_there(self):
-        calls, patched = self.run_gh([(0, '{"object": {"sha": "m"}}', ""), (1, "", "Reference already exists (HTTP 422)"), (0, "{}", "")])
-        with patched:
-            gh.Pipeline().reset_branch("acme/r", "mlz/x-contract", "main")
-        self.assertEqual([c[3:5] for c in calls], [["GET", "repos/acme/r/git/ref/heads/main"], ["POST", "repos/acme/r/git/refs"],
-                                                  ["PATCH", "repos/acme/r/git/refs/heads/mlz/x-contract"]])
+        branch = "repos/acme/r/git/ref/heads/mlz/x-contract"
+        for at, write in ((None, ("POST", "repos/acme/r/git/refs")), ("old", ("PATCH", "repos/acme/r/git/refs/heads/mlz/x-contract"))):
+            with self.subTest(at=at):
+                calls, waits, now, error = self.move(at, ["ok"])
+                self.assertEqual((now, error, waits), ("m", None, []))
+                self.assertEqual([c[:2] for c in calls], [("GET", "repos/acme/r/git/ref/heads/main"), ("GET", branch), write])
+                self.assertEqual({c[2] for c in calls[1:]}, {gh.MOVE_TIMEOUT})
+        calls, waits, now, error = self.move("m", [])  # already there: nothing to send
+        self.assertEqual(([c[0] for c in calls], now, error), (["GET", "GET"], "m", None))
+
+    def test_a_move_whose_answer_is_lost_carries_on_once_the_branch_is_there(self):
+        for at in ("old", None):
+            with self.subTest(at=at):
+                calls, waits, now, error = self.move(at, ["lost"])
+                self.assertEqual((now, error, waits), ("m", None, []))
+                self.assertEqual([c[0] for c in calls], ["GET", "GET", "PATCH" if at else "POST", "GET"])
+
+    def test_a_hiccup_is_sent_again_after_a_wait(self):
+        timeout = subprocess.TimeoutExpired(["gh"], gh.MOVE_TIMEOUT)
+        for hiccup in ("gh: Server Error (HTTP 502)", "gh: HTTP 503", "unexpected EOF", 'Patch "https://api.github.com/x": EOF', timeout):
+            with self.subTest(hiccup=str(hiccup)):
+                calls, waits, now, error = self.move("old", [hiccup, "ok"])
+                self.assertEqual((now, error, waits), ("m", None, [gh.MOVE_WAIT]))
+                self.assertEqual([c[0] for c in calls], ["GET", "GET", "PATCH", "GET", "GET", "PATCH"])
+
+    def test_a_hiccup_on_creating_the_branch_is_not_taken_for_a_branch_that_exists(self):
+        calls, waits, now, error = self.move(None, ['Post "https://api.github.com/repos/acme/r/git/refs": EOF', "ok"])
+        self.assertEqual((now, error, waits), ("m", None, [gh.MOVE_WAIT]))
+        self.assertEqual([c[0] for c in calls if c[0] != "GET"], ["POST", "POST"])
+
+    def test_an_empty_answer_to_reading_the_branch_is_not_taken_for_no_branch(self):
+        calls, waits, now, error = self.move("old", ["ok"], reads=[(0, "", "")])
+        self.assertEqual((now, error, waits), ("m", None, [gh.MOVE_WAIT]))
+        self.assertEqual([c[0] for c in calls if c[0] != "GET"], ["PATCH"])
+
+    def test_a_refusal_is_not_sent_again_and_says_what_github_answered(self):
+        for at, write in (("old", "PATCH"), (None, "POST")):  # a refused creation is not forced through as an update either
+            with self.subTest(at=at):
+                calls, waits, now, error = self.move(at, ["gh: Resource not accessible by integration (HTTP 403)"])
+                self.assertEqual((now, waits), (at, []))
+                self.assertRegex(str(error), rf"^gh api {write} repos/acme/r/git/refs\S*: gh: Resource not accessible by integration \(HTTP 403\)$")
+                self.assertEqual([c[0] for c in calls if c[0] != "GET"], [write])
+
+    def test_the_move_fails_with_the_last_error_after_its_last_try(self):
+        calls, waits, now, error = self.move("old", ["gh: HTTP 502", "unexpected end of JSON input", "gh: Server Error (HTTP 500)"])
+        self.assertEqual((now, waits), ("old", [gh.MOVE_WAIT] * (gh.MOVE_TRIES - 1)))
+        self.assertRegex(str(error), r"^gh api PATCH repos/acme/r/git/refs/heads/mlz/x-contract: gh: Server Error \(HTTP 500\) \(tried 3 times\)$")
+        self.assertEqual([c[0] for c in calls if c[0] != "GET"], ["PATCH"] * gh.MOVE_TRIES)
+        calls, waits, now, error = self.move("old", [subprocess.TimeoutExpired(["gh"], gh.MOVE_TIMEOUT)] * gh.MOVE_TRIES)
+        self.assertRegex(str(error), r"timed out after 30 seconds \(tried 3 times\)$")  # a ConfigError, as publish.main reports
 
     def test_a_listing_is_read_to_its_last_page(self):
         calls, patched = self.run_gh([(0, json.dumps([{"filename": f"f{i}"} for i in range(100)]), ""), (0, json.dumps([{"filename": "last"}]), "")])
