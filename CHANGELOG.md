@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.3](https://github.com/fortytwoservices/mlz-core/compare/v0.16.2...v0.16.3) (2026-11-25)
+
+
+### Features
+
+* link Fortytwo's partner ID to the applying identity and send its usage attribution GUID on every apply ([#154](https://github.com/fortytwoservices/mlz-core/issues/154)) ([8d4320c](https://github.com/fortytwoservices/mlz-core/commit/8d4320cbd48c879501ca10a81950153cb0cf6d22))
+
 ## [0.16.2](https://github.com/fortytwoservices/mlz-core/compare/v0.16.1...v0.16.2) (2026-11-24)
 
 

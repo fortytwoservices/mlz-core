@@ -10,7 +10,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core connectivity" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.2/schemas/connectivity.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.3/schemas/connectivity.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
@@ -31,7 +31,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core firewall-rules" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.2/schemas/firewall-rules.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.3/schemas/firewall-rules.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
@@ -52,7 +52,7 @@
           <value>
             <SchemaInfo>
               <option name="name" value="mlz-core network" />
-              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.2/schemas/network.schema.json" /> <!-- x-release-please-version -->
+              <option name="relativePathToSchema" value="https://raw.githubusercontent.com/fortytwoservices/mlz-core/v0.16.3/schemas/network.schema.json" /> <!-- x-release-please-version -->
               <option name="schemaVersion" value="JSON Schema 7" />
               <option name="patterns">
                 <list>
