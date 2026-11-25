@@ -5,7 +5,8 @@ in its if; and the Team-only parts do what they must. The workflows are read wit
 YAML (tools/mlz/files.py), so the tests need terraform on the PATH, as the loader's tests do.
 
 To record the baseline again (only for a release that is meant to change the Enterprise path, and with that said in its
-notes): python3 -c 'from ci import test_workflows; test_workflows.record("<ref>")' from tools/.
+notes): python3 -c 'from ci import test_workflows; test_workflows.record("<ref>")' from tools/. A step added to both paths
+on purpose goes in ADDED instead, with what it is for: the guard still holds every other step to v0.13.0's.
 """
 
 from __future__ import annotations
@@ -25,6 +26,12 @@ WORKFLOWS = CORE / ".github" / "workflows"
 BASELINE = Path(__file__).resolve().parent / "fixtures" / "enterprise-v0.13.0.json"
 TEAM = "inputs.approval == 'pull-request'"
 NAMES = ("role.yml", "workload.yml")
+# Steps the Enterprise path has gained on purpose since v0.13.0, by workflow and job, as step_key gives them.
+ADDED = {
+    ("role.yml", "apply"): [["Partner Admin Link", "", ""]],  # Partner attribution (docs/pipelines.md)
+    ("workload.yml", "apply"): [["Partner Admin Link", "", ""]],
+}
+USAGE_GUID = "5538854f-10bc-41e9-a69c-9a0a7223740f"  # Fortytwo's customer usage attribution GUID
 
 
 def workflow(name: str) -> dict:
@@ -145,7 +152,11 @@ class EnterpriseGuardTest(unittest.TestCase):
                 now, then = shape(workflow(name)), baseline[name]
                 self.assertEqual(sorted(now["jobs"]), sorted(then["jobs"]), "a job that is not Team-only was added or removed")
                 for job in then["jobs"]:
-                    self.assertEqual(now["jobs"][job], then["jobs"][job], f"{name}: {job} differs from v0.13.0 on Enterprise")
+                    added = ADDED.get((name, job), [])
+                    for item in added:  # an entry here must still name a step the job has
+                        self.assertIn(item, now["jobs"][job]["steps"], f"{name}: {job} no longer has {item}")
+                    steps = [item for item in now["jobs"][job]["steps"] if item not in added]
+                    self.assertEqual(dict(now["jobs"][job], steps=steps), then["jobs"][job], f"{name}: {job} differs from v0.13.0 on Enterprise")
 
     def test_role_yml_still_gives_a_job_without_permissions_nothing(self):
         self.assertEqual(workflow("role.yml")["permissions"], {})
@@ -325,6 +336,36 @@ class TeamJobsTest(unittest.TestCase):
         match = step(workflow("workload.yml"), "gate", "Match the plan with its pull request's")
         self.assertEqual(match["run"], "python3 .mlz-core/tools/ci/approved.py gate workload workload")
         self.assertEqual((match["env"]["GH_TOKEN"], match["env"]["WORKFLOW_REF"]), ("${{ github.token }}", "${{ github.workflow_ref }}"))
+
+
+class PartnerAttributionTest(unittest.TestCase):
+    """Fortytwo's partner ID is linked, and its usage attribution GUID sent, by the apply jobs alone, as the identity that
+    applies; plans and the read-only plan identities never (docs/pipelines.md, Partner attribution)."""
+
+    def test_each_apply_links_the_partner_id_before_it_applies_and_never_stops_on_it(self):
+        for name in NAMES:
+            with self.subTest(workflow=name):
+                job = workflow(name)["jobs"]["apply"]
+                names = [item.get("name") for item in job["steps"]]
+                link = job["steps"][names.index("Partner Admin Link")]
+                self.assertLess(names.index("Partner Admin Link"), names.index("Apply"))
+                self.assertEqual(link["run"], "python3 -I .mlz-core/tools/ci/partner.py")
+                self.assertIs(link["continue-on-error"], True)
+                self.assertNotIn("if", link)  # both paths, Enterprise and Team
+                self.assertEqual(job["permissions"]["id-token"], "write")
+
+    def test_only_the_apply_jobs_carry_the_guid_and_link_the_partner_id(self):
+        for name in NAMES:
+            data = workflow(name)
+            self.assertNotIn("ARM_PARTNER_ID", data["env"], name)
+            for job_name, job in data["jobs"].items():
+                with self.subTest(workflow=name, job=job_name):
+                    apply = job_name == "apply"
+                    self.assertEqual((job.get("env") or {}).get("ARM_PARTNER_ID"), USAGE_GUID if apply else None)
+                    runs = [item.get("run") or "" for item in job.get("steps", [])]
+                    self.assertEqual(sum("tools/ci/partner.py" in run for run in runs), 1 if apply else 0)
+                    for item in job.get("steps", []):
+                        self.assertNotIn("ARM_PARTNER_ID", item.get("env") or {})
 
 
 if __name__ == "__main__":

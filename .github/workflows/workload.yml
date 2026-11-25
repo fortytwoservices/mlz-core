@@ -236,6 +236,9 @@ jobs:
       cancel-in-progress: false
     env:
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }} # the deploy identity, set on the environment
+      # Fortytwo's customer usage attribution GUID, in the User-Agent of each request this job's providers make; the plan
+      # job does not set it (docs/pipelines.md, Partner attribution). A partner_id in this repo's provider block takes its place.
+      ARM_PARTNER_ID: 5538854f-10bc-41e9-a69c-9a0a7223740f
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -258,6 +261,12 @@ jobs:
         with:
           terraform_version: 1.17.0
           terraform_wrapper: false
+
+      # Fortytwo's partner ID linked to the deploy identity (docs/pipelines.md, Partner attribution): read on every
+      # apply, written once. Standard library only, so isolated. It never stops the apply.
+      - name: Partner Admin Link
+        continue-on-error: true
+        run: python3 -I .mlz-core/tools/ci/partner.py
 
       - name: Apply
         env:
