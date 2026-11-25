@@ -295,7 +295,9 @@ way, so its workflows sign in from its `apply` environment and its pull requests
   (below: an upgrade moves it). Every pull request
   and every push to `main` plans, as the plan identity, from a read-only copy of the state; on `main` the apply then
   waits for the team in `apply`, and applies, as the deploy identity, only the changes that plan showed. The scripts
-  are the role repos' own (`tools/ci/plan.py`, `apply.py`).
+  are the role repos' own (`tools/ci/plan.py`, `apply.py`). Before it applies, the job links Fortytwo's partner ID
+  to the deploy identity, and the apply carries Fortytwo's usage attribution GUID (`docs/pipelines.md`, "Partner
+  attribution").
 - `terraform.tf`, with the state's backend; `variables.tf`, declaring `mlz`; `main.tf`, with examples (commented out):
   a resource group named through mlz-core's naming helper (`modules/naming`, `docs/naming.md`), and a virtual machine
   (`az-tf-mlz-virtual-machine`) in the landing zone's app subnet with its tags; a README.

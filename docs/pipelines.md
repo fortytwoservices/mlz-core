@@ -91,7 +91,7 @@ delete its `MLZ_RUNS_ON` first, or its Azure jobs wait for a runner that never t
 | `check` | every run | Checks the YAML and works out what the roots read: governance renders its library, platform writes its config, vending writes one config per landing zone. Fails with every problem listed. On a vending pull request it first brings the IP plan and the names up to date: when a new landing zone or subnet needs addresses or names, it commits them to the pull request and stops, and the run of that commit plans with them. On `main` a plan or names not up to date fail the check (`mlz allocate --check`). `./mlz check` runs the same checks on a person's own checkout before they push. A pull request merges only once it has passed on a branch up to date with `main`: the ruleset `main-checks` requires `<role> / check`, the starter workflow's job (named after the role) then this one. |
 | `plan` | pull requests, `main`, and daily | One plan per stack the run plans ([below](#what-a-run-plans)) (the role's stacks, or each landing zone for vending), as the read-only plan identity. Its summary goes on the run page and, for a pull request, in one comment per stack that later runs update; the full plan is attached to the run. The daily run fails when Azure has drifted from `main`. A plan that deletes or replaces a firewall policy is refused (below). |
 | `changed` | `main` | Picks the stacks whose reviewed plan changes something: a resource, or an output such as the contract. Only those go on to `apply`; a stack with nothing to change asks for no approval, and the run page says which were skipped. With something to apply, the run then waits for a reviewer in the role's environment, and every later push or manual run on `main` queues behind it until it finishes (the daily check has a queue of its own): GitHub notifies the reviewers itself, and the run's page says why it waits (what started it, such as vending's contract merging, and what it applies). When a person's pull request started it, a comment there says so too, once; a contract pull request, a push without a pull request and a manual run get none. On GitHub Team nothing waits: the stacks go on to `apply` only if their plan is the one the merged pull request's run showed ([Approval on GitHub Team](#approval-on-github-team)). |
-| `apply` | `main` | Waits for a reviewer in the role's environment (on GitHub Team, the environment has none, and `changed` was the gate). Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: on GitHub Enterprise, start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. On GitHub Team a new run's plan of the rest differs from the approved one, and the gate refuses it: open a pull request that changes `replan.txt` ([below](#when-the-gate-refuses-replantxt)). A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. |
+| `apply` | `main` | Waits for a reviewer in the role's environment (on GitHub Team, the environment has none, and `changed` was the gate). Then plans each stack as the apply identity and applies only if that plan makes exactly the changes in the reviewed plan of the same run, to the same values; otherwise it stops and applies nothing. After an apply that failed half way, re-running the job always stops so, since it compares with the same reviewed plan: on GitHub Enterprise, start a new run (`gh workflow run mlz.yml --ref main`) for a fresh plan to review. On GitHub Team a new run's plan of the rest differs from the approved one, and the gate refuses it: open a pull request that changes `replan.txt` ([below](#when-the-gate-refuses-replantxt)). A job per landing zone; the platform's changed stacks in one job, one after the other (`connectivity`, `management`, `identity`, `firewall-rules`), stopping at the first that fails. Before it applies, the job links Fortytwo's partner ID to the apply identity ([Partner attribution](#partner-attribution)). |
 | `publish` | `main` | After every run in which nothing failed, applied or not: offers the role's contract to the repos that read it (below). Governance and platform read theirs from the state as the plan identity; vending's comes from its IP plan. |
 | `merge` | contract pull requests | Merges the pull request once `check` and `plan` have passed on it (below). Not on GitHub Team, where a code owner approves a contract like any other change. |
 | `planned` | pull requests, GitHub Team only | One check that every plan of the pull request finished and that the last code owner's approval covers the plan; the ruleset `main-checks` requires it there ([Approval on GitHub Team](#approval-on-github-team)). |
@@ -316,6 +316,32 @@ A contract pull request stays open for a person when its run fails, when it chan
 that is how a customer keeps contracts for a person to merge. The run page says which. Once what stopped a
 run is fixed, re-running its failed jobs runs the merge after them. The pull requests come from a GitHub
 App that may write to the three repos, and the App merges them.
+
+## Partner attribution
+
+MLZ tells Microsoft that Fortytwo deploys and runs it, in two ways. Both are fixed in mlz-core, with no setting.
+
+- **Partner Admin Link.** Before each apply, the job links Fortytwo's partner ID, 2103291, to the identity it applies
+  as: each role's apply identity and each landing zone's deploy identity. The plan identities, which only read, are
+  not linked. The first apply writes the link, and every apply after it only reads it. An identity linked to another
+  partner's ID is moved to Fortytwo's, and a notice on the run page names the ID it had.
+- **Customer usage attribution.** The apply jobs set `ARM_PARTNER_ID` to Fortytwo's GUID,
+  5538854f-10bc-41e9-a69c-9a0a7223740f. The azapi and azurerm providers send it in the User-Agent header of each
+  request the apply job makes. It is in no plan and no state, so no plan changes, and the plan jobs do not set it. A
+  `partner_id` in a provider block, such as in a workload repo's own code, takes its place.
+
+What it gives Fortytwo: Microsoft counts the Azure consumption of what these identities manage, and of what the
+apply deploys, towards Fortytwo's partner recognition and credit. Microsoft's partner programs decide which roles
+count.
+
+What it does not give Fortytwo: any access, or any change to a permission. The link only adds the partner ID to an
+identity that already exists in your tenant (Microsoft Learn, "Link a partner ID to your account that's used to
+manage customers"). Microsoft does not share the consumption data it attributes with Fortytwo (Microsoft Learn,
+"Azure customer usage attribution").
+
+Neither ever stops an apply. When the link cannot be read or written, the step "Partner Admin Link" ends with a
+warning that says why, and the apply goes on. There is no setting to turn either off: a customer who wants to be
+left out asks Fortytwo.
 
 ## Code owners
 
